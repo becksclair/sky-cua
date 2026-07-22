@@ -1,9 +1,8 @@
-import { createHash } from "node:crypto";
 import { createServer, type Socket } from "node:net";
-import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { strict as assert } from "node:assert";
 import { test } from "bun:test";
 
@@ -58,33 +57,49 @@ async function startBrowserPeer(socketPath: string) {
   };
 }
 
-test("the real cua_node trusted loader rejects a wrong hash before connect and runs the canonical hash", async () => {
+test("the real cua_node loader trusts only the fixed installed Browser package path", async () => {
   const [{ RuntimeManager }, { McpServer }, { TEST_NODE_PATH }] = await Promise.all([
     import(`${skyCuaRoot}/runtime/cua-node/src/host/runtime-manager.ts`),
     import(`${skyCuaRoot}/runtime/cua-node/src/host/mcp-server.ts`),
     import(`${skyCuaRoot}/runtime/cua-node/test/test-node-path.ts`),
   ]);
   const root = await mkdtemp(join(tmpdir(), "browser-use-real-trust-"));
-  const moduleRoot = join(root, "node_modules", "@heliasar", "browser-use");
+  const runtimeRoot = join(root, "runtime");
+  const moduleRoot = join(runtimeRoot, "lib", "node_modules", "@heliasar", "browser-use");
+  const wrongRoot = join(root, "wrong-package");
   const socketPath = join(root, "browser.sock");
   const peer = await startBrowserPeer(socketPath);
   try {
-    await mkdir(moduleRoot, { recursive: true });
-    await cp(join(packageRoot, "build", "browser-client.mjs"), join(moduleRoot, "browser-client.mjs"));
-    await writeFile(join(moduleRoot, "package.json"), JSON.stringify({
-      name: "@heliasar/browser-use",
-      type: "module",
-      exports: "./browser-client.mjs",
-    }));
-    const bytes = await readFile(join(moduleRoot, "browser-client.mjs"));
-    const hash = createHash("sha256").update(bytes).digest("hex");
-    const dispatch = async (trustedHash: string): Promise<DispatchResponse> => {
+    await cp(
+      join(skyCuaRoot, "runtime/cua-node/test/fixtures/fake-runtime"),
+      runtimeRoot,
+      { recursive: true },
+    );
+    await mkdir(join(runtimeRoot, "share", "pdfjs", "cmaps"), { recursive: true });
+    await mkdir(join(runtimeRoot, "share", "pdfjs", "standard_fonts"), { recursive: true });
+    const pdfWorker = join(
+      runtimeRoot,
+      "lib",
+      "node_modules",
+      "pdfjs-dist",
+      "legacy",
+      "build",
+      "pdf.worker.mjs",
+    );
+    await mkdir(dirname(pdfWorker), { recursive: true });
+    await writeFile(pdfWorker, "export {};\n");
+    await writeFile(join(runtimeRoot, "share", "tessdata", "eng.traineddata"), "fixture\n");
+    await mkdir(join(moduleRoot, "build"), { recursive: true });
+    await mkdir(wrongRoot, { recursive: true });
+    const browserClient = join(packageRoot, "build", "browser-client.mjs");
+    await cp(browserClient, join(moduleRoot, "build", "browser-client.mjs"));
+    await cp(browserClient, join(wrongRoot, "browser-client.mjs"));
+    const dispatch = async (entrypoint: string): Promise<DispatchResponse> => {
       const manager = new RuntimeManager({
         allowHostNode: true,
         nodePath: TEST_NODE_PATH,
+        runtimeRoot,
         env: {
-          NODE_REPL_NODE_MODULE_DIRS: root,
-          NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: trustedHash,
           SKY_CUA_CODEX_BROWSER_SOCKET_PATH: socketPath,
           SKY_CUA_MCP_CALLER_PROVENANCE: "codex_desktop",
         },
@@ -98,7 +113,7 @@ test("the real cua_node trusted loader rejects a wrong hash before connect and r
           params: {
             name: "js",
             arguments: {
-              code: 'const client = await import("@heliasar/browser-use"); await client.setupBrowserRuntime({ globals: globalThis }); nodeRepl.write(JSON.stringify(await agent.browsers.list()));',
+              code: `const client = await import(${JSON.stringify(pathToFileURL(entrypoint).href)}); await client.setupBrowserRuntime({ globals: globalThis }); nodeRepl.write(JSON.stringify(await agent.browsers.list()));`,
             },
             _meta: {
               session_id: "session-trust",
@@ -112,11 +127,11 @@ test("the real cua_node trusted loader rejects a wrong hash before connect and r
       }
     };
 
-    const wrong = await dispatch("0".repeat(64));
+    const wrong = await dispatch(join(wrongRoot, "browser-client.mjs"));
     assert.equal(wrong.result?.isError, true, JSON.stringify(wrong));
     assert.equal(peer.connectionCount(), 0);
 
-    const correct = await dispatch(hash);
+    const correct = await dispatch(join(moduleRoot, "build", "browser-client.mjs"));
     assert.equal(correct.result?.isError, false, JSON.stringify(correct));
     assert.match(correct.result?.content?.[0]?.text ?? "", /extension:browser/u);
     assert.equal(peer.connectionCount(), 1);

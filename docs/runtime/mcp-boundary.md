@@ -119,24 +119,22 @@ git, no marketplace, no Codex `plugin/install`. The installed cache lives at:
 ~/.codex/plugins/cache/local/sky-cua/local/
 ```
 
-For a machine without a checkout or toolchain, build and activate the complete
-immutable release:
+For a machine without a checkout or toolchain, build the standalone artifact:
 
 ```bash
-python3 scripts/build_complete_release.py
-# Copy the JSON-reported fat_archive to the target, then:
-tar xzf sky-cua-<release-id>-linux-x64-glibc.tar.gz
-cd sky-cua-<release-id>
-python3 install.py install --manifest-sha256 <manifest-sha256>
-python3 install.py verify-activation --manifest-sha256 <manifest-sha256>
+python3 install.py build
+# Copy dist/sky-cua-linux-x64-glibc.tar.gz to the target, then:
+tar xzf sky-cua-linux-x64-glibc.tar.gz
+cd sky-cua-linux-x64-glibc
+python3 install.py install
 ```
 
-The release-root controller atomically promotes the generation, writes exact
-native-host manifests and stable `current` links, drains obsolete runtimes,
-records the activation receipt, and prunes only after success. Codex Desktop
-invokes this same producer transaction automatically and resolves its runtime
-through the standalone active generation. The older `scripts/package.py`
-installer remains compatibility packaging, not complete activation. See
+The installer recoverably replaces
+`${XDG_DATA_HOME:-~/.local/share}/sky-cua`, writes exact native-host manifests,
+and projects stable launchers, skills, and detected consumer registrations.
+There are no generations, `current` selector, rollback operation, hash-selected
+install arguments, or consumer Browser trust hashes. The artifact carries only
+the latest bundled Chrome extension. See
 [`docs/features/release-package.md`](../features/release-package.md) and
 [`docs/operations/plugin-release.md`](../operations/plugin-release.md).
 

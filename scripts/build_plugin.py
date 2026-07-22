@@ -136,10 +136,17 @@ def cargo_env_without_rustc_wrappers() -> dict[str, str]:
     return env
 
 
+def cargo_target_root() -> Path:
+    configured = os.environ.get("CARGO_TARGET_DIR", "").strip()
+    if not configured:
+        return REPO_ROOT / "target"
+    path = Path(configured).expanduser()
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
 def release_client_binary_path() -> Path:
     return (
-        REPO_ROOT
-        / "target"
+        cargo_target_root()
         / "release"
         / runtime_binary_source_name(current_runtime_platform(), "sky-cua-client")
     )
@@ -191,9 +198,14 @@ def tracked_bundle_files(source_paths: list[Path] | None = None) -> list[Path]:
         )
     except (FileNotFoundError, subprocess.CalledProcessError):
         return worktree_bundle_files(paths)
-    return [
+    tracked = [
         Path(part.decode("utf-8", errors="replace")) for part in result.stdout.split(b"\0") if part
     ]
+    # ``git ls-files`` includes paths deleted from the worktree. Development
+    # builds intentionally stage the current worktree, so an in-scope deletion
+    # must not be resurrected as a missing required input. A file disappearing
+    # after this snapshot is still caught by ``copy_tracked_bundle_sources``.
+    return [path for path in tracked if (REPO_ROOT / path).exists()]
 
 
 _WORKTREE_BUNDLE_EXCLUDED_SUFFIXES = (".pyc", ".pyo")
@@ -353,6 +365,34 @@ def chrome_extension_bundle_ignore(_directory: str, names: list[str]) -> set[str
     return {name for name in names if name == "_metadata" or name.endswith(".map")}
 
 
+def latest_chrome_extension_root(source: Path) -> Path:
+    candidates: list[tuple[tuple[int, ...], Path]] = []
+    for path in source.iterdir():
+        manifest_path = path / "manifest.json"
+        if not path.is_dir() or path.is_symlink() or not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"invalid Chrome extension manifest at {manifest_path}") from error
+        version_value = manifest.get("version")
+        if (
+            manifest.get("name") not in {"Codex", "ChatGPT"}
+            or not manifest.get("key")
+            or not isinstance(version_value, str)
+            or path.name != f"{version_value}_0"
+        ):
+            continue
+        try:
+            version = tuple(int(part) for part in version_value.split("."))
+        except ValueError as error:
+            raise RuntimeError(f"invalid Chrome extension version at {manifest_path}") from error
+        candidates.append((version, path))
+    if not candidates:
+        raise RuntimeError(f"no Chrome extension manifests found under {source}")
+    return max(candidates)[1]
+
+
 def copy_worktree_bundle_dirs(temp_root: Path) -> None:
     for relative_path in WORKTREE_BUNDLE_DIRS:
         source = REPO_ROOT / relative_path
@@ -362,10 +402,15 @@ def copy_worktree_bundle_dirs(temp_root: Path) -> None:
         if destination.exists():
             shutil.rmtree(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        ignore = (
-            chrome_extension_bundle_ignore if relative_path == CHROME_EXTENSION_BUNDLE_DIR else None
-        )
-        shutil.copytree(source, destination, ignore=ignore)
+        if relative_path == CHROME_EXTENSION_BUNDLE_DIR:
+            latest = latest_chrome_extension_root(source / "codex")
+            shutil.copytree(
+                latest,
+                destination / "codex" / latest.name,
+                ignore=chrome_extension_bundle_ignore,
+            )
+        else:
+            shutil.copytree(source, destination)
 
 
 def copy_companion_apk_if_present(temp_root: Path) -> None:
@@ -705,7 +750,7 @@ def install_bundled_chrome_host(destination_root: Path) -> None:
     if extension_arch is None:
         return
 
-    source_host = REPO_ROOT / "target" / "release" / "sky-cua-chrome-host"
+    source_host = cargo_target_root() / "release" / "sky-cua-chrome-host"
     if not source_host.exists():
         print(
             f"warning: sky-cua Chrome host binary not found at {source_host}; "
@@ -757,7 +802,7 @@ def stage_bundle(bundle_root: Path, *, release_core_commit: str | None = None) -
     platform_id = current_runtime_platform()
     for binary_name in platform_runtime_binary_base_names(platform_id):
         source = (
-            REPO_ROOT / "target" / "release" / runtime_binary_source_name(platform_id, binary_name)
+            cargo_target_root() / "release" / runtime_binary_source_name(platform_id, binary_name)
         )
         destination = temp_root / runtime_binary_path(platform_id, binary_name)
         destination.parent.mkdir(parents=True, exist_ok=True)

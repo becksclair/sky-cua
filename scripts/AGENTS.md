@@ -15,9 +15,8 @@ pytest.
   phone-companion build/stage lane for `deploy_plugin.py`).
 - Build/deploy/distribution entrypoints: `build_plugin.py`,
   `install_plugin.py`, `install_mcp_server.py`, `deploy_plugin.py` (fast local
-  dev deploy as `sky-cua@local`), `package.py` (self-contained release
-  tarball), `installer.py` / root `install.py` (clean-machine install, repo
-  and bundle modes; no marketplace), `install_kwin_effect.py`.
+  dev deploy as `sky-cua@local`), `standalone_release.py` through root
+  `install.py` (`build` and `install` only), and `install_kwin_effect.py`.
 - Live operator smokes are `live_*_smoke.py` and must fail honestly when app
   state is blocked. JSON schemas for final agent messages:
   `scripts/schemas/*.json`.

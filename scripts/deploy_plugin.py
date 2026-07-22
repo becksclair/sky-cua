@@ -6,8 +6,8 @@ retarget the computer-use compat plugin at it, and refresh the installed
 MCP-server runtime. No git, no Codex `plugin/install`. This updates *what runs*
 on this machine, immediately.
 
-To produce a distributable release, use `scripts/package.py`; to install one on
-a clean machine, use `install.py`.
+To produce or install the standalone distribution, use `install.py build` or
+`install.py install` from the repository root.
 """
 
 from __future__ import annotations
@@ -409,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
         description=(
             "Deploy the sky-cua plugin locally: a fast install that updates what "
             "runs immediately (sky-cua@local). For a distributable release use "
-            "scripts/package.py."
+            "python3 install.py build."
         )
     )
     parser.add_argument(

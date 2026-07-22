@@ -1,5 +1,4 @@
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   chmod,
   copyFile,
@@ -25,11 +24,10 @@ const SELECTOR_ENV = [
   "PLAYWRIGHT_BROWSERS_PATH",
   "NODE_REPL_NODE_PATH",
   "NODE_REPL_NODE_MODULE_DIRS",
-  "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S",
   "CUA_NODE_BROWSER_CLIENT_PATH",
 ] as const;
 
-test("installed node_repl self-discovers Node, modules, and Browser trust", async () => {
+test("installed node_repl self-discovers Node, modules, and fixed Browser code", async () => {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "cua-node-self-discovery-"));
   try {
     await cp(join(import.meta.dir, "fixtures", "fake-runtime"), runtimeRoot, {
@@ -86,18 +84,6 @@ test("installed node_repl self-discovers Node, modules, and Browser trust", asyn
     await writeFile(
       browserClient,
       "export const hasNativePipe = typeof nodeRepl.nativePipe?.createConnection === 'function';\n",
-      "utf8",
-    );
-    const browserHash = createHash("sha256")
-      .update(await readFile(browserClient))
-      .digest("hex");
-    const manifestPath = join(runtimeRoot, "manifest.json");
-    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-    manifest.trusted_browser_client_sha256s = [browserHash];
-    manifest.components.browser_use.entrypoint_sha256 = browserHash;
-    await writeFile(
-      manifestPath,
-      `${JSON.stringify(manifest, null, 2)}\n`,
       "utf8",
     );
 

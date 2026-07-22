@@ -12,10 +12,8 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { inflateSync } from "node:zlib";
 import {
-  createDisposableRuntime,
   startBrowserAcceptanceFixture,
   type BrowserAcceptanceFixture,
-  type TrustNegativeCase,
 } from "./browser-live-fixture.ts";
 
 type Scenario = "iab" | "brave-origin-extension";
@@ -77,7 +75,6 @@ export type BrowserAcceptanceOptions = {
   typedText: string;
   timeoutMs: number;
   ownsFixture: boolean;
-  trustNegative: "none" | TrustNegativeCase | "all";
 };
 
 export type InstalledSelection = {
@@ -85,15 +82,17 @@ export type InstalledSelection = {
   manifestPath: string;
   nodeRepl: string;
   browserClient: string;
-  browserClientSha256: string;
-  trustedBrowserClientSha256s: string[];
 };
 
 type Manifest = {
   runtime_name?: unknown;
   node_repl_path?: unknown;
   node_repl_sha256?: unknown;
-  trusted_browser_client_sha256s?: unknown;
+  components?: {
+    browser_use?: {
+      entrypoint?: unknown;
+    };
+  };
 };
 
 type McpResponse = {
@@ -179,7 +178,6 @@ export function parseBrowserAcceptanceArgs(
       "--button-name",
       "--typed-text",
       "--timeout-ms",
-      "--trust-negative",
     ];
     const name = names.find(
       (candidate) => valueAfter(argument, candidate) !== null,
@@ -202,17 +200,6 @@ export function parseBrowserAcceptanceArgs(
     parsedUrl.protocol !== "https:"
   )
     throw new Error("--url must use http or https");
-  const trustNegative = values.get("--trust-negative") ?? "none";
-  if (
-    trustNegative !== "none" &&
-    trustNegative !== "tampered" &&
-    trustNegative !== "missing" &&
-    trustNegative !== "wrong-manifest-hash" &&
-    trustNegative !== "all"
-  )
-    throw new Error(
-      "--trust-negative must be tampered, missing, wrong-manifest-hash, or all",
-    );
   const timeoutText = values.get("--timeout-ms") ?? "60000";
   const timeoutMs = Number(timeoutText);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 300_000)
@@ -256,7 +243,6 @@ export function parseBrowserAcceptanceArgs(
     ),
     timeoutMs,
     ownsFixture: parsedUrl === null,
-    trustNegative,
   };
 }
 
@@ -375,108 +361,24 @@ export function validateInstalledSelection(
       "installed node_repl SHA-256 does not match runtime manifest",
     );
   rejectSkynetPath(options.browserClient, "browser client");
+  const browserEntrypoint = manifest.components?.browser_use?.entrypoint;
+  if (typeof browserEntrypoint !== "string" || isAbsolute(browserEntrypoint))
+    throw new Error(
+      "runtime manifest components.browser_use.entrypoint must be relative",
+    );
+  const manifestBrowserClient = realpathSync(join(runtimeRoot, browserEntrypoint));
   const browserClient = realpathSync(options.browserClient);
   rejectSkynetPath(browserClient, "resolved browser client");
+  if (browserClient !== manifestBrowserClient)
+    throw new Error(
+      `selected browser client is not the manifest entrypoint: ${browserClient}`,
+    );
   assertReadableFile(browserClient, "installed browser client");
-  const hashes = manifest.trusted_browser_client_sha256s;
-  if (
-    !Array.isArray(hashes) ||
-    hashes.length === 0 ||
-    !hashes.every((item) => typeof item === "string" && SHA256.test(item))
-  )
-    throw new Error(
-      "runtime manifest trusted_browser_client_sha256s is invalid or empty",
-    );
-  const trustedBrowserClientSha256s = hashes as string[];
-  const browserClientSha256 = fileSha256(browserClient);
-  if (!trustedBrowserClientSha256s.includes(browserClientSha256))
-    throw new Error(
-      `installed browser client SHA-256 ${browserClientSha256} is not trusted by runtime manifest`,
-    );
   return {
     runtimeRoot,
     manifestPath,
     nodeRepl: selectedNodeRepl,
     browserClient,
-    browserClientSha256,
-    trustedBrowserClientSha256s,
-  };
-}
-
-export type TrustNegativeEvidence = {
-  runtime_root: string;
-  browser_client: string;
-  browser_client_sha256: string;
-  cases: Array<{
-    case: TrustNegativeCase;
-    rejected: true;
-    connection_attempted: false;
-    hash_verified_before_connection: false;
-    error: string;
-  }>;
-};
-
-export function runPackagedRootTrustNegatives(
-  options: BrowserAcceptanceOptions,
-): TrustNegativeEvidence {
-  const original = validateInstalledSelection(options);
-  const requested: TrustNegativeCase[] =
-    options.trustNegative === "all"
-      ? ["tampered", "missing", "wrong-manifest-hash"]
-      : options.trustNegative === "none"
-        ? []
-        : [options.trustNegative];
-  if (requested.length === 0)
-    throw new Error("packaged-root trust-negative mode was not selected");
-  const cases = requested.map((testCase) => {
-    const disposable = createDisposableRuntime(
-      original.runtimeRoot,
-      original.browserClient,
-      original.nodeRepl,
-      testCase,
-    );
-    try {
-      let rejection: unknown;
-      try {
-        validateInstalledSelection({
-          ...options,
-          runtimeRoot: disposable.runtimeRoot,
-          browserClient: disposable.browserClient,
-          nodeRepl: disposable.nodeRepl,
-          trustNegative: "none",
-        });
-      } catch (error) {
-        rejection = error;
-      }
-      if (rejection === undefined)
-        throw new Error(`trust-negative case ${testCase} did not reject`);
-      const message = errorText(rejection);
-      if (
-        (testCase === "missing" && !message.includes("ENOENT")) ||
-        (testCase !== "missing" &&
-          !message.includes("is not trusted by runtime manifest"))
-      )
-        throw new Error(
-          `trust-negative case ${testCase} rejected for the wrong reason: ${message}`,
-        );
-      return {
-        case: testCase,
-        rejected: true as const,
-        connection_attempted: false as const,
-        hash_verified_before_connection: false as const,
-        error: message,
-      };
-    } finally {
-      disposable.cleanup();
-    }
-  });
-  if (fileSha256(original.browserClient) !== original.browserClientSha256)
-    throw new Error("trust-negative mode modified the original Browser client");
-  return {
-    runtime_root: original.runtimeRoot,
-    browser_client: original.browserClient,
-    browser_client_sha256: original.browserClientSha256,
-    cases,
   };
 }
 
@@ -1127,10 +1029,7 @@ async function invokeInstalledNodeRepl(
   selection: InstalledSelection,
 ): Promise<JsonObject> {
   const requests = buildMcpRequests(options, selection);
-  const childEnvironment: NodeJS.ProcessEnv = {
-    ...process.env,
-    NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: selection.browserClientSha256,
-  };
+  const childEnvironment: NodeJS.ProcessEnv = { ...process.env };
   delete childEnvironment.CODEX_BROWSER_PROVIDER;
   const child: ChildProcessWithoutNullStreams = spawn(selection.nodeRepl, [], {
     cwd: dirname(selection.manifestPath),
@@ -1251,22 +1150,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   let fixture: BrowserAcceptanceFixture | undefined;
   try {
     const options = parseBrowserAcceptanceArgs(argv);
-    if (options.trustNegative !== "none") {
-      const trustEvidence = runPackagedRootTrustNegatives(options);
-      process.stdout.write(
-        `${JSON.stringify(
-          report("passed", false, {
-            mode: "packaged-root-trust-negative",
-            source_hash_verified_before_copy: true,
-            original_untouched: true,
-            ...trustEvidence,
-          }),
-          null,
-          2,
-        )}\n`,
-      );
-      return 0;
-    }
     const selection = validateInstalledSelection(options);
     const braveOrigin =
       options.scenario === "brave-origin-extension"
@@ -1286,8 +1169,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
           runtime_manifest: selection.manifestPath,
           node_repl: selection.nodeRepl,
           browser_client: selection.browserClient,
-          browser_client_sha256: selection.browserClientSha256,
-          hash_verified_before_connection: true,
           ...(fixture === undefined
             ? { fixture: { owned: false } }
             : {
@@ -1321,13 +1202,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         report(
           "failed",
           connectionAttempted,
-          {
-            hash_verified_before_connection: false,
-            failure_phase: connectionAttempted ? "connection" : "preflight",
-            wrong_hash_fail_closed:
-              !connectionAttempted &&
-              message.includes("is not trusted by runtime manifest"),
-          },
+          { failure_phase: connectionAttempted ? "connection" : "preflight" },
           message,
         ),
         null,

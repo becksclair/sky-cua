@@ -186,8 +186,8 @@ def merge_runtime_artifacts(bundle_root: Path, artifacts_root: Path) -> None:
     into the bundle's `bin/runtimes/<platform>/` layout, requiring the full
     `REQUIRED_RUNTIME_PLATFORMS` set so a fat bundle is never shipped with a
     platform silently missing. This is the cross-build assembly step with no
-    marketplace dependency; the single-platform `scripts/package.py` does not use
-    it, but a future multi-platform/Windows package would.
+    marketplace dependency; the standalone Linux build does not use it, but a
+    future multi-platform/Windows package would.
     """
     missing: list[str] = []
     for platform_id in REQUIRED_RUNTIME_PLATFORMS:

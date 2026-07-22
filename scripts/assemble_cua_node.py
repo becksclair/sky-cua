@@ -19,13 +19,13 @@ from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, cast
 
-from _plugin_bundle import REPO_ROOT, remove_path
-from release_generation import (
+from _artifact_helpers import (
     CHECKOUT_SHAPED_PATH_PATTERNS,
     canonical_json_bytes,
     sha256_file,
     write_json_durably,
 )
+from _plugin_bundle import REPO_ROOT, remove_path
 
 TARGET = "linux-x64-glibc"
 NODE_VERSION = "24.14.0"
@@ -1222,7 +1222,6 @@ def _write_manifest(
             "licenses": "licenses",
             "sbom": "sbom.cdx.json",
         },
-        "trusted_browser_client_sha256s": [browser_sha256],
         "components": {
             "host": {
                 "name": "@heliasar/cua-node-host",
@@ -1247,7 +1246,6 @@ def _write_manifest(
                 "package_version": BROWSER_VERSION,
                 "entrypoint": "lib/node_modules/@heliasar/browser-use/build/browser-client.mjs",
                 "declarations": "lib/node_modules/@heliasar/browser-use/build/index.d.ts",
-                "entrypoint_sha256": browser_sha256,
             },
         },
         "browser": {"revision": f"system-chromium-browser-use-{BROWSER_VERSION}"},

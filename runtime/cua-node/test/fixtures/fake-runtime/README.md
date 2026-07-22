@@ -19,7 +19,6 @@ runtime/cua-node/test/fixtures/fake-runtime/bin/node --version
 runtime/cua-node/test/fixtures/fake-runtime/bin/node_repl --version
 NODE_REPL_NODE_PATH="$PWD/runtime/cua-node/test/fixtures/fake-runtime/bin/node" \
 NODE_REPL_NODE_MODULE_DIRS="$PWD/runtime/cua-node/test/fixtures/fake-runtime/lib/node_modules" \
-NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S="$(printf '%064d' 0)" \
 PLAYWRIGHT_BROWSERS_PATH="$PWD/runtime/cua-node/test/fixtures/fake-runtime/share/playwright" \
 CODEX_NODE_REPL_PATH="$PWD/runtime/cua-node/test/fixtures/fake-runtime/bin/node_repl" \
 runtime/cua-node/test/fixtures/fake-runtime/bin/node_repl --smoke

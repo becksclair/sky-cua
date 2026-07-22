@@ -26,7 +26,6 @@ import {
   validateUnixSocketPath,
 } from "../src/host/native-pipe-broker.ts";
 import {
-  parseTrustedBrowserClientSha256s,
   TRUSTED_CODE_PATHS_ENV,
   TrustedModulePolicy,
 } from "../src/host/trusted-module-policy.ts";
@@ -45,9 +44,17 @@ const PACKAGE_ENTRYPOINT = resolve(
   "browser-native-pipe-fixture",
   "index.mjs",
 );
+const PACKAGE_TRUST_ROOT = resolve(
+  PACKAGE_ROOT,
+  "node_modules",
+  "browser-native-pipe-fixture",
+);
 const INSTALLED_BROWSER_CLIENT = resolve(
   process.env.CUA_NODE_BROWSER_CLIENT_PATH ??
-    resolve(import.meta.dir, "../../../packages/browser-use/build/browser-client.mjs"),
+    resolve(
+      import.meta.dir,
+      "../../../packages/browser-use/build/browser-client.mjs",
+    ),
 );
 
 type Peer = {
@@ -108,19 +115,13 @@ function browserJs(id: number, code: string, turnId: string) {
   return request;
 }
 
-test("trusted browser policy parses fail-closed and hashes the installed exact client bytes", async () => {
-  assert.deepEqual([...parseTrustedBrowserClientSha256s(undefined)], []);
-  assert.deepEqual([...parseTrustedBrowserClientSha256s("bad," + "a".repeat(64))], []);
-  assert.deepEqual(
-    [...parseTrustedBrowserClientSha256s(" " + "A".repeat(64) + " ")],
-    ["a".repeat(64)],
-  );
-
+test("installed Browser code is trusted only through its fixed containing path", async () => {
   const bytes = await readFile(INSTALLED_BROWSER_CLIENT);
   const actualHash = createHash("sha256").update(bytes).digest("hex");
-  assert.equal(actualHash, browserFixture.client_sha256);
   const policy = new TrustedModulePolicy({
-    env: { NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: actualHash },
+    env: {
+      NODE_REPL_TRUSTED_CODE_PATHS: resolve(INSTALLED_BROWSER_CLIENT, ".."),
+    },
   });
   const loaded = policy.readEntrypoint(INSTALLED_BROWSER_CLIENT);
   assert.equal(loaded.sha256, actualHash);
@@ -131,7 +132,12 @@ test("trusted browser policy parses fail-closed and hashes the installed exact c
 
   const modified = Buffer.from(bytes);
   modified[0] = (modified[0] ?? 0) ^ 1;
-  const modifiedLoad = policy.evaluate(INSTALLED_BROWSER_CLIENT, modified, true, false);
+  const modifiedLoad = policy.evaluate(
+    INSTALLED_BROWSER_CLIENT,
+    modified,
+    true,
+    false,
+  );
   assert.equal(modifiedLoad.trusted, false);
   assert.notEqual(modifiedLoad.sha256, actualHash);
 });
@@ -147,13 +153,12 @@ export async function contextBreakingBuiltinsUnavailable() {
 }
 `);
   await writeFile(entrypoint, source);
-  const digest = createHash("sha256").update(source).digest("hex");
   const manager = new RuntimeManager({
     allowHostNode: true,
     nodePath: TEST_NODE_PATH,
     runtimeMetadata: null,
     env: {
-      NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: digest,
+      NODE_REPL_TRUSTED_CODE_PATHS: root,
     },
   });
   const server = new McpServer({ manager });
@@ -193,7 +198,10 @@ test("trusted directory authorization uses exact opened bytes and rejects symlin
       false,
     );
     assert.equal(policy.isTrustedDirectoryPath(trustedFile), true);
-    assert.equal(policy.evaluate(trustedFile, goodBytes, false, false).trusted, true);
+    assert.equal(
+      policy.evaluate(trustedFile, goodBytes, false, false).trusted,
+      true,
+    );
 
     assert.equal(policy.isTrustedDirectoryPath(trustedFile), true);
     await writeFile(trustedFile, outsideBytes);
@@ -224,7 +232,9 @@ test("trusted directory authorization uses exact opened bytes and rejects symlin
 });
 
 test("the exact installed Browser client bytes compile through the trusted Node REPL loader", async () => {
-  const root = await mkdtemp(join(tmpdir(), "cua-node-installed-browser-client-"));
+  const root = await mkdtemp(
+    join(tmpdir(), "cua-node-installed-browser-client-"),
+  );
   const packageRoot = join(root, "node_modules", "browser-use-installed");
   await mkdir(packageRoot, { recursive: true });
   await cp(INSTALLED_BROWSER_CLIENT, join(packageRoot, "browser-client.mjs"));
@@ -237,16 +247,13 @@ test("the exact installed Browser client bytes compile through the trusted Node 
     }),
     "utf8",
   );
-  const digest = createHash("sha256")
-    .update(await readFile(INSTALLED_BROWSER_CLIENT))
-    .digest("hex");
   const manager = new RuntimeManager({
     allowHostNode: true,
     nodePath: TEST_NODE_PATH,
     runtimeMetadata: null,
     env: {
       NODE_REPL_NODE_MODULE_DIRS: root,
-      NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: digest,
+      NODE_REPL_TRUSTED_CODE_PATHS: packageRoot,
     },
   });
   const server = new McpServer({ manager });
@@ -295,7 +302,10 @@ test("the exact installed Browser client decodes its public screenshot and emits
     `wp04-${process.pid}-${root.split("-").at(-1) ?? "fixture"}.sock`,
   );
   const peer = await startPeer(socketPath, "browser-client");
-  await cp(INSTALLED_BROWSER_CLIENT, join(packageScripts, "browser-client.mjs"));
+  await cp(
+    INSTALLED_BROWSER_CLIENT,
+    join(packageScripts, "browser-client.mjs"),
+  );
   await writeFile(
     join(packageRoot, "package.json"),
     JSON.stringify({
@@ -305,16 +315,13 @@ test("the exact installed Browser client decodes its public screenshot and emits
     }),
     "utf8",
   );
-  const digest = createHash("sha256")
-    .update(await readFile(INSTALLED_BROWSER_CLIENT))
-    .digest("hex");
   const manager = new RuntimeManager({
     allowHostNode: true,
     nodePath: TEST_NODE_PATH,
     runtimeMetadata: null,
     env: {
       NODE_REPL_NODE_MODULE_DIRS: root,
-      NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: digest,
+      NODE_REPL_TRUSTED_CODE_PATHS: packageRoot,
       SKY_CUA_CODEX_BROWSER_SOCKET_PATH: socketPath,
       SKY_CUA_MCP_CALLER_PROVENANCE: "codex_desktop",
     },
@@ -330,7 +337,9 @@ test("the exact installed Browser client decodes its public screenshot and emits
         ),
       )) as Response,
     );
-    assert.deepEqual(setup?.content, [{ type: "text", text: "exact-client-ready" }]);
+    assert.deepEqual(setup?.content, [
+      { type: "text", text: "exact-client-ready" },
+    ]);
 
     const screenshot = result(
       (await server.dispatch(
@@ -399,11 +408,16 @@ test("NativePipeBroker rejects stale token, generation, and execution requests b
 });
 
 test("NativePipeBroker rejects non-Unix and malformed socket paths", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "cua-node-path-")).then(resolve);
+  const directory = await mkdtemp(join(tmpdir(), "cua-node-path-")).then(
+    resolve,
+  );
   const regularFile = join(directory, "regular-file");
   await writeFile(regularFile, "not a socket", "utf8");
   try {
-    await assert.rejects(validateUnixSocketPath("relative.sock"), /must be absolute/u);
+    await assert.rejects(
+      validateUnixSocketPath("relative.sock"),
+      /must be absolute/u,
+    );
     await assert.rejects(
       validateUnixSocketPath(join(directory, "missing-parent", "socket")),
       /no parent directory/u,
@@ -413,7 +427,10 @@ test("NativePipeBroker rejects non-Unix and malformed socket paths", async () =>
       validateUnixSocketPath(join(directory, "x".repeat(108))),
       /file name is too long/u,
     );
-    await assert.rejects(validateUnixSocketPath(`${directory}/`), /no file name/u);
+    await assert.rejects(
+      validateUnixSocketPath(`${directory}/`),
+      /no file name/u,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -484,9 +501,18 @@ test("NativePipeBroker rejects unsafe directory listing requests", async () => {
   const linked = `${directory}-link`;
   await symlink(directory, linked);
   try {
-    await assert.rejects(listUnixSocketDirectory("relative"), /must be absolute/u);
-    await assert.rejects(listUnixSocketDirectory(`${directory}/`), /must not end/u);
-    await assert.rejects(listUnixSocketDirectory(linked), /must not be a symlink/u);
+    await assert.rejects(
+      listUnixSocketDirectory("relative"),
+      /must be absolute/u,
+    );
+    await assert.rejects(
+      listUnixSocketDirectory(`${directory}/`),
+      /must not end/u,
+    );
+    await assert.rejects(
+      listUnixSocketDirectory(linked),
+      /must not be a symlink/u,
+    );
   } finally {
     await rm(linked, { force: true });
     await rm(directory, { recursive: true, force: true });
@@ -549,7 +575,11 @@ test("NativePipeBroker keeps a trusted connection alive between executions", asy
       }),
       /exec context not found/u,
     );
-    for (let attempt = 0; attempt < 50 && peer.requests.length < 3; attempt += 1)
+    for (
+      let attempt = 0;
+      attempt < 50 && peer.requests.length < 3;
+      attempt += 1
+    )
       await delay(10);
     assert.deepEqual(
       peer.requests.map((request) => request.phase),
@@ -595,9 +625,6 @@ test("first-party Node REPL trusted Browser fixture connects, frames little-endi
     "browser.sock",
   );
   const peer = await startPeer(socketPath, "roundtrip");
-  const digest = createHash("sha256")
-    .update(await readFile(PACKAGE_ENTRYPOINT))
-    .digest("hex");
   const manager = new RuntimeManager({
     allowHostNode: true,
     nodePath: TEST_NODE_PATH,
@@ -605,7 +632,7 @@ test("first-party Node REPL trusted Browser fixture connects, frames little-endi
     cwd: process.cwd(),
     env: {
       NODE_REPL_NODE_MODULE_DIRS: PACKAGE_ROOT,
-      NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: digest,
+      NODE_REPL_TRUSTED_CODE_PATHS: PACKAGE_TRUST_ROOT,
     },
   });
   const server = new McpServer({ manager });
@@ -673,9 +700,6 @@ test("trusted Browser package lists task socket directories through nodeRepl.nat
   const socketPath = join(directory, "task.sock");
   const peer = await startPeer(socketPath, "roundtrip");
   await writeFile(join(directory, "ignore.txt"), "not a socket", "utf8");
-  const digest = createHash("sha256")
-    .update(await readFile(PACKAGE_ENTRYPOINT))
-    .digest("hex");
   const manager = new RuntimeManager({
     allowHostNode: true,
     nodePath: TEST_NODE_PATH,
@@ -683,7 +707,7 @@ test("trusted Browser package lists task socket directories through nodeRepl.nat
     cwd: process.cwd(),
     env: {
       NODE_REPL_NODE_MODULE_DIRS: PACKAGE_ROOT,
-      NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: digest,
+      NODE_REPL_TRUSTED_CODE_PATHS: PACKAGE_TRUST_ROOT,
     },
   });
   const server = new McpServer({ manager });
@@ -727,9 +751,6 @@ test("native-pipe callbacks retain the JavaScript execution context", async () =
     "browser.sock",
   );
   const peer = await startPeer(socketPath, "callback");
-  const digest = createHash("sha256")
-    .update(await readFile(PACKAGE_ENTRYPOINT))
-    .digest("hex");
   const manager = new RuntimeManager({
     allowHostNode: true,
     nodePath: TEST_NODE_PATH,
@@ -737,7 +758,7 @@ test("native-pipe callbacks retain the JavaScript execution context", async () =
     cwd: process.cwd(),
     env: {
       NODE_REPL_NODE_MODULE_DIRS: PACKAGE_ROOT,
-      NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: digest,
+      NODE_REPL_TRUSTED_CODE_PATHS: PACKAGE_TRUST_ROOT,
     },
   });
   const server = new McpServer({ manager });
@@ -772,9 +793,6 @@ test("persistent Browser callbacks can reply while idle and during a later cell"
     "browser.sock",
   );
   const peer = await startPeer(socketPath, "persistent");
-  const digest = createHash("sha256")
-    .update(await readFile(PACKAGE_ENTRYPOINT))
-    .digest("hex");
   const manager = new RuntimeManager({
     allowHostNode: true,
     nodePath: TEST_NODE_PATH,
@@ -782,7 +800,7 @@ test("persistent Browser callbacks can reply while idle and during a later cell"
     cwd: process.cwd(),
     env: {
       NODE_REPL_NODE_MODULE_DIRS: PACKAGE_ROOT,
-      NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: digest,
+      NODE_REPL_TRUSTED_CODE_PATHS: PACKAGE_TRUST_ROOT,
     },
   });
   const server = new McpServer({ manager });
@@ -790,7 +808,11 @@ test("persistent Browser callbacks can reply while idle and during a later cell"
     for (const socket of peer.sockets) socket.write(encodeFrame({ phase }));
   };
   const waitForRequests = async (count: number): Promise<void> => {
-    for (let attempt = 0; attempt < 100 && peer.requests.length < count; attempt += 1)
+    for (
+      let attempt = 0;
+      attempt < 100 && peer.requests.length < count;
+      attempt += 1
+    )
       await delay(10);
     assert.equal(peer.requests.length, count);
   };
@@ -832,97 +854,42 @@ test("persistent Browser callbacks can reply while idle and during a later cell"
   }
 });
 
-test("wrong, missing, malformed, modified, and stale Browser hashes produce zero peer connections", async () => {
-  const cases: Array<{
-    name: string;
-    hash: string | undefined;
-    mutation: "none" | "before-manager" | "after-manager";
-  }> = [
-    { name: "wrong", hash: "0".repeat(64), mutation: "none" },
-    { name: "missing", hash: undefined, mutation: "none" },
-    {
-      name: "malformed",
-      hash: "0".repeat(64) + ",not-a-sha",
-      mutation: "none",
-    },
-    {
-      name: "modified",
-      hash: createHash("sha256")
-        .update(await readFile(PACKAGE_ENTRYPOINT))
-        .digest("hex"),
-      mutation: "before-manager",
-    },
-    {
-      name: "stale",
-      hash: createHash("sha256")
-        .update(await readFile(PACKAGE_ENTRYPOINT))
-        .digest("hex"),
-      mutation: "after-manager",
-    },
-  ];
-  for (const testCase of cases) {
-    const root = await mkdtemp(join(tmpdir(), `cua-node-hash-${testCase.name}-`));
-    const packageRoot = join(root, "node_modules", "browser-native-pipe-fixture");
-    await cp(
-      resolve(PACKAGE_ROOT, "node_modules", "browser-native-pipe-fixture"),
-      packageRoot,
-      { recursive: true },
-    );
-    const entrypoint = join(packageRoot, "index.mjs");
-    if (testCase.mutation === "before-manager") {
-      await writeFile(
-        entrypoint,
-        `${await readFile(entrypoint, "utf8")}\n// one byte changed\n`,
-        "utf8",
-      );
-    }
-    const socketPath = join(root, "browser.sock");
-    const peer = await startPeer(socketPath, "roundtrip");
-    const manager = new RuntimeManager({
-      allowHostNode: true,
-      nodePath: TEST_NODE_PATH,
-      runtimeMetadata: null,
-      env: {
-        NODE_REPL_NODE_MODULE_DIRS: root,
-        ...(testCase.hash === undefined
-          ? {}
-          : { NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: testCase.hash }),
+test("Browser package without the fixed trusted path cannot connect", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cua-node-untrusted-browser-"));
+  const socketPath = join(root, "browser.sock");
+  const peer = await startPeer(socketPath, "roundtrip");
+  const manager = new RuntimeManager({
+    allowHostNode: true,
+    nodePath: TEST_NODE_PATH,
+    runtimeMetadata: null,
+    env: { NODE_REPL_NODE_MODULE_DIRS: PACKAGE_ROOT },
+  });
+  const server = new McpServer({ manager });
+  try {
+    const response = await server.dispatch({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "js",
+        arguments: {
+          code: `const browser = await import("browser-native-pipe-fixture"); await browser.browserRoundTrip(${JSON.stringify(socketPath)}, { method: "should-not-connect" });`,
+        },
       },
     });
-    const server = new McpServer({ manager });
-    try {
-      if (testCase.mutation === "after-manager")
-        await writeFile(
-          entrypoint,
-          `${await readFile(entrypoint, "utf8")}\n// trusted hash became stale\n`,
-          "utf8",
-        );
-      const response = await server.dispatch({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: {
-          name: "js",
-          arguments: {
-            code: `const browser = await import("browser-native-pipe-fixture"); await browser.browserRoundTrip(${JSON.stringify(socketPath)}, { method: "should-not-connect" });`,
-          },
-        },
-      });
-      assert.equal(
-        response?.result &&
-          typeof response.result === "object" &&
-          "isError" in response.result
-          ? response.result.isError
-          : undefined,
-        true,
-        testCase.name,
-      );
-      assert.equal(peer.connectionCount(), 0, testCase.name);
-    } finally {
-      await server.close();
-      await closePeer(peer);
-      await rm(root, { recursive: true, force: true });
-    }
+    assert.equal(
+      response?.result &&
+        typeof response.result === "object" &&
+        "isError" in response.result
+        ? response.result.isError
+        : undefined,
+      true,
+    );
+    assert.equal(peer.connectionCount(), 0);
+  } finally {
+    await server.close();
+    await closePeer(peer);
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -931,12 +898,9 @@ test("a symlinked trusted Browser entrypoint fails before any peer connection", 
   const socketPath = join(root, "browser.sock");
   const peer = await startPeer(socketPath, "roundtrip");
   const linkedEntrypoint = join(root, "browser-client.mjs");
-  const digest = createHash("sha256")
-    .update(await readFile(PACKAGE_ENTRYPOINT))
-    .digest("hex");
   await symlink(PACKAGE_ENTRYPOINT, linkedEntrypoint);
   const policy = new TrustedModulePolicy({
-    env: { NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: digest },
+    env: { NODE_REPL_TRUSTED_CODE_PATHS: root },
   });
   try {
     assert.throws(
@@ -955,16 +919,13 @@ test("Browser framing rejects an oversized response and replays an early close t
     const root = await mkdtemp(join(tmpdir(), `cua-node-frame-${mode}-`));
     const socketPath = join(root, "browser.sock");
     const peer = await startPeer(socketPath, mode);
-    const digest = createHash("sha256")
-      .update(await readFile(PACKAGE_ENTRYPOINT))
-      .digest("hex");
     const manager = new RuntimeManager({
       allowHostNode: true,
       nodePath: TEST_NODE_PATH,
       runtimeMetadata: null,
       env: {
         NODE_REPL_NODE_MODULE_DIRS: PACKAGE_ROOT,
-        NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: digest,
+        NODE_REPL_TRUSTED_CODE_PATHS: PACKAGE_TRUST_ROOT,
       },
     });
     const server = new McpServer({ manager });
@@ -1018,7 +979,11 @@ test("NativePipeBroker bounds request history and removes every closed connectio
   broker.setGeneration("generation-cycles");
   broker.setActiveExecution("exec-cycles");
   try {
-    for (let index = 0; index < MAX_NATIVE_PIPE_REQUEST_HISTORY + 32; index += 1) {
+    for (
+      let index = 0;
+      index < MAX_NATIVE_PIPE_REQUEST_HISTORY + 32;
+      index += 1
+    ) {
       const suffix = String(index);
       await broker.handle({
         id: `native-pipe-connect-${suffix}`,
@@ -1049,7 +1014,10 @@ test("NativePipeBroker bounds request history and removes every closed connectio
   }
 });
 
-async function startPeer(socketPath: string, mode: Peer["mode"]): Promise<Peer> {
+async function startPeer(
+  socketPath: string,
+  mode: Peer["mode"],
+): Promise<Peer> {
   const requests: Array<Record<string, unknown>> = [];
   let connections = 0;
   const sockets = new Set<Socket>();
@@ -1147,7 +1115,10 @@ async function startPeer(socketPath: string, mode: Peer["mode"]): Promise<Peer> 
         });
         const extra = encodeFrame({ event: "coalesced" });
         socket.write(reply.subarray(0, 2));
-        setTimeout(() => socket.write(Buffer.concat([reply.subarray(2), extra])), 0);
+        setTimeout(
+          () => socket.write(Buffer.concat([reply.subarray(2), extra])),
+          0,
+        );
       }
     });
   });

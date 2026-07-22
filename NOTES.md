@@ -179,8 +179,11 @@ and the idle auto-hide watchdog chain are documented in
   compat root's `.mcp.json` points at it). The off-compat/Windows fallback
   enables `sky-cua@local` directly. Cheap proof is one `computer-use` server in
   `codex app-server` `mcpServerStatus/list`. Local dev deploy:
-  `scripts/deploy_plugin.py`; clean-machine install: `scripts/package.py` then
-  `python3 install.py` on the target.
+  `scripts/deploy_plugin.py`; standalone distribution: `python3 install.py
+  build`, then extract `dist/sky-cua-linux-x64-glibc.tar.gz` and run `python3
+  install.py install` on the target. Build outputs stay under `dist/` and
+  `out/components/` so repeat builds reuse compiled artifacts; install replaces
+  `${XDG_DATA_HOME:-~/.local/share}/sky-cua` directly.
   History: `docs/research/2026-04-codex-plugin-chatgpt-auth-expedition.md`.
 
 ## Smoke harnesses

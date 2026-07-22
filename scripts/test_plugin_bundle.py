@@ -306,6 +306,27 @@ def test_build_bundle_inputs_are_selected_from_git_index(
     ]
 
 
+def test_build_bundle_inputs_omit_tracked_worktree_deletions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, stdout=subprocess.DEVNULL)
+    tracked = tmp_path / "docs" / "retired.md"
+    tracked.parent.mkdir()
+    tracked.write_text("retired\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "docs/retired.md"],
+        cwd=tmp_path,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    tracked.unlink()
+
+    monkeypatch.setattr(build_plugin, "REPO_ROOT", tmp_path)
+
+    assert build_plugin.tracked_bundle_files([Path("docs")]) == []
+
+
 def test_build_bundle_inputs_fall_back_to_worktree_without_git(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -449,6 +470,16 @@ def test_copy_worktree_bundle_dirs_includes_kwin_effect_resources(
     )
 
 
+def test_cargo_target_root_honors_shared_absolute_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared = tmp_path / "shared-target"
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(shared))
+
+    assert build_plugin.cargo_target_root() == shared
+
+
 def test_copy_worktree_bundle_dirs_excludes_chrome_maps_and_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -459,7 +490,28 @@ def test_copy_worktree_bundle_dirs_excludes_chrome_maps_and_metadata(
     metadata_dir = extension_dir / "_metadata"
     assets_dir.mkdir(parents=True)
     metadata_dir.mkdir()
-    (extension_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    (extension_dir / "manifest.json").write_text(
+        json.dumps({"name": "ChatGPT", "version": "1.2.0", "key": "current-key"}),
+        encoding="utf-8",
+    )
+    older_extension = extension_dir.parent / "1.1.5_0"
+    older_extension.mkdir()
+    (older_extension / "manifest.json").write_text(
+        json.dumps({"name": "Codex", "version": "1.1.5", "key": "old-key"}),
+        encoding="utf-8",
+    )
+    unrelated_extension = extension_dir.parent / "9.0.0_0"
+    unrelated_extension.mkdir()
+    (unrelated_extension / "manifest.json").write_text(
+        json.dumps({"name": "Unrelated", "version": "9.0.0", "key": "foreign-key"}),
+        encoding="utf-8",
+    )
+    mismatched_extension = extension_dir.parent / "9.1.0_0"
+    mismatched_extension.mkdir()
+    (mismatched_extension / "manifest.json").write_text(
+        json.dumps({"name": "ChatGPT", "version": "9.1.1", "key": "mismatched"}),
+        encoding="utf-8",
+    )
     (assets_dir / "sidepanel.js").write_text("runtime", encoding="utf-8")
     (assets_dir / "sidepanel.js.map").write_text("source map", encoding="utf-8")
     (metadata_dir / "verified_contents.json").write_text("{}", encoding="utf-8")
@@ -474,6 +526,9 @@ def test_copy_worktree_bundle_dirs_excludes_chrome_maps_and_metadata(
     assert (bundled_extension / "assets" / "sidepanel.js").exists()
     assert not (bundled_extension / "assets" / "sidepanel.js.map").exists()
     assert not (bundled_extension / "_metadata").exists()
+    assert not (bundle_root / older_extension.relative_to(repo_root)).exists()
+    assert not (bundle_root / unrelated_extension.relative_to(repo_root)).exists()
+    assert not (bundle_root / mismatched_extension.relative_to(repo_root)).exists()
     assert (assets_dir / "sidepanel.js.map").exists()
     assert metadata_dir.exists()
 

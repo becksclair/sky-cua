@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot sky-cua installer entry point.
-
-Clone the repository and run `python3 install.py`. The heavy lifting lives in
-scripts/installer.py; this shim only validates the interpreter and wires up
-the import path so the installer can reuse the existing deploy scripts.
-"""
+"""Build or install the standalone fixed-root sky-cua distribution."""
 
 from __future__ import annotations
 
@@ -20,7 +15,7 @@ if sys.version_info < (3, 12):  # noqa: UP036
 REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from installer import main  # noqa: E402
+from standalone_release import main  # noqa: E402
 
 if __name__ == "__main__":
     raise SystemExit(main())

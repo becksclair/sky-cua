@@ -3,7 +3,6 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
-  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -16,18 +15,13 @@ import { deflateSync } from "node:zlib";
 import { test } from "bun:test";
 import {
   parseBrowserAcceptanceArgs,
-  runPackagedRootTrustNegatives,
   type BrowserAcceptanceOptions,
 } from "./browser-live-acceptance.ts";
-import {
-  createDisposableRuntime,
-  startBrowserAcceptanceFixture,
-} from "./browser-live-fixture.ts";
+import { startBrowserAcceptanceFixture } from "./browser-live-fixture.ts";
 
 type RuntimeFixture = {
   root: string;
   options: BrowserAcceptanceOptions;
-  clientHash: string;
 };
 
 function digest(path: string): string {
@@ -50,7 +44,6 @@ function runtimeFixture(): RuntimeFixture {
     "export async function setupBrowserRuntime() {}\n",
     "utf8",
   );
-  const clientHash = digest(browserClient);
   writeFileSync(
     join(root, "manifest.json"),
     `${JSON.stringify(
@@ -58,7 +51,12 @@ function runtimeFixture(): RuntimeFixture {
         runtime_name: "cua_node",
         node_repl_path: "bin/node_repl",
         node_repl_sha256: digest(nodeRepl),
-        trusted_browser_client_sha256s: [clientHash],
+        components: {
+          browser_use: {
+            entrypoint:
+              "lib/node_modules/@heliasar/browser-use/build/browser-client.mjs",
+          },
+        },
       },
       null,
       2,
@@ -77,7 +75,6 @@ function runtimeFixture(): RuntimeFixture {
       ],
       {},
     ),
-    clientHash,
   };
 }
 
@@ -195,7 +192,6 @@ test("omitted URL selects the owned loopback fixture", () => {
   );
   assert.equal(parsed.ownsFixture, true);
   assert.equal(parsed.url, "http://127.0.0.1/acceptance");
-  assert.equal(parsed.trustNegative, "none");
 });
 
 test("serves deterministic DOM, readback, health, and download routes on loopback only", async () => {
@@ -262,107 +258,6 @@ test("runs the omitted-URL path through a deterministic raw node_repl and cleans
       report.evidence.fixture.url,
     );
     await assert.rejects(fetch(report.evidence.fixture.url));
-  } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
-
-test("packaged-root trust negatives reject all Browser mutations without touching source", () => {
-  const fixture = runtimeFixture();
-  try {
-    fixture.options.trustNegative = "all";
-    const originalBytes = readFileSync(fixture.options.browserClient);
-    const evidence = runPackagedRootTrustNegatives(fixture.options);
-    assert.equal(evidence.browser_client_sha256, fixture.clientHash);
-    assert.deepEqual(
-      evidence.cases.map((item) => [
-        item.case,
-        item.rejected,
-        item.connection_attempted,
-        item.hash_verified_before_connection,
-      ]),
-      [
-        ["tampered", true, false, false],
-        ["missing", true, false, false],
-        ["wrong-manifest-hash", true, false, false],
-      ],
-    );
-    assert.equal(
-      readFileSync(fixture.options.browserClient).equals(originalBytes),
-      true,
-    );
-  } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
-
-test("disposable trust-negative roots are deleted and never mutate packaged root", () => {
-  const fixture = runtimeFixture();
-  try {
-    const original = readFileSync(fixture.options.browserClient);
-    const disposable = createDisposableRuntime(
-      fixture.options.runtimeRoot,
-      fixture.options.browserClient,
-      fixture.options.nodeRepl,
-      "tampered",
-    );
-    const disposableRoot = disposable.runtimeRoot;
-    assert.equal(existsSync(disposableRoot), true);
-    assert.notEqual(
-      digest(disposable.browserClient),
-      digest(fixture.options.browserClient),
-    );
-    disposable.cleanup();
-    assert.equal(existsSync(disposableRoot), false);
-    assert.equal(
-      readFileSync(fixture.options.browserClient).equals(original),
-      true,
-    );
-  } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
-
-test("trust-negative CLI reports every rejection before connection", () => {
-  const fixture = runtimeFixture();
-  try {
-    const result = spawnSync(
-      process.execPath,
-      [
-        join(__dirname, "browser-live-acceptance.ts"),
-        `--runtime-root=${fixture.options.runtimeRoot}`,
-        `--browser-client=${fixture.options.browserClient}`,
-        "--scenario=iab",
-        "--session-id=session-1",
-        "--turn-id=turn-1",
-        "--trust-negative=all",
-        "--json",
-      ],
-      { encoding: "utf8", env: cleanEnvironment() },
-    );
-    assert.equal(result.status, 0, result.stderr);
-    const report = JSON.parse(result.stdout) as {
-      status: string;
-      connection_attempted: boolean;
-      evidence: {
-        original_untouched: boolean;
-        cases: Array<{ case: string; connection_attempted: boolean }>;
-      };
-    };
-    assert.equal(report.status, "passed");
-    assert.equal(report.connection_attempted, false);
-    assert.equal(report.evidence.original_untouched, true);
-    assert.deepEqual(
-      report.evidence.cases.map((item) => [
-        item.case,
-        item.connection_attempted,
-      ]),
-      [
-        ["tampered", false],
-        ["missing", false],
-        ["wrong-manifest-hash", false],
-      ],
-    );
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

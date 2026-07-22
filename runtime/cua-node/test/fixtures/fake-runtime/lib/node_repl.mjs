@@ -8,7 +8,6 @@ const ENVIRONMENT_KEYS = [
   "CODEX_NODE_REPL_PATH",
   "NODE_REPL_NODE_PATH",
   "NODE_REPL_NODE_MODULE_DIRS",
-  "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S",
   "PLAYWRIGHT_BROWSERS_PATH",
 ];
 
@@ -42,25 +41,29 @@ function assertSmokeEnvironment() {
   }
 
   const expected = manifest();
-  if (current.CODEX_NODE_REPL_PATH !== join(runtimeRoot, expected.node_repl_path)) {
-    throw new Error("CODEX_NODE_REPL_PATH does not select the fixture node_repl");
+  if (
+    current.CODEX_NODE_REPL_PATH !== join(runtimeRoot, expected.node_repl_path)
+  ) {
+    throw new Error(
+      "CODEX_NODE_REPL_PATH does not select the fixture node_repl",
+    );
   }
   if (current.NODE_REPL_NODE_PATH !== join(runtimeRoot, expected.node_path)) {
     throw new Error("NODE_REPL_NODE_PATH does not select the fixture node");
   }
-  if (current.NODE_REPL_NODE_MODULE_DIRS !== join(runtimeRoot, expected.node_modules)) {
-    throw new Error("NODE_REPL_NODE_MODULE_DIRS does not select the fixture modules");
+  if (
+    current.NODE_REPL_NODE_MODULE_DIRS !==
+    join(runtimeRoot, expected.node_modules)
+  ) {
+    throw new Error(
+      "NODE_REPL_NODE_MODULE_DIRS does not select the fixture modules",
+    );
   }
   if (
-    current.PLAYWRIGHT_BROWSERS_PATH !== join(runtimeRoot, expected.data.playwright)
+    current.PLAYWRIGHT_BROWSERS_PATH !==
+    join(runtimeRoot, expected.data.playwright)
   ) {
     throw new Error("PLAYWRIGHT_BROWSERS_PATH does not select fixture data");
-  }
-  if (
-    current.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S !==
-    expected.trusted_browser_client_sha256s.join(",")
-  ) {
-    throw new Error("trusted browser digest environment does not match the manifest");
   }
 }
 
@@ -124,10 +127,14 @@ async function handleRequest(request) {
   if (request.method === "tools/call") {
     const name = request.params?.name;
     if (name === "js") {
-      return response(id, { content: [{ type: "text", text: "fake-js-result" }] });
+      return response(id, {
+        content: [{ type: "text", text: "fake-js-result" }],
+      });
     }
     if (name === "js_reset") {
-      return response(id, { content: [{ type: "text", text: "fake-js-reset" }] });
+      return response(id, {
+        content: [{ type: "text", text: "fake-js-reset" }],
+      });
     }
     if (name === "js_add_node_module_dir") {
       return response(id, {
@@ -180,7 +187,8 @@ async function main() {
 }
 
 void main().catch((error) => {
-  const message = error instanceof Error ? error.message : "fake node_repl failed";
+  const message =
+    error instanceof Error ? error.message : "fake node_repl failed";
   process.stderr.write(`${message}\n`);
   process.exitCode = 1;
 });

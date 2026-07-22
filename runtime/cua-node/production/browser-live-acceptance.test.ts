@@ -1,5 +1,4 @@
 import { strict as assert } from "node:assert";
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
@@ -129,7 +128,7 @@ function solidWebp(marker: number): Buffer {
   );
 }
 
-function fixture(): { options: BrowserAcceptanceOptions; clientHash: string } {
+function fixture(): { options: BrowserAcceptanceOptions } {
   const root = mkdtempSync(join(tmpdir(), "browser-live-acceptance-"));
   mkdirSync(join(root, "bin"), { recursive: true });
   mkdirSync(join(root, "plugins/browser-use/scripts"), { recursive: true });
@@ -145,14 +144,17 @@ function fixture(): { options: BrowserAcceptanceOptions; clientHash: string } {
   const digest = (path: string): string =>
     createHash("sha256").update(readFileSync(path)).digest("hex");
   const nodeReplHash = digest(nodeRepl);
-  const clientHash = digest(browserClient);
   writeFileSync(
     join(root, "manifest.json"),
     JSON.stringify({
       runtime_name: "cua_node",
       node_repl_path: "bin/node_repl",
       node_repl_sha256: nodeReplHash,
-      trusted_browser_client_sha256s: [clientHash],
+      components: {
+        browser_use: {
+          entrypoint: "plugins/browser-use/scripts/browser-client.mjs",
+        },
+      },
     }),
     "utf8",
   );
@@ -168,7 +170,6 @@ function fixture(): { options: BrowserAcceptanceOptions; clientHash: string } {
       ],
       {},
     ),
-    clientHash,
   };
 }
 
@@ -245,15 +246,16 @@ test("acceptance selects only truthful session-matched native transports", () =>
   );
 });
 
-test("validates the selected installed node_repl and exact manifest browser-client SHA", () => {
-  const { options, clientHash } = fixture();
+test("validates the selected installed node_repl and fixed manifest browser entrypoint", () => {
+  const { options } = fixture();
   const selection = validateInstalledSelection(options);
-  assert.equal(selection.browserClientSha256, clientHash);
-  assert.deepEqual(selection.trustedBrowserClientSha256s, [clientHash]);
-  writeFileSync(options.browserClient, "wrong bytes", "utf8");
+  assert.equal(selection.browserClient, options.browserClient);
+  const alternateClient = join(options.runtimeRoot, "plugins/browser-use/other.mjs");
+  writeFileSync(alternateClient, "export {};\n", "utf8");
+  options.browserClient = alternateClient;
   assert.throws(
     () => validateInstalledSelection(options),
-    /is not trusted by runtime manifest/u,
+    /is not the manifest entrypoint/u,
   );
 });
 
@@ -267,36 +269,6 @@ test("rejects Skynet browser-client paths before command construction", () => {
     () => validateInstalledSelection(options),
     /must not be a Skynet client path/u,
   );
-});
-
-test("wrong browser-client hash emits fail-closed evidence before connection", () => {
-  const { options } = fixture();
-  writeFileSync(options.browserClient, "wrong bytes", "utf8");
-  const result = spawnSync(
-    process.execPath,
-    [
-      join(__dirname, "browser-live-acceptance.ts"),
-      `--runtime-root=${options.runtimeRoot}`,
-      `--browser-client=${options.browserClient}`,
-      "--scenario=iab",
-      `--url=${options.url}`,
-      `--session-id=${options.sessionId}`,
-      `--turn-id=${options.turnId}`,
-      "--json",
-    ],
-    {
-      encoding: "utf8",
-      env: { ...process.env, CODEX_BROWSER_PROVIDER: "" },
-    },
-  );
-  assert.equal(result.status, 1);
-  const report = JSON.parse(result.stdout) as {
-    connection_attempted: boolean;
-    evidence: { failure_phase: string; wrong_hash_fail_closed: boolean };
-  };
-  assert.equal(report.connection_attempted, false);
-  assert.equal(report.evidence.failure_phase, "preflight");
-  assert.equal(report.evidence.wrong_hash_fail_closed, true);
 });
 
 test("rejects a node_repl shutdown error instead of accepting its response", () => {

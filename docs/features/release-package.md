@@ -1,121 +1,107 @@
-# Complete release package
+# Standalone release package
 
 ## Status
 
-Shipped. The immutable complete-release builder and release-root activation
-controller are the normal distribution and machine-install path.
-`scripts/package.py` and its generic bundle installer remain compatibility
-artifacts only; they do not perform complete activation.
+Shipped for Linux x86-64 glibc. Last verified against the fixed-root standalone
+implementation on 2026-07-22.
 
 ## Summary
 
-`scripts/build_complete_release.py` binds the core runtime, CUA Node runtime,
-Browser JavaScript, Codex compatibility resources, documentation, compliance,
-and installer into one content-addressed release. It prints the full
-`release_id`, `manifest_sha256`, `release_root`, and `fat_archive` paths.
+`python3 install.py build` owns every generated input and emits one complete,
+checkout-free sky-cua artifact. The payload contains the native CUA runtime,
+Node 24 and `node_repl`, Browser/Computer/Phone JavaScript, the latest bundled
+Chrome extension, native messaging host, Codex compatibility plugins, skills,
+model documentation, and its installer.
 
-The release-root `install.py install` is the sole normal activation command.
-It verifies and promotes the generation, installs native-messaging manifests,
-projects compatibility commands through the stable `current` link, drains
-obsolete sky-cua runtimes, writes `activation-receipt.json`, and prunes only
-after those producer-owned surfaces succeed. A failure restores the prior
-generation, manifests, links, and receipt.
+The distribution deliberately has no release generations, `current` selector,
+rollback operation, manifest-hash selection, or consumer trust-hash contract.
 
-## Build and inspect
+## Contract surface
 
-Build from the repository root after the core plugin and CUA Node component
-inputs are current:
+Build from the repository root:
 
 ```bash
-python3 scripts/build_complete_release.py
+python3 install.py build
 ```
 
-Inspect the JSON-selected release root and archive. The release root must
-contain `RELEASE.json`, `SHA256SUMS`, `install.py`, the installer component,
-and every profile-bound component. The archive name is:
+Durable build outputs are:
+
+- `dist/plugin/sky-cua` — staged core plugin.
+- `out/components/cua-node-linux-x64-glibc` — assembled CUA Node runtime.
+- `dist/standalone/sky-cua-linux-x64-glibc` — complete unpacked payload.
+- `dist/sky-cua-linux-x64-glibc.tar.gz` — distributable archive.
+
+These paths are stable on purpose: repeated builds can reuse precompiled Rust,
+JavaScript, and Node artifacts instead of compiling inside a temporary tree.
+The archive expands to `sky-cua-linux-x64-glibc/` and ships its own `install.py`.
+
+Install from either the checkout or extracted artifact:
+
+```bash
+python3 install.py install
+```
+
+The install root is exactly:
 
 ```text
-dist/complete-release/sky-cua-<release-id>-linux-x64-glibc.tar.gz
+${XDG_DATA_HOME:-~/.local/share}/sky-cua
 ```
 
-Useful builder options are `--output-root`, `--core-source`,
-`--cua-node-component`, `--producer-commit`, and `--no-fat-archive`.
+There are no install-root, generation, rollback, or hash arguments.
 
-## Clean-machine activation
+## Behavior
 
-Copy the reported fat archive to the target and use the reported full manifest
-hash:
+The builder refreshes the durable CUA Node component and core plugin, flattens
+them into the standalone tree, selects only the highest-version bundled Chrome
+extension, validates required files, and writes the archive. Multiple historical
+extension source directories may exist in the checkout, but the artifact carries
+one extension tree under `browser/extension`.
 
-```bash
-tar xzf sky-cua-<release-id>-linux-x64-glibc.tar.gz
-cd sky-cua-<release-id>
-python3 install.py verify --manifest-sha256 <manifest-sha256>
-python3 install.py install --manifest-sha256 <manifest-sha256>
-python3 install.py verify-activation --manifest-sha256 <manifest-sha256>
-```
+Installation stages beside the destination for recoverable replacement, then replaces
+the one fixed root. It creates stable launchers under `~/.local/bin`, writes
+Chrome/Chromium/Brave native-host manifests that target the stable launcher,
+projects skills into detected agent skill roots, and configures detected Codex
+and OpenClaw consumers. Repeating install converges to the same layout and
+removes files that existed only in the previous installed payload.
 
-The default standalone store is `~/.local/share/sky-cua`. Known command names
-in `~/.local/bin` and the compatibility `store/bin` directory are symlinks
-through `current`; they are not independent mutable copies. Native-host
-manifests point to the exact installed generation. Unknown entries in either
-bin directory are preserved.
-
-Public release-root operations:
-
-- `verify` checks the extracted immutable release without mutating the machine.
-- `install` performs the complete activation transaction.
-- `ensure` verifies artifact-derived state and performs the same activation
-  transaction only when repair is required.
-- `verify-activation` checks the current generation, exact native manifests,
-  stable links, receipt, and current-user live sky-cua process paths without
-  mutation.
-- `rollback` activates the retained prior generation and reprojects consumers.
-
-`scripts/release_generation.py install` is an internal promotion primitive and
-requires `--internal-generation-only`; normal workflows must not invoke it.
-
-## Codex Desktop integration
-
-Codex Desktop packages a verified complete release as an immutable fallback.
-Its user-run Linux installer invokes the packaged release-root `install`
-operation before synchronizing Browser Use resources. Its launcher invokes
-`ensure`, then resolves runtime paths through the exact standalone active
-generation. Installed verification checks activation before and after
-consumer acceptance, plus packaged resources, cache projections, skills, and
-trusted Browser client identity.
-
-Replacing Electron's ASAR still requires relaunching Electron. No second
-generic sky-cua install command is required.
+The artifact's `RELEASE.json` describes semantic paths and target identity. It
+does not expose per-component trust hashes or select an installed generation.
 
 ## Source paths
 
-- `scripts/build_complete_release.py` — complete immutable release builder.
-- `scripts/complete_release_cli.py` — checkout-free release-root dispatcher.
-- `scripts/install_complete_release.py` — complete activation transaction.
-- `scripts/_release_activation.py` — receipt, stable links, process proof, and
-  artifact-derived activation verification.
-- `scripts/release_generation.py` — internal generation store and release
-  integrity verification.
-- `scripts/_native_messaging_install.py` — exact browser native-host manifest
-  projection and rollback.
+- `install.py` — two-command public entrypoint.
+- `scripts/standalone_release.py` — durable build, payload assembly, archive,
+  fixed-root install, and consumer projection.
+- `scripts/assemble_cua_node.py` — durable CUA Node component assembly.
+- `scripts/build_plugin.py` — durable core plugin staging.
+- `scripts/test_standalone_release.py` — payload and install convergence tests.
 
 ## Verification
 
+Focused producer validation:
+
 ```bash
-uv run pytest \
-  scripts/test_release_activation.py \
-  scripts/test_install_complete_release.py \
-  scripts/test_release_generation.py \
-  scripts/test_native_messaging_install.py \
-  scripts/test_build_complete_release.py
+uv run pytest scripts/test_standalone_release.py
+python3 install.py build
+tar tzf dist/sky-cua-linux-x64-glibc.tar.gz
 ```
 
-The tests cover idempotent ensure, receipt and manifest skew, mutable-copy
-retirement, rollback, deferred pruning, obsolete/deleted process detection,
-the internal raw-promotion guard, and the checkout-free release controller.
+Install validation must use an isolated `HOME`/`XDG_DATA_HOME`; it must not
+overwrite the live user's install during producer tests. Verify first install,
+repeat install, replacement of an old-only marker, stable launchers, native-host
+manifest targets, skills, and detected consumer configuration.
+
+## Known limitations
+
+- The standalone target is currently Linux x86-64 glibc.
+- System package installation remains an operator prerequisite; this installer
+  owns the sky-cua payload and user-level integration, not OS package managers.
+- Codex Desktop and OpenClaw consumer-side convergence are owned and validated
+  in their respective repositories.
 
 ## Related
 
 - [`docs/features/complete-cua-stack-ownership.md`](complete-cua-stack-ownership.md)
+- [`docs/features/one-shot-installer.md`](one-shot-installer.md)
 - [`docs/operations/plugin-release.md`](../operations/plugin-release.md)
 - [`docs/runtime/mcp-boundary.md`](../runtime/mcp-boundary.md)

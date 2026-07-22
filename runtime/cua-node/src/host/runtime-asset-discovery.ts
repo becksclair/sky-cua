@@ -11,7 +11,8 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export type BrowserExecutableKind = "brave-origin" | "brave" | "chrome" | "chromium";
+export type BrowserExecutableKind =
+  "brave-origin" | "brave" | "chrome" | "chromium";
 
 export interface BrowserExecutableResolution {
   readonly executablePath: string;
@@ -28,6 +29,9 @@ export interface ValidatedRuntimeManifestRecord {
   readonly node_version: string;
   readonly node_path: string;
   readonly node_modules: string;
+  readonly components: Readonly<{
+    browser_use: Readonly<{ entrypoint: string }>;
+  }>;
   readonly data: Readonly<{
     playwright: string;
     tessdata: string;
@@ -41,8 +45,7 @@ export interface RuntimeAssetDiscoveryInput {
   readonly runtimeRoot: string;
   readonly manifest: ValidatedRuntimeManifestRecord;
   readonly resolveBrowserExecutable?:
-    | (() => BrowserExecutableResolution | null)
-    | undefined;
+    (() => BrowserExecutableResolution | null) | undefined;
 }
 
 export interface RuntimeAssetMetadata {
@@ -138,14 +141,19 @@ export function resolveDefaultBrowserExecutable(
   cwd = process.cwd(),
 ): BrowserExecutableResolution | null {
   const configured = env.CUA_NODE_CHROMIUM_EXECUTABLE;
-  if (configured !== undefined && isAbsolute(configured) && isExecutable(configured)) {
+  if (
+    configured !== undefined &&
+    isAbsolute(configured) &&
+    isExecutable(configured)
+  ) {
     return {
       executablePath: configured,
       executableKind: executableKind(configured),
     };
   }
   for (const [path, kind] of BROWSER_EXECUTABLE_CANDIDATES) {
-    if (isExecutable(path)) return { executablePath: path, executableKind: kind };
+    if (isExecutable(path))
+      return { executablePath: path, executableKind: kind };
   }
   return resolveBrowserExecutableFromPath(env, cwd);
 }
@@ -170,7 +178,8 @@ export function resolveBrowserExecutableFromPath(
       : resolve(cwd, directory);
     for (const [name, kind] of names) {
       const path = join(absoluteDirectory, name);
-      if (isExecutable(path)) return { executablePath: path, executableKind: kind };
+      if (isExecutable(path))
+        return { executablePath: path, executableKind: kind };
     }
   }
   return null;
@@ -261,7 +270,8 @@ async function requiredPath(
     );
   }
   const details = await stat(resolved);
-  const valid = expectedType === "directory" ? details.isDirectory() : details.isFile();
+  const valid =
+    expectedType === "directory" ? details.isDirectory() : details.isFile();
   if (!valid) {
     throw new RuntimeAssetDiscoveryError(
       "WRONG_PATH_TYPE",
@@ -298,7 +308,10 @@ async function optionalDirectory(
   try {
     return await requiredPath(root, path, asset, "directory");
   } catch (error) {
-    if (error instanceof RuntimeAssetDiscoveryError && error.code === "MISSING_PATH") {
+    if (
+      error instanceof RuntimeAssetDiscoveryError &&
+      error.code === "MISSING_PATH"
+    ) {
       return null;
     }
     throw error;
@@ -324,8 +337,11 @@ async function tessdataLanguages(tessdataRoot: string): Promise<string[]> {
 }
 
 async function browserMetadata(
-  resolveBrowserExecutable: (() => BrowserExecutableResolution | null) | undefined,
-): Promise<Pick<RuntimeAssetMetadata["browser"], "executablePath" | "executableKind">> {
+  resolveBrowserExecutable:
+    (() => BrowserExecutableResolution | null) | undefined,
+): Promise<
+  Pick<RuntimeAssetMetadata["browser"], "executablePath" | "executableKind">
+> {
   const resolution = resolveBrowserExecutable?.() ?? null;
   if (resolution === null) {
     return { executablePath: null, executableKind: null };
@@ -405,7 +421,12 @@ export async function discoverRuntimeAssets(
     "directory",
   );
   const sbomPath = await requiredPath(root, manifest.data.sbom, "SBOM", "file");
-  const cMapUrl = await requiredPath(pdfjsRoot, "cmaps", "PDF.js CMaps", "directory");
+  const cMapUrl = await requiredPath(
+    pdfjsRoot,
+    "cmaps",
+    "PDF.js CMaps",
+    "directory",
+  );
   const standardFontDataUrl = await requiredPath(
     pdfjsRoot,
     "standard_fonts",

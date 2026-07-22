@@ -1,29 +1,10 @@
 import { createServer, type Server } from "node:http";
-import {
-  cpSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, sep } from "node:path";
 
 export type BrowserAcceptanceFixture = {
   origin: string;
   url: string;
   downloadUrl: string;
   close(): Promise<void>;
-};
-
-export type TrustNegativeCase = "tampered" | "missing" | "wrong-manifest-hash";
-
-export type DisposableRuntime = {
-  runtimeRoot: string;
-  browserClient: string;
-  nodeRepl: string;
-  cleanup(): void;
 };
 
 const ACCEPTANCE_PATH = "/acceptance";
@@ -121,65 +102,4 @@ export async function startBrowserAcceptanceFixture(): Promise<BrowserAcceptance
       await closeServer(server);
     },
   };
-}
-
-function relativeInside(root: string, path: string, label: string): string {
-  const item = relative(root, path);
-  if (
-    item.length === 0 ||
-    item === ".." ||
-    item.startsWith(`..${sep}`) ||
-    isAbsolute(item)
-  )
-    throw new Error(`${label} must be inside packaged runtime root`);
-  return item;
-}
-
-export function createDisposableRuntime(
-  runtimeRootPath: string,
-  browserClientPath: string,
-  nodeReplPath: string,
-  testCase: TrustNegativeCase,
-): DisposableRuntime {
-  const runtimeRoot = realpathSync(runtimeRootPath);
-  const browserClient = realpathSync(browserClientPath);
-  const nodeRepl = realpathSync(nodeReplPath);
-  const browserRelative = relativeInside(runtimeRoot, browserClient, "browser client");
-  const nodeReplRelative = relativeInside(runtimeRoot, nodeRepl, "node_repl");
-  const temporaryRoot = mkdtempSync(join(tmpdir(), "sky-cua-browser-trust-negative-"));
-  const copyRoot = join(temporaryRoot, "cua_node");
-  try {
-    cpSync(runtimeRoot, copyRoot, {
-      recursive: true,
-      dereference: false,
-      preserveTimestamps: true,
-    });
-    const copiedBrowserClient = join(copyRoot, browserRelative);
-    const copiedNodeRepl = join(copyRoot, nodeReplRelative);
-    if (testCase === "tampered") {
-      writeFileSync(
-        copiedBrowserClient,
-        Buffer.concat([readFileSync(copiedBrowserClient), Buffer.from("\n// tampered\n")]),
-      );
-    } else if (testCase === "missing") {
-      rmSync(copiedBrowserClient);
-    } else {
-      const manifestPath = join(copyRoot, "manifest.json");
-      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<
-        string,
-        unknown
-      >;
-      manifest.trusted_browser_client_sha256s = ["0".repeat(64)];
-      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-    }
-    return {
-      runtimeRoot: copyRoot,
-      browserClient: copiedBrowserClient,
-      nodeRepl: copiedNodeRepl,
-      cleanup: (): void => rmSync(temporaryRoot, { recursive: true, force: true }),
-    };
-  } catch (error) {
-    rmSync(temporaryRoot, { recursive: true, force: true });
-    throw error;
-  }
 }

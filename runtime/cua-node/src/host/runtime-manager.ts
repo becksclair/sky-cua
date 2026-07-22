@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { existsSync } from "node:fs";
-import { lstat, readFile, readlink, realpath, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  readFile,
+  readlink,
+  realpath,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { stringify as stringifyToml } from "smol-toml";
@@ -21,7 +27,8 @@ import {
 } from "./runtime-asset-discovery.ts";
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
-export const TIMEOUT_ERROR = "js execution timed out; kernel reset, rerun your request";
+export const TIMEOUT_ERROR =
+  "js execution timed out; kernel reset, rerun your request";
 export const RESET_ERROR = "js execution reset";
 export const CANCEL_ERROR = "js execution cancelled; kernel reset";
 export const MAX_CANCELLATION_TOMBSTONES = 1_024;
@@ -98,21 +105,22 @@ export function resolveBundledNodePath(
   }
   const implicitRuntimeRoot = dirname(dirname(runtimeExecPath));
   if (
-    isAbsolute(runtimeExecPath)
-    && BUNDLED_NODE_NAMES.has(basename(runtimeExecPath).toLowerCase())
-    && existsSync(join(implicitRuntimeRoot, "manifest.json"))
+    isAbsolute(runtimeExecPath) &&
+    BUNDLED_NODE_NAMES.has(basename(runtimeExecPath).toLowerCase()) &&
+    existsSync(join(implicitRuntimeRoot, "manifest.json"))
   ) {
     return runtimeExecPath;
   }
   if (allowHostNode) return process.execPath;
   throw new Error(
-    "bundled Node runtime is unavailable; launch the installed node_repl or set "
-      + "NODE_REPL_NODE_PATH to an absolute override",
+    "bundled Node runtime is unavailable; launch the installed node_repl or set " +
+      "NODE_REPL_NODE_PATH to an absolute override",
   );
 }
 
 export function normalizeModuleDir(path: string, cwd = process.cwd()): string {
-  if (!isAbsolute(path)) throw new Error("node module directory path must be absolute");
+  if (!isAbsolute(path))
+    throw new Error("node module directory path must be absolute");
   const normalized = resolve(cwd, path);
   return normalized.endsWith("/node_modules")
     ? normalized.slice(0, -"/node_modules".length)
@@ -150,7 +158,7 @@ export class RuntimeManager {
   private startup: Promise<void> | null = null;
   private startupGeneration: number | null = null;
   private runtimeMetadata: RuntimeAssetMetadata | null | undefined;
-  private trustedBrowserClientSha256s: readonly string[] | undefined;
+  private installedBrowserCodeRoot: string | undefined;
   private generation = 0;
   private readonly cancellationTombstones = new Set<string>();
   private readonly completedRequestIds = new Set<string>();
@@ -165,7 +173,8 @@ export class RuntimeManager {
       allowHostNode: options.allowHostNode ?? false,
     };
     this.moduleDirs = normalizeModuleRoots(
-      options.env?.NODE_REPL_NODE_MODULE_DIRS ?? process.env.NODE_REPL_NODE_MODULE_DIRS,
+      options.env?.NODE_REPL_NODE_MODULE_DIRS ??
+        process.env.NODE_REPL_NODE_MODULE_DIRS,
       cwd,
     );
     this.moduleDirSet = new Set(this.moduleDirs);
@@ -187,34 +196,39 @@ export class RuntimeManager {
       throw new Error(
         "js execution unavailable because the runtime manager is shutting down",
       );
-    if (this.active !== null) throw new Error("another js execution is already active");
+    if (this.active !== null)
+      throw new Error("another js execution is already active");
     const timeoutMs = options.timeoutMs ?? this.options.defaultTimeoutMs;
     validateTimeout(timeoutMs);
     this.completedRequestIds.delete(requestIdKey(options.requestId));
     const execId = createKernelId();
-    const promise = new Promise<RuntimeExecResult>((resolvePromise, rejectPromise) => {
-      const active: ActiveExecution = {
-        id: execId,
-        requestId: options.requestId,
-        timer: null,
-        deadline: Date.now() + timeoutMs,
-        remainingMs: timeoutMs,
-        suspended: 0,
-        settled: false,
-        timeoutPending: false,
-        resolve: resolvePromise,
-        reject: rejectPromise,
-      };
-      this.active = active;
-      if (this.cancellationTombstones.delete(requestIdKey(options.requestId))) {
-        active.settled = true;
-        this.active = null;
-        rejectPromise(new Error(CANCEL_ERROR));
-        return;
-      }
-      this.startTimer(active);
-      void this.beginExecution(active, code, options.requestMeta);
-    });
+    const promise = new Promise<RuntimeExecResult>(
+      (resolvePromise, rejectPromise) => {
+        const active: ActiveExecution = {
+          id: execId,
+          requestId: options.requestId,
+          timer: null,
+          deadline: Date.now() + timeoutMs,
+          remainingMs: timeoutMs,
+          suspended: 0,
+          settled: false,
+          timeoutPending: false,
+          resolve: resolvePromise,
+          reject: rejectPromise,
+        };
+        this.active = active;
+        if (
+          this.cancellationTombstones.delete(requestIdKey(options.requestId))
+        ) {
+          active.settled = true;
+          this.active = null;
+          rejectPromise(new Error(CANCEL_ERROR));
+          return;
+        }
+        this.startTimer(active);
+        void this.beginExecution(active, code, options.requestMeta);
+      },
+    );
     return promise;
   }
 
@@ -223,7 +237,8 @@ export class RuntimeManager {
     const active = this.active;
     if (active === null) {
       const key = requestIdKey(requestId);
-      if (!this.completedRequestIds.has(key)) this.addCancellationTombstone(key);
+      if (!this.completedRequestIds.has(key))
+        this.addCancellationTombstone(key);
       return;
     }
     if (
@@ -337,7 +352,8 @@ export class RuntimeManager {
         throw new Error("kernel execution admission was cancelled");
       }
       if (this.child !== null) return this.child;
-      if (this.shuttingDown) throw new Error("runtime manager is shutting down");
+      if (this.shuttingDown)
+        throw new Error("runtime manager is shutting down");
       const generation = this.generation;
       if (this.startup === null) {
         const startup = this.startChild(generation);
@@ -368,7 +384,9 @@ export class RuntimeManager {
     );
     const runtimeMetadata = await this.resolveRuntimeMetadata(nodePath);
     if (this.shuttingDown || generation !== this.generation) {
-      throw new Error("runtime manager generation changed during kernel startup");
+      throw new Error(
+        "runtime manager generation changed during kernel startup",
+      );
     }
     this.seedImplicitRuntimeModuleRoot(runtimeMetadata);
     const env: NodeJS.ProcessEnv = {
@@ -378,13 +396,16 @@ export class RuntimeManager {
         process.platform === "win32" ? ";" : ":",
       ),
     };
-    if (
-      (env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S === undefined
-        || env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S.trim() === "")
-      && this.trustedBrowserClientSha256s !== undefined
-    ) {
-      env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S =
-        this.trustedBrowserClientSha256s.join(",");
+    if (this.installedBrowserCodeRoot !== undefined) {
+      const delimiter = process.platform === "win32" ? ";" : ":";
+      env.NODE_REPL_TRUSTED_CODE_PATHS = [
+        env.NODE_REPL_TRUSTED_CODE_PATHS,
+        this.installedBrowserCodeRoot,
+      ]
+        .filter(
+          (value): value is string => value !== undefined && value.length > 0,
+        )
+        .join(delimiter);
     }
     if (runtimeMetadata !== null)
       env.NODE_REPL_RUNTIME_METADATA = JSON.stringify(runtimeMetadata);
@@ -409,9 +430,15 @@ export class RuntimeManager {
     this.child = child;
     try {
       await child.start();
-      if (this.shuttingDown || generation !== this.generation || this.child !== child) {
+      if (
+        this.shuttingDown ||
+        generation !== this.generation ||
+        this.child !== child
+      ) {
         await child.terminate("runtime manager shutdown during kernel startup");
-        throw new Error("runtime manager generation changed during kernel startup");
+        throw new Error(
+          "runtime manager generation changed during kernel startup",
+        );
       }
     } catch (error) {
       if (this.child === child) this.child = null;
@@ -432,7 +459,9 @@ export class RuntimeManager {
     const runtimeRoot = explicitRoot ?? dirname(dirname(nodePath));
     let parsed: unknown;
     try {
-      parsed = JSON.parse(await readFile(join(runtimeRoot, "manifest.json"), "utf8"));
+      parsed = JSON.parse(
+        await readFile(join(runtimeRoot, "manifest.json"), "utf8"),
+      );
     } catch (error) {
       if (
         explicitRoot === undefined &&
@@ -446,24 +475,27 @@ export class RuntimeManager {
       throw error;
     }
     if (!validateRuntimeManifest(parsed)) {
-      const schemaErrors = (validateRuntimeManifest.errors ?? []).map((error) => {
-        const location = error.instancePath?.length ? error.instancePath : "$";
-        return `${location} ${error.message ?? "does not satisfy canonical schema"}`;
-      });
+      const schemaErrors = (validateRuntimeManifest.errors ?? []).map(
+        (error) => {
+          const location = error.instancePath?.length
+            ? error.instancePath
+            : "$";
+          return `${location} ${error.message ?? "does not satisfy canonical schema"}`;
+        },
+      );
       throw new Error(
         `runtime manifest does not satisfy canonical schema: ${join(runtimeRoot, "manifest.json")}: ${schemaErrors.join("; ")}`,
       );
     }
-    const trustedBrowserClientSha256s = (
-      parsed as { trusted_browser_client_sha256s: string[] }
-    ).trusted_browser_client_sha256s;
-    this.trustedBrowserClientSha256s = Object.freeze([
-      ...trustedBrowserClientSha256s,
-    ]);
+    const manifest = parsed as ValidatedRuntimeManifestRecord;
+    this.installedBrowserCodeRoot = join(
+      runtimeRoot,
+      dirname(manifest.components.browser_use.entrypoint),
+    );
     const env = { ...process.env, ...this.options.env };
     this.runtimeMetadata = await discoverRuntimeAssets({
       runtimeRoot,
-      manifest: parsed as ValidatedRuntimeManifestRecord,
+      manifest,
       resolveBrowserExecutable: () => resolveDefaultBrowserExecutable(env),
     });
     return this.runtimeMetadata;
@@ -518,7 +550,11 @@ export class RuntimeManager {
           terminationError = toError(terminationFailure);
         }
       }
-      this.finishExecution(active, undefined, terminationError ?? toError(error));
+      this.finishExecution(
+        active,
+        undefined,
+        terminationError ?? toError(error),
+      );
     }
   }
 
@@ -533,7 +569,10 @@ export class RuntimeManager {
 
   private startTimer(active: ActiveExecution): void {
     active.deadline = Date.now() + active.remainingMs;
-    active.timer = setTimeout(() => void this.timeout(active), active.remainingMs);
+    active.timer = setTimeout(
+      () => void this.timeout(active),
+      active.remainingMs,
+    );
   }
 
   private clearTimer(active: ActiveExecution): void {
@@ -663,7 +702,8 @@ export class RuntimeManager {
     }
     if (operation === "read") return {};
     if (operation === "readRequirements") return {};
-    if (operation === "writeValue" && isPlainObject(payload.request)) return true;
+    if (operation === "writeValue" && isPlainObject(payload.request))
+      return true;
     if (
       operation === "batchWrite" &&
       isPlainObject(payload.request) &&
@@ -680,7 +720,8 @@ export function validateTimeout(value: number): void {
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
@@ -693,13 +734,18 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }
 
-export function makeRequestMeta(value: unknown): Record<string, unknown> | null {
+export function makeRequestMeta(
+  value: unknown,
+): Record<string, unknown> | null {
   if (value === null || value === undefined) return null;
-  if (!isPlainObject(value)) throw new Error("request _meta must be a plain object");
+  if (!isPlainObject(value))
+    throw new Error("request _meta must be a plain object");
   return structuredClone(value);
 }
 
-export function makeResponseMeta(value: unknown): Record<string, unknown> | null {
+export function makeResponseMeta(
+  value: unknown,
+): Record<string, unknown> | null {
   if (value === null || value === undefined) return null;
   if (!isPlainObject(value))
     throw new Error("response metadata must be a plain object");
@@ -714,7 +760,10 @@ function requestIdKey(value: RuntimeRequestId): string {
   return `${typeof value}:${String(value)}`;
 }
 
-function sameRequestId(left: RuntimeRequestId, right: RuntimeRequestId): boolean {
+function sameRequestId(
+  left: RuntimeRequestId,
+  right: RuntimeRequestId,
+): boolean {
   return typeof left === typeof right && left === right;
 }
 
@@ -723,7 +772,8 @@ function cloneJsonObject(
   label: string,
 ): Record<string, unknown> {
   const cloned = cloneJsonValue(value, label, new WeakSet<object>());
-  if (!isPlainObject(cloned)) throw new Error(`${label} must be a plain object`);
+  if (!isPlainObject(cloned))
+    throw new Error(`${label} must be a plain object`);
   return cloned;
 }
 

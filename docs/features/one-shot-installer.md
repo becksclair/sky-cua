@@ -1,129 +1,101 @@
-# One-shot installer
+# Fixed-root standalone installer
 
 ## Status
 
-Compatibility/development workflow. Last verified: 2026-06-12, full live run on the KDE host
-(`python3 install.py --skip-build` -> all phases ok for codex, claude-code,
-claude-desktop, opencode, pi, openclaw; doctor and `codex mcp list` /
-`claude mcp list` health checks green).
-
-This generic checkout/bundle installer is not the immutable machine-release
-activation path. Normal releases use `scripts/build_complete_release.py` and
-the extracted release-root `python3 install.py install`; Codex Desktop invokes
-that same producer transaction automatically. See
-[`docs/features/release-package.md`](release-package.md).
+Shipped for Linux x86-64 glibc. Last verified against the standalone producer
+implementation on 2026-07-22.
 
 ## Summary
 
-The repository-root `install.py` turns a fresh checkout or a legacy extracted
-bundle package into a
-fully set-up sky-cua machine in one command: system dependencies, the runtime
-(built from source or taken from a prebuilt bundle), the computer-use compat
-plugin materialized from the bundled preflight, MCP server registration plus
-skills for every detected agent, and a final health check.
+`python3 install.py install` installs one complete sky-cua payload at one fixed
+user-data root. The same command works from a repository checkout and from the
+extracted standalone archive; checkout mode first refreshes the durable build
+outputs.
 
 ## Contract surface
 
-- `python3 install.py` at the repo root (Python 3.12+, stdlib only at the
-  shim level; delegates to `scripts/installer.py`). The release package ships
-  its own top-level `install.py` that pins bundle mode and its payload path
-  before delegating to the same installer.
-- This interface is retained for checkout bootstrap and legacy compatibility.
-  It does not replace complete-release activation and must not be used after a
-  Codex Desktop package install.
-- Two modes, `--mode {auto,repo,bundle}`:
-  - `repo` builds the Rust runtime from a checkout (requires `cargo` and
-    `git`), then installs.
-  - `bundle` installs a prebuilt release bundle with no build and no cargo.
-  - `auto` (default) picks `bundle` when there is no `.git` checkout, so an
-    extracted release package resolves to bundle mode automatically. A checkout
-    without `cargo` stays in `repo` mode and reports the missing Rust toolchain.
-- Flags: `--agents codex,claude-code,claude-desktop,opencode,pi,openclaw`
-  (default: auto-detect), `--mode {auto,repo,bundle}`, `--bundle-root`
-  (default `dist/plugin/sky-cua`), `--target-dir` (default
-  `~/.local/share/sky-cua`), `--codex-home`, `--kwin-effect`,
-  `--skip-system-deps`, `--skip-build`, `--skip-health`, `--dry-run`.
-- Exit code 0 only when no executed phase failed; the run ends with a
-  per-phase summary table.
-- Agent detection: `codex`/`opencode`/`openclaw` CLIs on PATH, `claude` CLI
-  or `~/.claude`, `~/.config/Claude` (or the macOS equivalent), and
-  `~/.pi/agent`.
+The public CLI contains exactly two commands:
+
+```bash
+python3 install.py build
+python3 install.py install
+```
+
+`install` accepts no generation, rollback, install-root, or manifest-hash
+arguments. Its destination is always:
+
+```text
+${XDG_DATA_HOME:-~/.local/share}/sky-cua
+```
+
+The installer projects these stable user-facing surfaces:
+
+- launchers in `~/.local/bin` for `sky-cua-client`, `sky-cua-service`,
+  `sky-cua-overlay-host`, `node`, `node_repl`, and `sky-cua-chrome-host`;
+- Chrome, Chromium, Brave, and Brave Origin native-messaging manifests;
+- `computer-use`, `browser-use`, and `phone-use` skill links for detected
+  agent homes;
+- native Codex compatibility plugins when Codex is detected;
+- the global OpenClaw `node_repl` registration when OpenClaw is detected.
+
+Consumer configuration points at stable paths under the fixed root. It does not
+pin an artifact hash or trust a Browser client by hash.
 
 ## Behavior
 
-Phases run in order and delegate to the existing tooling instead of
-duplicating it:
+From a checkout, `install` runs the same durable build used by
+`python3 install.py build`; compilation and assembly stay under `target/`,
+`out/components/`, and `dist/`. From an extracted archive, the packaged payload
+is already complete and no source build occurs.
 
-1. **system-deps** (Linux only): in `repo` mode requires `cargo` and `git` on
-   PATH; `bundle` mode needs only runtime libraries. Installs missing runtime
-   packages via `sudo pacman -S --needed` or `sudo apt-get install`
-   (GStreamer, AT-SPI, libxkbcommon, wayland, dbus, xdg-desktop-portal,
-   ydotool). Skipped with a note on other platforms or unknown package
-   managers.
-2. **build**: `scripts/build_plugin.py` (cargo release build + staged
-   bundle under `dist/plugin/sky-cua`). Skipped in `bundle` mode, which uses
-   the prebuilt bundle at `--bundle-root`.
-3. **codex**: installs the payload into the local Codex cache
-   (`installed_plugin_root`) and materializes the `computer-use` compat plugin
-   from the bundled preflight (`resources/chrome_preflight.py`), then applies
-   compat-first config enablement. No marketplace and no `codex` CLI
-   `plugin/install`. On Linux the compat root is the enabled plugin id; where
-   no compat root can be materialized, the installer enables `sky-cua@local`
-   directly.
-4. **agent:<host>** for each non-Codex agent:
-   `scripts/install_mcp_server.py --host <host> --restart-runtime`, which
-   installs binaries to the target dir, writes/registers host configs, and
-   deploys skills where the host supports them.
-5. **kwin-effect** (opt-in via `--kwin-effect`): `_kwin_effect.deploy_kwin_effect`
-   builds the next generated KWin effect id, hot-loads it, verifies `BuildId()`,
-   and cleans older exact sky-cua ids after success.
-6. **health**: `sky-cua-client doctor` against the installed binaries, plus
-   `codex mcp list` (expects `computer-use`) and `claude mcp list` (expects
-   `sky-cua`) for the selected agents. `--skip-health` is reserved for
-   headless validation lanes that perform their own degraded assertions.
+The installer validates the payload, copies it into a sibling staging directory,
+and recoverably replaces the fixed destination. The sibling stage is only an
+install transaction; it is not a build directory and does not discard compiler
+caches. A second install converges to the same tree. Replacing the payload also
+removes files that existed only in the previous install, so stale generation
+contents cannot accumulate.
 
-A failed system-deps or build phase aborts the run; later phases record
-failures but let the remaining agents proceed, so one missing host does not
-block the others.
+The native-host manifests target the stable `~/.local/bin/sky-cua-chrome-host`
+launcher. The installed standalone payload carries exactly one Chrome extension:
+the latest version selected during build.
 
 ## Source paths
 
-- `install.py` - root shim (interpreter guard, `scripts/` import path).
-- `scripts/installer.py` - phase orchestration, detection, mode resolution.
-- `scripts/package.py` - builds the legacy compatibility tarball that ships the
-  bundle-mode installer subset; see
-  [`docs/features/release-package.md`](release-package.md).
-- Reused: `scripts/build_plugin.py`, `scripts/install_plugin.py`,
-  `scripts/install_mcp_server.py`, `scripts/_kwin_effect.py`,
-  `resources/chrome_preflight.py` (payload-side preflight that materializes the
-  compat plugin, invoked by the Codex phase).
+- `install.py` — Python-version guard and public dispatcher.
+- `scripts/standalone_release.py` — fixed-root install transaction, launchers,
+  native manifests, skills, and detected consumer integration.
+- `scripts/test_standalone_release.py` — isolated-home and convergence tests.
 
 ## Verification
 
-- `uv run pytest scripts/test_installer.py` - detection, selection,
-  package planning, phase wiring, dry-run output.
-- Live: full `python3 install.py --skip-build` run on the KDE host
-  (2026-06-12), summary all ok; compat root `.mcp.json` mtime unchanged
-  across the rerun (idempotent re-deploy preserves per-plugin state).
+```bash
+uv run pytest scripts/test_standalone_release.py
+```
+
+The focused tests use disposable `HOME` and `XDG_DATA_HOME` values. They prove
+fixed-root replacement, stable launcher and native-manifest targets, skill links,
+idempotence, stale-file removal, and detected Codex/OpenClaw calls without a
+Browser trust-hash environment contract.
+
+Clean-artifact validation extracts
+`dist/sky-cua-linux-x64-glibc.tar.gz` into a disposable directory and invokes:
+
+```bash
+python3 install.py install
+```
+
+with isolated user directories. Producer validation must never install onto the
+live user environment.
 
 ## Known limitations
 
-- System dependency installation covers pacman and apt; other package
-  managers get a skip note and manual instructions.
-- Windows/macOS runs skip the system-deps phase entirely; the build and
-  agent phases work but are not the primary tested path.
-- `claude-desktop` and `opencode` configs are written for manual merge where
-  the host has no registration CLI (unchanged from `install_mcp_server.py`).
-- The Codex phase materializes the compat plugin locally from the bundled
-  preflight; on platforms without a compat root it enables `sky-cua@local`
-  directly (Windows-Codex compat is not yet implemented).
+- The packaged standalone target is currently Linux x86-64 glibc.
+- The installer does not install system packages or privileged input helpers.
+- Consumer repositories own their final installed/live acceptance after they
+  adopt this fixed-root contract.
 
 ## Related
 
-- `docs/runtime/compat-plugin-contract.md` - compat root the Codex phase
-  refreshes.
-- `docs/operations/plugin-release.md` - local deploy, release packaging, and
-  clean-machine install entrypoints.
-- `docs/features/release-package.md` - `package.py` tarball layout the
-  bundle-mode installer consumes.
-- ROADMAP: Host portability -> one-shot installer entry.
+- [`docs/features/release-package.md`](release-package.md)
+- [`docs/operations/plugin-release.md`](../operations/plugin-release.md)
+- [`docs/runtime/mcp-boundary.md`](../runtime/mcp-boundary.md)

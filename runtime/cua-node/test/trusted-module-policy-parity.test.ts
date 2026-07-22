@@ -4,7 +4,6 @@ import { test } from "bun:test";
 import {
   createTrustedModulePolicyCore,
   openedTrustedFileRealPathCore,
-  parseTrustedBrowserClientSha256sCore,
   parseTrustedCodePathsCore,
   readTrustedCodeFileCore,
   renderTrustedModulePolicyCoreSource,
@@ -16,7 +15,6 @@ import {
 } from "../src/host/trusted-module-policy-core.ts";
 import { TRUSTED_MODULE_POLICY_KERNEL_SOURCE } from "../src/host/trusted-module-policy.ts";
 import {
-  BROWSER_HASH_PARSER_VECTORS,
   DESCRIPTOR_REALPATH_VECTORS,
   POLICY_PARITY_VECTORS,
   ROOT_RESOLUTION_VECTORS,
@@ -29,9 +27,6 @@ interface EmbeddedPolicyCoreExports {
     options: TrustedModulePolicyCoreOptions,
   ): TrustedModulePolicyCore;
   openedTrustedFileRealPathCore: typeof openedTrustedFileRealPathCore;
-  parseTrustedBrowserClientSha256sCore(
-    value: string | undefined,
-  ): ReadonlySet<string>;
   parseTrustedCodePathsCore: typeof parseTrustedCodePathsCore;
   readTrustedCodeFileCore: typeof readTrustedCodeFileCore;
   resolveTrustedCodeRootsCore: typeof resolveTrustedCodeRootsCore;
@@ -45,15 +40,15 @@ function loadEmbeddedPolicyCore(): EmbeddedPolicyCoreExports {
 return {
   createTrustedModulePolicyCore,
   openedTrustedFileRealPathCore,
-  parseTrustedBrowserClientSha256sCore,
   parseTrustedCodePathsCore,
   readTrustedCodeFileCore,
   resolveTrustedCodeRootsCore,
   trustedBytesEqualCore,
   trustedPathContainsCore,
 };`;
-  const factory = new Function(`${source}\n${exportExpression}`) as () =>
-    EmbeddedPolicyCoreExports;
+  const factory = new Function(
+    `${source}\n${exportExpression}`,
+  ) as () => EmbeddedPolicyCoreExports;
   return factory();
 }
 
@@ -67,7 +62,6 @@ function runPolicyVector(
     files.set(path, Uint8Array.from(bytes));
   }
   const core = createCore({
-    browserClientSha256s: new Set(vector.allowlistedHashes ?? []),
     trustAllCode: vector.trustAllCode ?? false,
     bytesEqual,
     readTrustedCodeFile: (path) => files.get(path) ?? null,
@@ -97,8 +91,12 @@ function runPolicyVector(
 test("rendered core is the exact implementation embedded in the kernel policy source", () => {
   const rendered = renderTrustedModulePolicyCoreSource();
   assert.equal(TRUSTED_MODULE_POLICY_KERNEL_SOURCE.includes(rendered), true);
+  assert.equal(
+    TRUSTED_MODULE_POLICY_KERNEL_SOURCE.includes("createHash('sha256')"),
+    false,
+    "the embedded policy must not hash every loaded module after digest trust was retired",
+  );
   for (const name of [
-    "parseTrustedBrowserClientSha256sCore",
     "parseTrustedCodePathsCore",
     "trustedPathContainsCore",
     "trustedBytesEqualCore",
@@ -145,7 +143,11 @@ test("filesystem trust acquisition vectors match typed and embedded implementati
           return resolved;
         },
       );
-      assert.equal(result, vector.expected, `${vector.name}: ${implementation.name}`);
+      assert.equal(
+        result,
+        vector.expected,
+        `${vector.name}: ${implementation.name}`,
+      );
       assert.deepEqual(
         calls,
         vector.expectedCalls,
@@ -164,7 +166,11 @@ test("filesystem trust acquisition vectors match typed and embedded implementati
         },
         (path) => directories.has(path),
       );
-      assert.deepEqual(roots, vector.expected, `${vector.name}: ${implementation.name}`);
+      assert.deepEqual(
+        roots,
+        vector.expected,
+        `${vector.name}: ${implementation.name}`,
+      );
     }
 
     for (const vector of TRUSTED_FILE_ACQUISITION_VECTORS) {
@@ -181,13 +187,14 @@ test("filesystem trust acquisition vectors match typed and embedded implementati
         },
         (fd) => fileDescriptors.has(fd),
         (fd) => vector.descriptorPaths[String(fd)] ?? null,
-        (file, root) => trustedPathContainsCore(
-          file,
-          root,
-          "linux",
-          posix.relative,
-          posix.isAbsolute,
-        ),
+        (file, root) =>
+          trustedPathContainsCore(
+            file,
+            root,
+            "linux",
+            posix.relative,
+            posix.isAbsolute,
+          ),
         (fd) => Uint8Array.from(vector.bytes[String(fd)] ?? []),
         (fd) => closed.push(fd),
       );
@@ -202,18 +209,6 @@ test("filesystem trust acquisition vectors match typed and embedded implementati
         `${vector.name} closes: ${implementation.name}`,
       );
     }
-  }
-});
-
-test("browser hash parser vectors match typed and embedded implementations", () => {
-  const embedded = loadEmbeddedPolicyCore();
-  for (const vector of BROWSER_HASH_PARSER_VECTORS) {
-    const typed = [...parseTrustedBrowserClientSha256sCore(vector.value)];
-    const generated = [
-      ...embedded.parseTrustedBrowserClientSha256sCore(vector.value),
-    ];
-    assert.deepEqual(typed, vector.expected, `${vector.name}: typed`);
-    assert.deepEqual(generated, vector.expected, `${vector.name}: embedded`);
   }
 });
 
@@ -299,6 +294,8 @@ test("policy decision vectors match typed and embedded implementations", () => {
   }
 });
 
-function resultBytes(bytes: Readonly<Uint8Array> | null): readonly number[] | null {
+function resultBytes(
+  bytes: Readonly<Uint8Array> | null,
+): readonly number[] | null {
   return bytes === null ? null : [...bytes];
 }

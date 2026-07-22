@@ -300,14 +300,13 @@ function verifyRuntimeFiles(
   ).startsWith(`${root}${sep}`);
   const browserUseEntrypointMatches =
     browserUseEntrypointWithinRoot &&
-    statSync(browserUseEntrypointPath).isFile() &&
-    sha256(browserUseEntrypointPath) === browserUseComponent.entrypoint_sha256;
+    statSync(browserUseEntrypointPath).isFile();
   checks.push({
     id: "package:browser-use-entrypoint",
     status: browserUseEntrypointMatches ? "passed" : "failed",
     detail: browserUseEntrypointMatches
-      ? "canonical Browser entrypoint bytes match the component and trust hash"
-      : "canonical Browser entrypoint bytes do not match the component hash",
+      ? "canonical Browser entrypoint exists at the fixed runtime path"
+      : "canonical Browser entrypoint is missing from the fixed runtime path",
   });
 
   const sbom = record(

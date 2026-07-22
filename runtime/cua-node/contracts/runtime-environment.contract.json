@@ -59,15 +59,6 @@
       "legacy_mode": "preserve_existing_value",
       "unset_behavior": "derive_from_manifest_or_fail"
     },
-    "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S": {
-      "kind": "sha256_list",
-      "separator": ",",
-      "format": "lowercase_64_hex_values_without_empty_entries",
-      "bundled_value": "manifest.trusted_browser_client_sha256s joined with comma",
-      "explicit_override": "valid_only_when_every_manifest_digest_is_present",
-      "legacy_mode": "preserve_existing_value",
-      "unset_behavior": "derive_from_manifest_or_fail"
-    },
     "PLAYWRIGHT_BROWSERS_PATH": {
       "kind": "directory",
       "bundled_relative_path": "share/playwright",
@@ -91,10 +82,10 @@
     ]
   },
   "output_invariants": [
-    "All five v1 variables resolve from one compatible runtime root unless an explicitly validated compatible override is selected.",
+    "All four v1 variables resolve from one compatible runtime root unless an explicitly validated compatible override is selected.",
     "CODEX_BROWSER_USE_NODE_PATH and NODE_REPL_NODE_PATH remain synchronized when the legacy alias is used.",
     "A present but corrupt or incompatible bundled manifest never silently falls back to PATH, host Node, or the legacy executable.",
     "The resolver does not create or modify a user Playwright cache and does not enable dependency downloads.",
-    "The selected runtime root is recorded without logging full request metadata or trusted hash contents at normal verbosity."
+    "The selected runtime root is recorded without logging full request metadata at normal verbosity."
   ]
 }

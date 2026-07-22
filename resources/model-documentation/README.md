@@ -1,6 +1,8 @@
 # sky-cua model documentation
 
-This directory is the installed, generation-bound documentation root for `sky_cua` and `node_repl` callers. Start with one of the compact routing skills, then open only the referenced contract or recipe needed for the task.
+This directory is the installed fixed-root documentation component for `sky_cua`
+and `node_repl` callers. Start with one of the compact routing skills, then open
+only the referenced contract or recipe needed for the task.
 
 - `skills/browser-use/SKILL.md`
 - `skills/computer-use/SKILL.md`

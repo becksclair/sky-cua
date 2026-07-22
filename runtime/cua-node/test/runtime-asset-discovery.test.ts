@@ -27,6 +27,12 @@ const manifest: ValidatedRuntimeManifestRecord = {
   node_version: "24.14.0",
   node_path: "bin/node",
   node_modules: "lib/node_modules",
+  components: {
+    browser_use: {
+      entrypoint:
+        "lib/node_modules/@heliasar/browser-use/build/browser-client.mjs",
+    },
+  },
   data: {
     playwright: "share/playwright",
     tessdata: "share/tessdata",
@@ -69,7 +75,8 @@ function assertDeepFrozen(value: unknown): void {
 }
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0))
+    rmSync(root, { recursive: true, force: true });
 });
 
 describe("runtime asset discovery", () => {
@@ -99,7 +106,10 @@ describe("runtime asset discovery", () => {
     assert.deepEqual(result.tesseract.languages, ["eng", "osd"]);
     assertDeepFrozen(result);
     assert.equal(Reflect.set(result.node, "version", "changed"), false);
-    assert.equal(Reflect.set(result.tesseract.languages, "0", "changed"), false);
+    assert.equal(
+      Reflect.set(result.tesseract.languages, "0", "changed"),
+      false,
+    );
   });
 
   test("derives identical metadata from relocated and assembled-style roots", async () => {
@@ -234,7 +244,10 @@ describe("runtime asset discovery", () => {
         assert.ok(error instanceof RuntimeAssetDiscoveryError);
         assert.equal(error.code, "MISSING_PATH");
         assert.equal(error.asset, "tessdata languages");
-        assert.match(error.message, /required \*\.traineddata files are missing/u);
+        assert.match(
+          error.message,
+          /required \*\.traineddata files are missing/u,
+        );
         return true;
       },
     );

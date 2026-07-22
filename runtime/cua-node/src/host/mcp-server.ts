@@ -1,7 +1,6 @@
 import { createInterface, type Interface } from "node:readline";
 import { randomUUID } from "node:crypto";
 import { stdin, stdout } from "node:process";
-import contractFixture from "../../test/fixtures/upstream-5307/contract.json";
 import toolsFixture from "../../test/fixtures/upstream-5307/tools-list.json";
 import {
   RuntimeManager,
@@ -47,9 +46,15 @@ export type McpCallerProvenance =
 
 const MCP_CALLER_PROVENANCE_SET = new Set<string>(MCP_CALLER_PROVENANCE_VALUES);
 
-const SUPPORTED_PROTOCOLS = contractFixture.mcp.supported_protocol_versions;
+const SUPPORTED_PROTOCOLS = [
+  "2024-11-05",
+  "2025-03-26",
+  "2025-06-18",
+  "2025-11-25",
+] as const;
 const SUPPORTED_PROTOCOL_SET = new Set(SUPPORTED_PROTOCOLS);
-const SERVER_INSTRUCTIONS = contractFixture.mcp.initialize.instructions;
+const SERVER_INSTRUCTIONS =
+  "Use `js` to run JavaScript in the persistent Node-backed kernel. When a skill or prompt says to use `node_repl`, call this server's `js` execution tool. Calls default to a 30000 ms (30 seconds) timeout when `timeout_ms` is omitted. The runtime exposes `nodeRepl.cwd`, `nodeRepl.homeDir`, `nodeRepl.tmpDir`, `nodeRepl.requestMeta`, `nodeRepl.setResponseMeta(...)`, and `await nodeRepl.emitImage(...)`. Top-level bindings persist across `js` calls until `js_reset`; do not redeclare existing `const` or `let` names. Reuse existing bindings, use top-level `var` for reusable state that may be assigned again, or choose a fresh descriptive name. Use `js_add_node_module_dir` before `js` when a skill provides an extra package directory, and use dynamic imports like `await import(\"playwright\")` rather than filesystem paths under `./node_modules`.";
 const TOOLS = toolsFixture.tools;
 
 export const MCP_SERVER_INFO = Object.freeze({ name: "node_repl", version: "0.1.0" });

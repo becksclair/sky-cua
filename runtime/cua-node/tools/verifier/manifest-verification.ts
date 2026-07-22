@@ -6,11 +6,18 @@ import {
 import type { JsonRecord, VerificationCheck } from "./types";
 
 function isResolvedHash(value: unknown, allowFixtureValues: boolean): boolean {
-  return allowFixtureValues || (typeof value === "string" && !/^0+$/u.test(value));
+  return (
+    allowFixtureValues || (typeof value === "string" && !/^0+$/u.test(value))
+  );
 }
 
-function isResolvedCommit(value: unknown, allowFixtureValues: boolean): boolean {
-  return allowFixtureValues || (typeof value === "string" && !/^0+$/u.test(value));
+function isResolvedCommit(
+  value: unknown,
+  allowFixtureValues: boolean,
+): boolean {
+  return (
+    allowFixtureValues || (typeof value === "string" && !/^0+$/u.test(value))
+  );
 }
 
 export function verifyManifest(
@@ -19,7 +26,10 @@ export function verifyManifest(
   expectedTarget: string,
   allowFixtureValues: boolean,
 ): JsonRecord | null {
-  const schemaErrors = validateCanonicalSchema(value, RUNTIME_MANIFEST_SCHEMA_PATH);
+  const schemaErrors = validateCanonicalSchema(
+    value,
+    RUNTIME_MANIFEST_SCHEMA_PATH,
+  );
   checks.push({
     id: "manifest:schema",
     status: schemaErrors.length === 0 ? "passed" : "failed",
@@ -28,15 +38,6 @@ export function verifyManifest(
         ? "manifest satisfies the canonical runtime manifest schema"
         : `canonical runtime manifest schema: ${schemaErrors.join("; ")}`,
   });
-  if (
-    schemaErrors.some((error) => error.startsWith("/trusted_browser_client_sha256s "))
-  ) {
-    checks.push({
-      id: "manifest:trusted-hashes",
-      status: "failed",
-      detail: "canonical schema requires at least one unique lowercase SHA-256",
-    });
-  }
   if (schemaErrors.length > 0) return null;
 
   const manifest = record(value, "manifest.json");
@@ -125,20 +126,16 @@ export function verifyManifest(
     components.browser_use,
     "manifest.components.browser_use",
   );
-  const browserUseHash = browserUse.entrypoint_sha256;
-  const browserUseValid = isResolvedHash(browserUseHash, allowFixtureValues);
-  const trustedBrowserHashes = manifest.trusted_browser_client_sha256s;
-  const browserUseTrusted =
-    Array.isArray(trustedBrowserHashes) && trustedBrowserHashes.includes(browserUseHash);
+  const browserUseValid =
+    browserUse.package_name === "@heliasar/browser-use" &&
+    browserUse.entrypoint ===
+      "lib/node_modules/@heliasar/browser-use/build/browser-client.mjs";
   checks.push({
     id: "manifest:component:browser-use",
-    status: browserUseValid && browserUseTrusted ? "passed" : "failed",
-    detail:
-      browserUseValid && browserUseTrusted
-        ? "@heliasar/browser-use entrypoint checksum is resolved and trusted"
-        : !browserUseValid
-          ? "browser-use entrypoint checksum is unresolved"
-          : "browser-use entrypoint checksum is not in trusted_browser_client_sha256s",
+    status: browserUseValid ? "passed" : "failed",
+    detail: browserUseValid
+      ? "@heliasar/browser-use is installed at the fixed runtime path"
+      : "browser-use package identity or fixed entrypoint is invalid",
   });
   return manifest;
 }

@@ -44,15 +44,15 @@ host.
   idempotent (no duplicate rules, no rewrite when already correct), and is
   non-fatal — a missing or malformed `settings.json` is reported and skipped,
   never aborting the install. The Claude config directory defaults to
-  `~/.claude` and is overridable end to end with `--claude-config-dir` (on both
-  `install_mcp_server.py` and the `installer.py` orchestrator); the
+  `~/.claude` and is overridable with `--claude-config-dir` on
+  `install_mcp_server.py`; the
   `health:claude-code-permissions` check reads the same directory the install
   wrote, so it attests the actual file rather than a hardcoded path.
 - Claude Code stdio MCP servers inherit the parent process environment, so
   the desktop-session env-var passthrough list required by Codex is
   unnecessary; the generated config pins only `SKY_CUA_REPO_ROOT` and an
   explicit `SKY_CUA_BROWSER` selection when present.
-- `--kwin-effect` on the installer also builds, installs, and reloads the
+- `--kwin-effect` on `install_mcp_server.py` also builds, installs, and reloads the
   KWin agent-cursor effect on Plasma hosts, so one command refreshes binaries,
   the Claude registration, and the compositor effect:
   `python3 scripts/install_mcp_server.py --host claude-code --restart-runtime --kwin-effect`.

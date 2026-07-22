@@ -87,7 +87,6 @@ def main() -> int:
     runtime = component(release, "cua-node-linux-x64-glibc")
     docs = component(release, "documentation")
     manifest = json.loads((runtime / "manifest.json").read_text(encoding="utf-8"))
-    trust = ",".join(manifest["trusted_browser_client_sha256s"])
     results: list[dict[str, object]] = []
     with tempfile.TemporaryDirectory(prefix="sky-cua-doc-examples-") as temp_text:
         temp = Path(temp_text)
@@ -108,7 +107,6 @@ def main() -> int:
                     "SKY_CUA_EXAMPLE_PDF",
                 )
             ),
-            "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S": trust,
             "SKY_CUA_DOCUMENTATION_ROOT": str(docs),
             "SKY_CUA_EXAMPLE_INPUT_FILE": binary.as_uri(),
             "SKY_CUA_EXAMPLE_IMAGE": str(image),

@@ -75,19 +75,18 @@ Open boxes link to the active ExecPlan that owns the work.
 
 ## Phase: Host portability
 
-- [x] Complete CUA stack ownership — immutable native + persistent Node release,
-      verified Codex consumer projection, OpenClaw/OpenCode two-server install,
-      canonical model documentation, and persistent Phone JS —
+- [x] Complete CUA stack ownership — one fixed-root native + persistent Node
+      standalone artifact, Codex/OpenClaw consumer projections, canonical model
+      documentation, and persistent Phone JS —
       [`docs/features/complete-cua-stack-ownership.md`](docs/features/complete-cua-stack-ownership.md)
-  - [x] Final seven-component Linux x86-64 glibc release promoted to standalone,
-        OpenClaw, and OpenCode
-  - [x] Final Codex Desktop active-generation/IAB/Brave proof after the one
-        consumer package restart
-  - [x] Publish and install the truthful dual-transport Browser generation:
+  - [x] Linux x86-64 glibc producer emits one complete standalone archive and
+        installs at one fixed XDG data root
+  - [x] Codex Desktop IAB/Brave proof after the consumer package restart
+  - [x] Prove truthful dual-transport Browser behavior:
         Codex task IAB must be `host_provided_iab`, Chrome-family control must
         remain `extension_native_host`, and a relabeled extension must fail IAB
-        acceptance before tab creation — installed generation `a1b86ed8…` and
-        fresh Codex task `019f8499-1bcd-7f13-8966-a392574a81d5` proved the IAB
+        acceptance before tab creation — fresh Codex task
+        `019f8499-1bcd-7f13-8966-a392574a81d5` proved the IAB
         screenshot path without selector environment variables
   - [x] Persistent Phone JS screenshot/action/lifecycle acceptance on an
         Android 36 emulator target
@@ -156,40 +155,32 @@ Open boxes link to the active ExecPlan that owns the work.
       lifecycle was retired 2026-06-11: driving the user's real logged-in
       browser is the product; an isolated profile defeats that purpose) —
       [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
-- [x] One-shot installer (`install.py`): system deps, build (repo mode) or
-      prebuilt bundle (bundle mode), compat plugin materialized from the
-      bundled preflight, MCP registration and skills for all detected agents,
-      health checks -
+- [x] Standalone installer (`python3 install.py install`): replace the fixed
+      `${XDG_DATA_HOME:-~/.local/share}/sky-cua` root, then project launchers,
+      native-host manifests, skills, and detected Codex/OpenClaw integration -
       [`docs/features/one-shot-installer.md`](docs/features/one-shot-installer.md)
-- [x] Release package (`scripts/package.py` + `install.py`): self-contained
-      tarball for clean-machine install with no checkout, toolchain, or
-      marketplace -
+- [x] Standalone release (`python3 install.py build`): durable reusable build
+      outputs plus one self-contained
+      `dist/sky-cua-linux-x64-glibc.tar.gz`, containing only the latest bundled
+      Chrome extension and no generation/rollback/hash-selection contract -
       [`docs/features/release-package.md`](docs/features/release-package.md)
 - [ ] Deduplicate the Codex compat-enablement sequence (`install_bundle` ->
       `run_browser_preflight` ->
       `update_codex_config(compat_enablement=compat_plugin_targets_payload(...))`),
-      currently triplicated across `install_plugin.py`,
-      `deploy_plugin.py:fast_deploy`, and `installer.py:run_codex_phase`. This
-      is the load-bearing compat-enablement (security) toggle; three copies
+      currently duplicated across `install_plugin.py` and
+      `deploy_plugin.py:fast_deploy`. This
+      is the load-bearing compat-enablement (security) toggle; two copies
       risk a future contract change silently diverging. Extract
       `install_plugin.install_codex_payload(bundle_root, codex_home, *,
-      symlink=False, stop_processes=True)` and have the other two call it - as a
+      symlink=False, stop_processes=True)` and have the deploy path call it - as a
       deliberate, separately-reviewed change, not a mechanical extract: the
-      sites differ (install_plugin skips the process-stop; installer wraps the
-      whole install->preflight->config sequence in `try/except`->`PhaseResult`;
-      deploy_plugin appends an installed-MCP refresh), so the helper's
+      sites differ (install_plugin skips the process-stop while deploy_plugin
+      appends an installed-MCP refresh), so the helper's
       process-stop and error-scope parameterization must preserve each caller's
       behavior.
-- [ ] Wire the retained cross-build staging primitives
-      (`build_runtime_packages.py` -> `package_runtime_artifact.py` ->
-      `_plugin_bundle.merge_runtime_artifacts`) into `scripts/package.py` so it
-      can emit multi-platform / Windows tarballs from per-platform CI artifacts.
-      `package.py` is single-platform today (asserts current-host binaries); the
-      staging path builds each platform on its native host (no cross-compile),
-      stages one artifact per platform, and merges the full
-      `REQUIRED_RUNTIME_PLATFORMS` set into a fat bundle. The primitives have no
-      production caller since the Heliasar CI matrix was deleted - they are
-      retained marketplace-independent infrastructure, not dead code.
+- [ ] Extend the standalone builder beyond Linux x86-64 glibc by feeding native
+      per-platform runtime artifacts into the same flat payload contract; do
+      not reintroduce generation stores or platform-specific public installers.
 - [ ] Detached launch breadth across more desktop/session launchers
 
 ## Phase: Android phone control (phone-use)

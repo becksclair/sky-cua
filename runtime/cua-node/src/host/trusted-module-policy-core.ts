@@ -1,5 +1,4 @@
 export interface TrustedModulePolicyCoreOptions {
-  readonly browserClientSha256s: ReadonlySet<string>;
   readonly trustAllCode: boolean;
   readonly bytesEqual: (
     left: Readonly<Uint8Array>,
@@ -17,10 +16,6 @@ export interface TrustedModulePolicyCore {
     inheritedTrust: boolean,
   ): { readonly sha256: string; readonly trusted: boolean };
 }
-
-type ParseTrustedBrowserClientSha256s = (
-  value: string | undefined,
-) => ReadonlySet<string>;
 
 type ParseTrustedCodePaths = (
   value: string | undefined,
@@ -76,15 +71,6 @@ type CreateTrustedModulePolicyCore = (
  * their runtime source is valid JavaScript. The kernel renderer embeds these
  * exact policy decisions instead of maintaining a second implementation.
  */
-export const parseTrustedBrowserClientSha256sCore: ParseTrustedBrowserClientSha256s =
-  function parseTrustedBrowserClientSha256sCore(value) {
-    const text = value ?? "";
-    if (text.trim().length === 0) return new Set();
-    const tokens = text.split(",").map((token) => token.trim().toLowerCase());
-    if (tokens.some((token) => !/^[0-9a-f]{64}$/u.test(token))) return new Set();
-    return new Set(tokens);
-  };
-
 export const parseTrustedCodePathsCore: ParseTrustedCodePaths =
   function parseTrustedCodePathsCore(
     value,
@@ -160,11 +146,7 @@ export const openedTrustedFileRealPathCore: OpenedTrustedFileRealPath =
   };
 
 export const resolveTrustedCodeRootsCore: ResolveTrustedCodeRoots =
-  function resolveTrustedCodeRootsCore(
-    paths,
-    realpathPath,
-    isDirectoryPath,
-  ) {
+  function resolveTrustedCodeRootsCore(paths, realpathPath, isDirectoryPath) {
     const roots = [];
     for (const configuredPath of paths) {
       try {
@@ -230,21 +212,13 @@ export const createTrustedModulePolicyCore: CreateTrustedModulePolicyCore =
             : options.bytesEqual(pendingBytes, bytes);
         return {
           sha256,
-          trusted:
-            inheritedTrust ||
-            options.trustAllCode ||
-            directoryTrusted ||
-            options.browserClientSha256s.has(sha256),
+          trusted: inheritedTrust || options.trustAllCode || directoryTrusted,
         };
       },
     };
   };
 
 const EMBEDDED_CORE_FUNCTIONS = [
-  {
-    name: "parseTrustedBrowserClientSha256sCore",
-    implementation: parseTrustedBrowserClientSha256sCore,
-  },
   {
     name: "parseTrustedCodePathsCore",
     implementation: parseTrustedCodePathsCore,

@@ -2,10 +2,10 @@
 
 ## Status
 
-Shipped on Linux. Last verified: 2026-05-14 with the official Codex
-Chrome extension reaching the sky-cua native host through a temporary
-Brave native-host manifest, plus the patched Codex Desktop Settings
-proof from 2026-05-13.
+Shipped on Linux. The producer distribution uses the fixed-root standalone
+contract as of 2026-07-22. Historical live bridge and Codex Desktop Settings
+proof remains recorded below; consumer convergence is owned by the
+codex-desktop repository.
 
 ## Summary
 
@@ -85,8 +85,18 @@ Build-time (`scripts/build_plugin.py`):
 - Embeds `sky-cua-chrome-host` under
   `resources/plugins/openai-bundled/plugins/chrome/extension-host/linux/<arch>/extension-host`.
 
-Install-time (`scripts/install_plugin.py`, `scripts/deploy_plugin.py`,
-`scripts/installer.py`):
+Standalone install-time (`python3 install.py install`):
+
+- Replaces `${XDG_DATA_HOME:-~/.local/share}/sky-cua` with the complete
+  standalone payload.
+- Projects stable launchers and exact Chromium-family native-host manifests.
+- Installs native Codex compatibility plugins through the detected Codex
+  app-server integration without a Browser client trust-hash contract.
+- Uses only the latest bundled Chrome extension carried at
+  `browser/extension` in the standalone payload.
+
+Fast local development (`scripts/install_plugin.py`,
+`scripts/deploy_plugin.py`):
 
 - Installs the bundle and runs browser preflight on Linux when the
   built bundle contains `resources/chrome_preflight.py`.
@@ -123,20 +133,16 @@ task-complete session log so the extension's session lifecycle is honored.
 - `scripts/install_plugin.py` — local install path.
 - `scripts/deploy_plugin.py` - fast local deploy (`sky-cua@local`,
   compat root retargeted at it).
-- `scripts/build_complete_release.py` - builds the immutable complete release
-  and fat archive under `dist/complete-release/`.
-- `scripts/complete_release_cli.py` / generated release-root `install.py` -
-  complete machine activation, idempotent ensure, and activation proof.
-- `scripts/installer.py`, repository-root `install.py`, and
-  `scripts/package.py` - checkout/legacy compatibility workflows, not complete
-  release activation.
+- `install.py` / `scripts/standalone_release.py` - one standalone build command,
+  one fixed-root install command, and the
+  `dist/sky-cua-linux-x64-glibc.tar.gz` artifact.
 - `resources/chrome_preflight.py` - preflight that syncs bundled
   cache, writes native-host manifests, enables companion plugins.
 - `crates/sky-cua-chrome-host/` — Linux native messaging host.
-- `resources/chrome-extension/codex/1.2.27203.26575_0/` — extracted upstream
-  ChatGPT Chrome extension fallback payload. Local extraction keeps upstream
-  source maps and Chrome `_metadata`; plugin staging excludes both because they
-  are not runtime assets.
+- `resources/chrome-extension/codex/` — versioned extracted upstream ChatGPT
+  Chrome extension sources. The standalone builder selects the highest manifest
+  version and copies exactly one tree into `browser/extension`; historical
+  source versions are not carried in the release artifact.
 - `bin/sky-cua-browser-preflight` — preflight wrapper.
 - `.codex-plugin/plugin.json`, `.mcp.json` — plugin manifest and MCP
   server config.
@@ -189,9 +195,9 @@ Latest accepted artifacts:
   packaged sky-cua implementation. The sky-cua side of that contract is
   documented in
   [`docs/runtime/compat-plugin-contract.md`](../runtime/compat-plugin-contract.md).
-- **No standalone Chrome extension smoke fixture.** The current
-  fallback is the extracted upstream ChatGPT extension under
-  `resources/chrome-extension/codex/1.2.27203.26575_0/`. A
+- **No standalone Chrome extension smoke fixture.** The current payload carries
+  the latest extracted upstream ChatGPT extension selected from
+  `resources/chrome-extension/codex/`. A
   `scripts/install_chrome_extension.py` automated temporary-profile
   loader does not exist yet.
 - **Codex Desktop UI proof is release-bound.** Release

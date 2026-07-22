@@ -1,0 +1,223 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import tarfile
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+import standalone_release
+from standalone_release import (
+    ARCHIVE_NAME,
+    PAYLOAD_DIR_NAME,
+    assemble_payload,
+    build_payload,
+    install_payload,
+)
+
+
+def _write(path: Path, content: str = "fixture\n", *, executable: bool = False) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    if executable:
+        path.chmod(0o755)
+
+
+def _fixture_repo(root: Path) -> tuple[Path, Path]:
+    for relative in (
+        "packages/browser-use/build/browser-client.mjs",
+        "resources/codex-compat/openai-bundled/.agents/plugins/marketplace.json",
+        "resources/codex-compat/openai-bundled/plugins/computer-use/.mcp.json",
+        "resources/codex-compat/openai-bundled/plugins/browser-use/.mcp.json",
+        "resources/model-documentation/README.md",
+        "scripts/_codex_app_server.py",
+        "install.py",
+    ):
+        _write(root / relative, "{}\n" if relative.endswith(".json") else "fixture\n")
+    for name in standalone_release.SKILL_NAMES:
+        _write(root / f"skills/{name}/SKILL.md", f"# {name}\n")
+    _write(root / "out/components/model-documentation/README.md", "# model docs\n")
+    for name in ("api", "capability", "example", "routing"):
+        _write(
+            root / f"out/components/model-documentation/inventories/{name}-inventory.json",
+            "{}\n",
+        )
+
+    core = root / "core"
+    for name in ("sky-cua-client", "sky-cua-service", "sky-cua-overlay-host"):
+        _write(core / f"bin/{name}", executable=True)
+    _write(core / "bin/runtimes/linux-x64/sky-cua-chrome-host", executable=True)
+    _write(core / "resources/chrome-extension/codex/1_0/manifest.json", "{}\n")
+
+    cua_node = root / "cua-node"
+    for name in ("node", "node_repl"):
+        _write(cua_node / f"bin/{name}", executable=True)
+    _write(cua_node / "lib/node_modules/package/index.js")
+    _write(cua_node / "share/playwright/README")
+    _write(cua_node / "manifest.json", "{}\n")
+    _write(cua_node / "sbom.cdx.json", "{}\n")
+    return core, cua_node
+
+
+def test_build_owns_generated_inputs_and_emits_one_fixed_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    core_fixture, cua_fixture = _fixture_repo(repo)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", repo)
+
+    calls: list[tuple[str, ...]] = []
+
+    def fake_runner(command: Sequence[str]) -> None:
+        calls.append(tuple(command))
+        if command[0] == "bun":
+            return
+        if "build_model_documentation.py" in command[1]:
+            return
+        output_flag = "--output-root" if "assemble_cua_node.py" in command[1] else "--dist-root"
+        output = Path(command[command.index(output_flag) + 1])
+        source = cua_fixture if output_flag == "--output-root" else core_fixture
+        standalone_release._copy_tree(source, output)
+
+    payload, archive = build_payload(tmp_path / "dist", create_archive=True, runner=fake_runner)
+
+    assert archive == tmp_path / "dist" / ARCHIVE_NAME
+    assert archive is not None
+    assert archive.is_file()
+    assert [command[:3] for command in calls[:3]] == [
+        ("bun", "install", "--frozen-lockfile"),
+        ("bun", "install", "--frozen-lockfile"),
+        ("bun", "install", "--frozen-lockfile"),
+    ]
+    assert [Path(command[1]).name for command in calls[3:]] == [
+        "build_model_documentation.py",
+        "assemble_cua_node.py",
+        "build_plugin.py",
+    ]
+    assert (payload / "browser/browser-client.mjs").is_file()
+    assert (payload / "docs/inventories/routing-inventory.json").is_file()
+    assert not (payload / "resources/release").exists()
+    assert not (payload / "resources/model-documentation").exists()
+    assert not (payload / "resources/chrome-extension").exists()
+    assert not (payload / "current").exists()
+    assert not (payload / "releases").exists()
+    with tarfile.open(archive, "r:gz") as bundle:
+        names = set(bundle.getnames())
+    assert f"{PAYLOAD_DIR_NAME}/bin/node_repl" in names
+    assert f"{PAYLOAD_DIR_NAME}/codex/openai-bundled/plugins/computer-use/.mcp.json" in names
+
+
+def test_install_replaces_one_tree_and_projects_stable_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    core, cua_node = _fixture_repo(repo)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", repo)
+    first = tmp_path / "first"
+    assemble_payload(first, core_root=core, cua_node_root=cua_node)
+    _write(first / "old-only-marker")
+
+    home = tmp_path / "home"
+    env = {"HOME": str(home), "XDG_DATA_HOME": str(tmp_path / "xdg-data")}
+    first_report = install_payload(first, home=home, env=env, configure_hosts=False)
+    install_root = Path(str(first_report["install_root"]))
+    assert (install_root / "old-only-marker").is_file()
+
+    second = tmp_path / "second"
+    assemble_payload(second, core_root=core, cua_node_root=cua_node)
+    _write(second / "new-marker")
+    second_report = install_payload(second, home=home, env=env, configure_hosts=False)
+
+    assert second_report["install_root"] == str(install_root)
+    assert (install_root / "new-marker").is_file()
+    assert not (install_root / "old-only-marker").exists()
+    assert not (install_root / "current").exists()
+    assert not (install_root / "releases").exists()
+    assert (home / ".local/bin/node_repl").resolve() == install_root / "bin/node_repl"
+    for name in standalone_release.SKILL_NAMES:
+        assert (home / ".agents/skills" / name).resolve() == install_root / "skills" / name
+    native_manifest = json.loads(
+        (
+            home / ".config/google-chrome/NativeMessagingHosts/com.openai.codexextension.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert native_manifest["path"] == str(home / ".local/bin/sky-cua-chrome-host")
+
+    install_payload(second, home=home, env=env, configure_hosts=False)
+    assert (install_root / "new-marker").is_file()
+
+
+def test_install_rejects_incomplete_payload_before_replacing_fixed_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    core, cua_node = _fixture_repo(repo)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", repo)
+    first = tmp_path / "first"
+    assemble_payload(first, core_root=core, cua_node_root=cua_node)
+    _write(first / "old-marker")
+    incomplete = tmp_path / "incomplete"
+    assemble_payload(incomplete, core_root=core, cua_node_root=cua_node)
+    (incomplete / "bin/sky-cua-overlay-host").unlink()
+    home = tmp_path / "home"
+    env = {"HOME": str(home), "XDG_DATA_HOME": str(tmp_path / "xdg-data")}
+    report = install_payload(first, home=home, env=env, configure_hosts=False)
+    install_root = Path(str(report["install_root"]))
+
+    with pytest.raises(FileNotFoundError, match="standalone payload is incomplete"):
+        install_payload(incomplete, home=home, env=env, configure_hosts=False)
+
+    assert (install_root / "old-marker").is_file()
+
+
+def test_detected_hosts_receive_native_plugins_and_hash_free_openclaw_definition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    core, cua_node = _fixture_repo(repo)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", repo)
+    payload = tmp_path / "payload"
+    assemble_payload(payload, core_root=core, cua_node_root=cua_node)
+    home = tmp_path / "home"
+    (home / ".codex").mkdir(parents=True)
+    (home / ".openclaw").mkdir(parents=True)
+    env = {"HOME": str(home), "XDG_DATA_HOME": str(tmp_path / "xdg-data")}
+    plugin_calls: list[str] = []
+    monkeypatch.setattr(
+        standalone_release,
+        "_install_codex_plugins",
+        lambda _root, **_kwargs: (
+            plugin_calls.extend(standalone_release.PLUGIN_NAMES) or standalone_release.PLUGIN_NAMES
+        ),
+    )
+    openclaw_calls: list[list[str]] = []
+
+    def fake_which(name: str) -> str | None:
+        return f"/usr/bin/{name}" if name in {"codex", "openclaw"} else None
+
+    def fake_run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        openclaw_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    report = install_payload(
+        payload,
+        home=home,
+        env=env,
+        which=fake_which,
+        runner=fake_run,
+    )
+
+    assert plugin_calls == ["computer-use", "browser-use"]
+    assert report["codex_plugins"] == ["computer-use", "browser-use"]
+    assert report["openclaw_node_repl"] is True
+    definition = json.loads(openclaw_calls[0][-1])
+    assert openclaw_calls[0][1:4] == ["mcp", "set", "node_repl"]
+    assert "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S" not in definition["env"]
+    assert definition["command"].endswith("/sky-cua/bin/node_repl")
+    for skill_root in (home / ".codex/skills", home / ".openclaw/skills"):
+        assert sorted(path.name for path in skill_root.iterdir()) == sorted(
+            standalone_release.SKILL_NAMES
+        )

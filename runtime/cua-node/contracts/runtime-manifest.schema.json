@@ -21,7 +21,6 @@
     "node_repl_sha256",
     "node_modules",
     "data",
-    "trusted_browser_client_sha256s",
     "components",
     "browser",
     "source",
@@ -80,13 +79,7 @@
     "data": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "playwright",
-        "tessdata",
-        "pdfjs",
-        "licenses",
-        "sbom"
-      ],
+      "required": ["playwright", "tessdata", "pdfjs", "licenses", "sbom"],
       "properties": {
         "playwright": {
           "$ref": "#/$defs/relative_path",
@@ -109,15 +102,6 @@
           "const": "sbom.cdx.json"
         }
       }
-    },
-    "trusted_browser_client_sha256s": {
-      "type": "array",
-      "description": "Exact lowercase SHA-256 digests accepted for privileged Browser Use modules.",
-      "minItems": 1,
-      "items": {
-        "$ref": "#/$defs/sha256"
-      },
-      "uniqueItems": true
     },
     "components": {
       "type": "object",
@@ -161,8 +145,7 @@
             "package_name",
             "package_version",
             "entrypoint",
-            "declarations",
-            "entrypoint_sha256"
+            "declarations"
           ],
           "properties": {
             "package_name": {
@@ -178,9 +161,6 @@
             "declarations": {
               "$ref": "#/$defs/relative_path",
               "const": "lib/node_modules/@heliasar/browser-use/build/index.d.ts"
-            },
-            "entrypoint_sha256": {
-              "$ref": "#/$defs/sha256"
             }
           }
         }
@@ -201,7 +181,12 @@
     "source": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["producer", "producer_commit", "migration_evidence", "migration_input"],
+      "required": [
+        "producer",
+        "producer_commit",
+        "migration_evidence",
+        "migration_input"
+      ],
       "properties": {
         "producer": {
           "const": "sky-cua"

@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "bun:test";
 import { strict as assert } from "node:assert";
@@ -9,15 +8,11 @@ const nodePath = join(fixtureRoot, "bin", "node");
 const nodeReplPath = join(fixtureRoot, "bin", "node_repl");
 const nodeModulesPath = join(fixtureRoot, "lib", "node_modules");
 const playwrightPath = join(fixtureRoot, "share", "playwright");
-const trustedHashes = JSON.parse(
-  readFileSync(join(fixtureRoot, "manifest.json"), "utf8"),
-).trusted_browser_client_sha256s.join(",");
 const env = {
   ...process.env,
   CODEX_NODE_REPL_PATH: nodeReplPath,
   NODE_REPL_NODE_PATH: nodePath,
   NODE_REPL_NODE_MODULE_DIRS: nodeModulesPath,
-  NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: trustedHashes,
   PLAYWRIGHT_BROWSERS_PATH: playwrightPath,
 };
 
@@ -40,12 +35,11 @@ test("fake runtime exposes executable Node and node_repl identities", () => {
   assert.equal(run(["--version"]), "node_repl-fake/1.0.0");
 });
 
-test("fake runtime prints the five hydrated environment values and imports sky", () => {
+test("fake runtime prints the four hydrated environment values and imports sky", () => {
   assert.deepEqual(JSON.parse(run(["--print-env"])), {
     CODEX_NODE_REPL_PATH: nodeReplPath,
     NODE_REPL_NODE_PATH: nodePath,
     NODE_REPL_NODE_MODULE_DIRS: nodeModulesPath,
-    NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: trustedHashes,
     PLAYWRIGHT_BROWSERS_PATH: playwrightPath,
   });
 
@@ -62,8 +56,18 @@ test("fake node_repl responds with the frozen minimum MCP tool surface", () => {
   const lines = run(
     [],
     [
-      JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
-      JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {},
+      }),
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/list",
+        params: {},
+      }),
       JSON.stringify({
         jsonrpc: "2.0",
         id: 3,

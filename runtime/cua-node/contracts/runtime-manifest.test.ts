@@ -9,18 +9,28 @@ import type { VerificationCheck } from "../tools/verifier/types.ts";
 const Ajv2020 = require("ajv/dist/2020");
 
 const contractsRoot = resolve(import.meta.dir);
-const fixtureRoot = join(contractsRoot, "..", "test", "fixtures", "fake-runtime");
+const fixtureRoot = join(
+  contractsRoot,
+  "..",
+  "test",
+  "fixtures",
+  "fake-runtime",
+);
 const schema = JSON.parse(
   readFileSync(join(contractsRoot, "runtime-manifest.schema.json"), "utf8"),
 );
-const manifest = JSON.parse(readFileSync(join(fixtureRoot, "manifest.json"), "utf8"));
+const manifest = JSON.parse(
+  readFileSync(join(fixtureRoot, "manifest.json"), "utf8"),
+);
 
 function sha256(path: string) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 test("runtime manifest schema validates schema v2 compatibility v1 and rejects target drift", () => {
-  const validator = new Ajv2020({ allErrors: true, strict: false }).compile(schema);
+  const validator = new Ajv2020({ allErrors: true, strict: false }).compile(
+    schema,
+  );
 
   assert.equal(validator(manifest), true, JSON.stringify(validator.errors));
 
@@ -44,13 +54,16 @@ test("runtime manifest schema validates schema v2 compatibility v1 and rejects t
     "@heliasar/browser-use",
   );
   assert.equal(
-    manifest.components.browser_use.entrypoint_sha256,
-    manifest.trusted_browser_client_sha256s[0],
+    manifest.components.browser_use.entrypoint,
+    "lib/node_modules/@heliasar/browser-use/build/browser-client.mjs",
   );
 });
 
 test("fixture manifest records exact executable and shipped-file checksums", () => {
-  assert.equal(manifest.node_sha256, sha256(join(fixtureRoot, manifest.node_path)));
+  assert.equal(
+    manifest.node_sha256,
+    sha256(join(fixtureRoot, manifest.node_path)),
+  );
   assert.equal(
     manifest.node_repl_sha256,
     sha256(join(fixtureRoot, manifest.node_repl_path)),
@@ -92,10 +105,16 @@ test("production verification rejects unresolved producer provenance", () => {
 
 test("environment and wrapper contracts freeze the integration seams", () => {
   const environment = JSON.parse(
-    readFileSync(join(contractsRoot, "runtime-environment.contract.json"), "utf8"),
+    readFileSync(
+      join(contractsRoot, "runtime-environment.contract.json"),
+      "utf8",
+    ),
   );
   const wrapper = JSON.parse(
-    readFileSync(join(contractsRoot, "computer-use-wrapper.contract.json"), "utf8"),
+    readFileSync(
+      join(contractsRoot, "computer-use-wrapper.contract.json"),
+      "utf8",
+    ),
   );
 
   assert.deepEqual(environment.precedence, [
@@ -106,14 +125,20 @@ test("environment and wrapper contracts freeze the integration seams", () => {
   ]);
   assert.equal(environment.variables.NODE_REPL_NODE_MODULE_DIRS.separator, ":");
   assert.equal(
-    environment.variables.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S.separator,
-    ",",
+    "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S" in environment.variables,
+    false,
   );
-  assert.equal(environment.mode_selection.invalid_bundled_manifest_fails_closed, true);
+  assert.equal(
+    environment.mode_selection.invalid_bundled_manifest_fails_closed,
+    true,
+  );
   assert.equal(wrapper.target_behavior.package_specifier, "@heliasar/sky-cua");
   assert.equal(wrapper.target_behavior.named_export, "sky");
   assert.equal(wrapper.target_behavior.lazy, true);
-  assert.equal(wrapper.publication.symbol, 'Symbol.for("openai.computer-use.runtime")');
+  assert.equal(
+    wrapper.publication.symbol,
+    'Symbol.for("openai.computer-use.runtime")',
+  );
   assert.equal(wrapper.idempotence.second_apply_byte_identical, true);
   assert.equal(wrapper.target_behavior.oai_sky_alias, "forbidden");
 });

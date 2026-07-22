@@ -13,7 +13,6 @@ import { isAbsolute, relative, resolve } from "node:path";
 import {
   createTrustedModulePolicyCore,
   openedTrustedFileRealPathCore,
-  parseTrustedBrowserClientSha256sCore,
   parseTrustedCodePathsCore,
   readTrustedCodeFileCore,
   renderTrustedModulePolicyCoreSource,
@@ -23,8 +22,6 @@ import {
   type TrustedModulePolicyCore,
 } from "./trusted-module-policy-core.ts";
 
-export const TRUSTED_BROWSER_CLIENT_SHA256_ENV =
-  "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S";
 export const TRUSTED_CODE_PATHS_ENV = "NODE_REPL_TRUSTED_CODE_PATHS";
 export const TRUST_ALL_CODE_ENV = "NODE_REPL_TRUST_ALL_CODE";
 
@@ -44,14 +41,8 @@ export interface TrustedModuleLoad {
 const EMPTY_ENV: NodeJS.ProcessEnv = {};
 const NO_FOLLOW = (constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
 
-/**
- * Parse the browser allowlist fail-closed. A malformed token invalidates the
- * whole grant so a typo cannot accidentally leave a partially trusted set.
- */
-export function parseTrustedBrowserClientSha256s(
-  value: string | undefined,
-): ReadonlySet<string> {
-  return parseTrustedBrowserClientSha256sCore(value);
+function sha256Bytes(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 export function parseTrustedCodePaths(
@@ -70,10 +61,6 @@ function isWithinPath(
   return trustedPathContainsCore(file, root, platform, relative, isAbsolute);
 }
 
-function sha256Bytes(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
 function openedFileRealPath(fd: number, originalPath: string): string | null {
   return openedTrustedFileRealPathCore(
     fd,
@@ -86,7 +73,8 @@ function openedFileRealPath(fd: number, originalPath: string): string | null {
 function openExactFile(path: string): Buffer {
   const fd = openSync(path, constants.O_RDONLY | NO_FOLLOW);
   try {
-    if (!fstatSync(fd).isFile()) throw new Error("trusted module path is not a file");
+    if (!fstatSync(fd).isFile())
+      throw new Error("trusted module path is not a file");
     return Buffer.from(readFileSync(fd));
   } finally {
     closeSync(fd);
@@ -94,10 +82,8 @@ function openExactFile(path: string): Buffer {
 }
 
 function resolveTrustedCodeRoots(paths: readonly string[]): readonly string[] {
-  return resolveTrustedCodeRootsCore(
-    paths,
-    realpathSync,
-    (path) => statSync(path).isDirectory(),
+  return resolveTrustedCodeRootsCore(paths, realpathSync, (path) =>
+    statSync(path).isDirectory(),
   );
 }
 
@@ -107,7 +93,6 @@ function resolveTrustedCodeRoots(paths: readonly string[]): readonly string[] {
  * bytes must match that snapshot before compilation receives trust.
  */
 export class TrustedModulePolicy {
-  public readonly browserClientSha256s: ReadonlySet<string>;
   public readonly trustedCodePaths: readonly string[];
   public readonly trustAllCode: boolean;
   private readonly trustedCodeRoots: readonly string[];
@@ -115,9 +100,6 @@ export class TrustedModulePolicy {
   public constructor(options: TrustedModulePolicyOptions = {}) {
     const env = options.env ?? EMPTY_ENV;
     const cwd = options.cwd ?? process.cwd();
-    this.browserClientSha256s = parseTrustedBrowserClientSha256s(
-      env[TRUSTED_BROWSER_CLIENT_SHA256_ENV],
-    );
     this.trustedCodePaths = parseTrustedCodePaths(
       env[TRUSTED_CODE_PATHS_ENV],
       cwd,
@@ -126,7 +108,6 @@ export class TrustedModulePolicy {
     this.trustedCodeRoots = resolveTrustedCodeRoots(this.trustedCodePaths);
     this.trustAllCode = env[TRUST_ALL_CODE_ENV] === "1";
     this.core = createTrustedModulePolicyCore({
-      browserClientSha256s: this.browserClientSha256s,
       trustAllCode: this.trustAllCode,
       bytesEqual: trustedBytesEqualCore,
       readTrustedCodeFile: (path) => this.readTrustedCodeFile(path),
@@ -148,7 +129,10 @@ export class TrustedModulePolicy {
     return { path, bytes, ...decision };
   }
 
-  public readEntrypoint(path: string, inheritedTrust = false): TrustedModuleLoad {
+  public readEntrypoint(
+    path: string,
+    inheritedTrust = false,
+  ): TrustedModuleLoad {
     const bytes = openExactFile(path);
     return this.evaluate(path, bytes, true, inheritedTrust);
   }
@@ -212,17 +196,13 @@ function readTrustedCodeFile(file, roots) {
 }
 
 function createTrustedModulePolicy() {
-  const browserClientSha256s = parseTrustedBrowserClientSha256sCore(process.env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S);
   const trustedCodePaths = parseTrustedCodePathsCore(process.env.NODE_REPL_TRUSTED_CODE_PATHS, cwd, process.platform, isAbsolute, resolve);
   const trustedRoots = resolveTrustedRoots(trustedCodePaths);
   const core = createTrustedModulePolicyCore({
-    browserClientSha256s,
     trustAllCode: process.env.NODE_REPL_TRUST_ALL_CODE === '1',
     bytesEqual: trustedBytesEqualCore,
     readTrustedCodeFile(file) { return readTrustedCodeFile(file, trustedRoots); },
-    sha256Bytes(bytes) {
-      return createHash('sha256').update(bytes).digest('hex');
-    },
+    sha256Bytes() { return ''; },
   });
   return {
     isTrustedDirectoryPath: core.isTrustedDirectoryPath,

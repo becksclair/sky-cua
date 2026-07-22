@@ -20,9 +20,6 @@
     "licenses": "licenses",
     "sbom": "sbom.cdx.json"
   },
-  "trusted_browser_client_sha256s": [
-    "413a620ec65f785c26d12983bb3eed609cf73b9d46474491131d0d38e634134d"
-  ],
   "components": {
     "host": {
       "name": "fake-node-repl-host",
@@ -46,8 +43,7 @@
       "package_name": "@heliasar/browser-use",
       "package_version": "1.0.0",
       "entrypoint": "lib/node_modules/@heliasar/browser-use/build/browser-client.mjs",
-      "declarations": "lib/node_modules/@heliasar/browser-use/build/index.d.ts",
-      "entrypoint_sha256": "413a620ec65f785c26d12983bb3eed609cf73b9d46474491131d0d38e634134d"
+      "declarations": "lib/node_modules/@heliasar/browser-use/build/index.d.ts"
     }
   },
   "browser": {
@@ -84,8 +80,8 @@
       },
       {
         "path": "lib/node_repl.mjs",
-        "sha256": "dcec6940da0d78192fa331f7b5c5870eb2aa27e773b720f66a20d740e131434d",
-        "size_bytes": 5637
+        "sha256": "6c2105102abe462f3094d739fd95898194f5cd9f810b0bed58d53f3a92980492",
+        "size_bytes": 5460
       },
       {
         "path": "lib/node_modules/@heliasar/browser-use/build/browser-client.mjs",

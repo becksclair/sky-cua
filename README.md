@@ -72,31 +72,33 @@ packaged adapter around that runtime, not the runtime boundary itself.
   `resources/chrome_preflight.py` and the `bin/sky-cua-browser-preflight`
   wrapper
 
-## Install
+## Build and install
 
-One command sets up a fresh checkout end to end - system dependencies, the
-runtime build, the computer-use compat plugin (materialized from the bundled
-preflight, no marketplace), MCP registration plus skills for every detected
-agent (Codex, Claude Code, Claude Desktop, OpenCode, Pi, OpenClaw), and health
-checks:
+The standalone distribution has one build command and one install command:
 
 ```bash
-python3 install.py
+python3 install.py build
+python3 install.py install
 ```
 
-Use `--dry-run` to preview the phases, `--agents` to pick hosts explicitly,
-and `--kwin-effect` to also install the KDE agent-cursor effect. Details in
-[`docs/features/one-shot-installer.md`](docs/features/one-shot-installer.md).
+The build owns its generated inputs and keeps them in durable checkout paths so
+repeat builds reuse precompiled artifacts: `dist/plugin/sky-cua`,
+`out/components/cua-node-linux-x64-glibc`, and
+`dist/standalone/sky-cua-linux-x64-glibc`. It emits the checkout-free archive
+`dist/sky-cua-linux-x64-glibc.tar.gz`. The payload contains only the latest
+bundled Chrome extension version.
+
+Install replaces the fixed root `${XDG_DATA_HOME:-~/.local/share}/sky-cua` and
+projects stable launchers, native-host manifests, skills, and detected consumer
+registrations from that root. There are no generations, `current` selector,
+rollback operation, or hash-selected install arguments. Extracted artifacts
+use the same `python3 install.py install` command. Details in
+[`docs/features/one-shot-installer.md`](docs/features/one-shot-installer.md)
+and [`docs/features/release-package.md`](docs/features/release-package.md).
+
 For fastest Linux Wayland input, install the privileged uinput helper from a
 runtime install with `scripts/install_mcp_server.py --input-helper`; it runs as
 root and exposes `/run/sky-cua/input-helper.sock`.
-
-For an immutable machine install, build a complete release with
-`python3 scripts/build_complete_release.py`, copy the reported fat archive,
-extract it, and run `python3 install.py install --manifest-sha256 <sha256>`
-from the extracted release root. The activation transaction also installs
-native-host manifests, stable `current` command links, and its receipt. See
-[`docs/features/release-package.md`](docs/features/release-package.md).
 
 ## Development
 
@@ -223,10 +225,9 @@ Deploy and distribute Codex plugin builds:
 
 ```bash
 python3 scripts/deploy_plugin.py          # compatibility-only local dev deploy
-python3 scripts/build_complete_release.py # immutable release + fat archive
-# From the extracted complete release:
-python3 install.py install --manifest-sha256 <sha256>
-python3 install.py verify-activation --manifest-sha256 <sha256>
+python3 install.py build                  # standalone tree + archive
+# From the checkout or extracted standalone artifact:
+python3 install.py install
 ```
 
 `deploy_plugin.py` is the fast local lane: it installs the built bundle into
@@ -240,13 +241,9 @@ chosen by retargeting the compat root, so Codex never sees duplicate
 platforms, so rebuilding on Linux does not delete Windows `.exe` binaries from
 the local payload and vice versa.
 
-`build_complete_release.py` emits one immutable release identity and a
-`dist/complete-release/sky-cua-<release-id>-linux-x64-glibc.tar.gz` archive.
-Its release-root `install.py install` is the sole normal activation command;
-`ensure` is the idempotent repair path and `verify-activation` is the read-only
-machine-state proof. `scripts/release_generation.py install` is internal-only,
-and the older `scripts/package.py` installer remains compatibility packaging,
-not a complete machine activation. See
+`python3 install.py build` emits one complete standalone payload and
+`dist/sky-cua-linux-x64-glibc.tar.gz`. `python3 install.py install` replaces
+the fixed install root and is idempotent when repeated. See
 [`docs/features/release-package.md`](docs/features/release-package.md).
 
 If the local Codex config gets stale, the durable reset procedure is documented

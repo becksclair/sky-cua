@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { endianness, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -20,7 +28,10 @@ type BrowserPeer = {
 
 const CLIENT_PATH = resolve(
   process.env.CUA_NODE_BROWSER_CLIENT_PATH ??
-    resolve(import.meta.dir, "../../../packages/browser-use/build/browser-client.mjs"),
+    resolve(
+      import.meta.dir,
+      "../../../packages/browser-use/build/browser-client.mjs",
+    ),
 );
 const CODEX_APP_BUILD_FLAVOR = "sky-cua-compatibility-test";
 
@@ -45,7 +56,11 @@ function browserJs(id: number, code: string) {
 }
 
 function toolResult(response: unknown): Record<string, unknown> | null {
-  if (response === null || typeof response !== "object" || !("result" in response)) {
+  if (
+    response === null ||
+    typeof response !== "object" ||
+    !("result" in response)
+  ) {
     return null;
   }
   const result = response.result;
@@ -79,7 +94,9 @@ async function startBrowserPeer(socketPath: string): Promise<BrowserPeer> {
       buffered = Buffer.concat([buffered, chunk]);
       while (buffered.length >= 4) {
         const length =
-          endianness() === "LE" ? buffered.readUInt32LE(0) : buffered.readUInt32BE(0);
+          endianness() === "LE"
+            ? buffered.readUInt32LE(0)
+            : buffered.readUInt32BE(0);
         if (buffered.length < length + 4) return;
         const request = JSON.parse(
           buffered.subarray(4, length + 4).toString("utf8"),
@@ -112,7 +129,9 @@ async function startBrowserPeer(socketPath: string): Promise<BrowserPeer> {
 }
 
 test("exact Browser client selects the sky-cua socket and stays disconnected after reset", async () => {
-  const root = await mkdtemp(join(tmpdir(), "cua-node-browser-control-ingress-"));
+  const root = await mkdtemp(
+    join(tmpdir(), "cua-node-browser-control-ingress-"),
+  );
   const packageRoot = join(root, "node_modules", "browser-use-installed");
   const packageScripts = join(packageRoot, "scripts");
   const socketPath = join(root, "codex-browser-compat.sock");
@@ -128,16 +147,13 @@ test("exact Browser client selects the sky-cua socket and stays disconnected aft
     }),
     "utf8",
   );
-  const digest = createHash("sha256")
-    .update(await readFile(CLIENT_PATH))
-    .digest("hex");
   const manager = new RuntimeManager({
     allowHostNode: true,
     nodePath: TEST_NODE_PATH,
     runtimeMetadata: null,
     env: {
       NODE_REPL_NODE_MODULE_DIRS: root,
-      NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: digest,
+      NODE_REPL_TRUSTED_CODE_PATHS: packageRoot,
       BROWSER_USE_CODEX_APP_BUILD_FLAVOR: CODEX_APP_BUILD_FLAVOR,
       SKY_CUA_CODEX_BROWSER_INGRESS: "sky_cua",
       SKY_CUA_CODEX_BROWSER_SOCKET_PATH: socketPath,
@@ -180,7 +196,9 @@ test("exact Browser client selects the sky-cua socket and stays disconnected aft
       method: "tools/call",
       params: { name: "js_reset", arguments: {} },
     });
-    assert.deepEqual(toolResult(reset)?.content, [{ type: "text", text: "true" }]);
+    assert.deepEqual(toolResult(reset)?.content, [
+      { type: "text", text: "true" },
+    ]);
     for (let attempt = 0; attempt < 50 && peer.sockets.size > 0; attempt += 1) {
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
     }

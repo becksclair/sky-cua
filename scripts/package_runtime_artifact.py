@@ -4,9 +4,9 @@
 Copies `target/release/<binary>` into `<output-root>/<platform>/` so a CI matrix
 can upload one artifact per platform. `_plugin_bundle.merge_runtime_artifacts`
 later merges the per-platform artifact set into a single multi-platform bundle.
-Marketplace-independent cross-build staging infrastructure: it is consumed by
-neither the single-platform `scripts/package.py` nor any install path, and is
-retained for multi-platform/Windows packaging (see `build_runtime_packages.py`).
+Marketplace-independent cross-build staging infrastructure: it is not consumed
+by the standalone Linux install path and is retained for multi-platform/Windows
+packaging (see `build_runtime_packages.py`).
 """
 
 from __future__ import annotations

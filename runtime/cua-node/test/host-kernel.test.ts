@@ -40,7 +40,9 @@ function result(response: Response): Response["result"] {
   return response.result;
 }
 
-async function withServer(run: (server: McpServer) => Promise<void>): Promise<void> {
+async function withServer(
+  run: (server: McpServer) => Promise<void>,
+): Promise<void> {
   const manager = new RuntimeManager({
     allowHostNode: true,
     nodePath: TEST_NODE_PATH,
@@ -274,7 +276,10 @@ test("transport-only progress metadata is preserved while generic identity is sy
           ),
         )) as Response,
       );
-      return JSON.parse(response?.content?.[0]?.text as string) as Record<string, unknown>;
+      return JSON.parse(response?.content?.[0]?.text as string) as Record<
+        string,
+        unknown
+      >;
     };
     const first = await readMeta(2, 11);
     const second = await readMeta(3, 12);
@@ -291,7 +296,10 @@ test("transport-only progress metadata is preserved while generic identity is sy
 });
 
 test("caller provenance accepts only the explicit v1 enum and infers generic clients", () => {
-  assert.equal(resolveMcpCallerProvenance("codex_desktop", null), "codex_desktop");
+  assert.equal(
+    resolveMcpCallerProvenance("codex_desktop", null),
+    "codex_desktop",
+  );
   assert.equal(resolveMcpCallerProvenance(" openclaw ", null), "openclaw");
   assert.equal(resolveMcpCallerProvenance("OpenCode", null), "opencode");
   assert.equal(resolveMcpCallerProvenance("direct_mcp", null), "direct_mcp");
@@ -329,7 +337,10 @@ test("persistent cells, binding errors, metadata, and process isolation work", a
       (await server.dispatch(js(4, "const fixed = 2"))) as Response,
     );
     assert.equal(conflict?.isError, true);
-    assert.match(String(conflict?.content?.[0]?.text), /already been declared/u);
+    assert.match(
+      String(conflict?.content?.[0]?.text),
+      /already been declared/u,
+    );
     const laterError = result(
       (await server.dispatch(
         js(
@@ -347,9 +358,13 @@ test("persistent cells, binding errors, metadata, and process isolation work", a
         ),
       )) as Response,
     );
-    assert.deepEqual(carriedAfterError?.content, [{ type: "text", text: "78" }]);
+    assert.deepEqual(carriedAfterError?.content, [
+      { type: "text", text: "78" },
+    ]);
     const processImport = result(
-      (await server.dispatch(js(7, "await import('node:process')"))) as Response,
+      (await server.dispatch(
+        js(7, "await import('node:process')"),
+      )) as Response,
     );
     assert.equal(processImport?.isError, true);
     const metadata = result(
@@ -362,7 +377,9 @@ test("persistent cells, binding errors, metadata, and process isolation work", a
         ),
       )) as Response,
     );
-    assert.deepEqual(metadata?.content, [{ type: "text", text: "session-fixture" }]);
+    assert.deepEqual(metadata?.content, [
+      { type: "text", text: "session-fixture" },
+    ]);
     assert.deepEqual(metadata?._meta, { one: 1, two: 2 });
     const unsafeMetadata = result(
       (await server.dispatch(
@@ -392,7 +409,9 @@ test("persistent cells, binding errors, metadata, and process isolation work", a
         js(12, "nodeRepl.write(globalThis.browserFixture.value)"),
       )) as Response,
     );
-    assert.deepEqual(persistedGlobal?.content, [{ type: "text", text: "persistent" }]);
+    assert.deepEqual(persistedGlobal?.content, [
+      { type: "text", text: "persistent" },
+    ]);
   });
 });
 
@@ -420,7 +439,8 @@ nodeRepl.write(JSON.stringify({
     )) as Response;
     assert.equal(response.result?.isError, false);
     const text = response.result?.content?.[0]?.text;
-    if (typeof text !== "string") throw new Error("missing REPL web-global output");
+    if (typeof text !== "string")
+      throw new Error("missing REPL web-global output");
     assert.deepEqual(JSON.parse(text), {
       missing: [],
       falseBrowserGlobals: [],
@@ -495,7 +515,14 @@ test("nodeRepl exposes deeply frozen runtime metadata and fixed loaders", async 
       languages: ["eng", "osd"],
       frozen: true,
       mutated: false,
-      loaders: ["canvas", "pdfjs", "pixelmatch", "playwright", "sharp", "tesseract"],
+      loaders: [
+        "canvas",
+        "pdfjs",
+        "pixelmatch",
+        "playwright",
+        "sharp",
+        "tesseract",
+      ],
       genericLoader: "undefined",
     });
   } finally {
@@ -531,7 +558,9 @@ nodeRepl.write("bootstrapped");`,
       )) as Response,
     );
     assert.equal(bootstrap?.isError, false);
-    assert.deepEqual(bootstrap?.content, [{ type: "text", text: "bootstrapped" }]);
+    assert.deepEqual(bootstrap?.content, [
+      { type: "text", text: "bootstrapped" },
+    ]);
 
     const persisted = result(
       (await server.dispatch(
@@ -619,7 +648,9 @@ nodeRepl.write(localScope());`,
 test("static module syntax remains a cell error without resetting bindings", async () => {
   await withServer(async (server) => {
     const declaration = result(
-      (await server.dispatch(js(1, "const survivesStaticSyntax = 12"))) as Response,
+      (await server.dispatch(
+        js(1, "const survivesStaticSyntax = 12"),
+      )) as Response,
     );
     assert.equal(declaration?.isError, false);
 
@@ -807,7 +838,9 @@ test("module roots persist across reset and local files reload between cells", a
           ),
         )) as Response,
       );
-      assert.deepEqual(packageImport?.content, [{ type: "text", text: "true" }]);
+      assert.deepEqual(packageImport?.content, [
+        { type: "text", text: "true" },
+      ]);
       const localImport = result(
         (await server.dispatch(
           js(
@@ -853,7 +886,7 @@ test("module roots persist across reset and local files reload between cells", a
   }
 });
 
-test("trusted package entrypoints receive only the hash-gated privileged surface", async () => {
+test("fixed-path package entrypoints receive only the privileged surface", async () => {
   const directory = await mkdtemp(join(tmpdir(), "cua-node-trusted-"));
   const packageDirectory = join(directory, "node_modules", "trusted-fixture");
   const entrypoint = join(packageDirectory, "index.mjs");
@@ -873,16 +906,13 @@ test("trusted package entrypoints receive only the hash-gated privileged surface
       "import { createRequire } from 'node:module'; const importedRequiredProcess = createRequire(import.meta.url)('node:process'); const builtinRequiredProcess = process.getBuiltinModule('module').createRequire(import.meta.url)('node:process'); export const safeModuleFacades = [importedRequiredProcess, builtinRequiredProcess].every((value) => typeof value.exit === 'undefined' && typeof value.send === 'undefined'); export const own = Object.keys(nodeRepl).join(','); export const inheritedWrite = Object.prototype.hasOwnProperty.call(nodeRepl, 'write'); export const processFrozen = Object.isFrozen(process); export const processExitFacade = typeof process.once + '|' + typeof process.off + '|' + typeof process.nextTick; export const scheduleLateHook = () => setTimeout(() => nodeRepl.addAfterSubmittedCodeHook({ run: () => nodeRepl.write('late-hook'), timeoutMs: 10 }), 20); export const wait = () => nodeRepl.withSuspendedTimeout(async () => { await new Promise((resolve) => setTimeout(resolve, 40)); return 'suspended'; });\n",
       "utf8",
     );
-    const digest = createHash("sha256")
-      .update(await readFile(entrypoint))
-      .digest("hex");
     const manager = new RuntimeManager({
       allowHostNode: true,
       nodePath: TEST_NODE_PATH,
       runtimeMetadata: null,
       env: {
         NODE_REPL_NODE_MODULE_DIRS: join(directory, "node_modules"),
-        NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: digest,
+        NODE_REPL_TRUSTED_CODE_PATHS: packageDirectory,
       },
     });
     const server = new McpServer({ manager });
@@ -910,7 +940,9 @@ test("trusted package entrypoints receive only the hash-gated privileged surface
           ),
         )) as Response,
       );
-      assert.deepEqual(suspended?.content, [{ type: "text", text: "suspended" }]);
+      assert.deepEqual(suspended?.content, [
+        { type: "text", text: "suspended" },
+      ]);
       const lateHook = result(
         (await server.dispatch(
           js(3, "trustedFixture.scheduleLateHook(); nodeRepl.write('first')"),
@@ -921,7 +953,9 @@ test("trusted package entrypoints receive only the hash-gated privileged surface
       const afterLateHook = result(
         (await server.dispatch(js(4, "nodeRepl.write('second')"))) as Response,
       );
-      assert.deepEqual(afterLateHook?.content, [{ type: "text", text: "second" }]);
+      assert.deepEqual(afterLateHook?.content, [
+        { type: "text", text: "second" },
+      ]);
     } finally {
       await server.close();
     }
@@ -930,7 +964,7 @@ test("trusted package entrypoints receive only the hash-gated privileged surface
   }
 });
 
-test("an exact Browser client hash trusts a direct file import and a wrong hash does not", async () => {
+test("the fixed Browser code path trusts a direct file import and another path does not", async () => {
   const directory = await mkdtemp(join(tmpdir(), "cua-node-trusted-file-"));
   const entrypoint = join(directory, "browser-client.mjs");
   try {
@@ -939,18 +973,15 @@ test("an exact Browser client hash trusts a direct file import and a wrong hash 
       "export const nativePipeType = typeof nodeRepl.nativePipe?.createConnection;\n",
       "utf8",
     );
-    const digest = createHash("sha256")
-      .update(await readFile(entrypoint))
-      .digest("hex");
-    for (const [name, configuredHash, expected] of [
-      ["exact", digest, "function"],
-      ["wrong", "0".repeat(64), "undefined"],
+    for (const [name, configuredPath, expected] of [
+      ["exact", directory, "function"],
+      ["wrong", join(directory, "elsewhere"), "undefined"],
     ] as const) {
       const manager = new RuntimeManager({
         allowHostNode: true,
         nodePath: TEST_NODE_PATH,
         runtimeMetadata: null,
-        env: { NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: configuredHash },
+        env: { NODE_REPL_TRUSTED_CODE_PATHS: configuredPath },
       });
       const server = new McpServer({ manager });
       try {
@@ -962,7 +993,11 @@ test("an exact Browser client hash trusts a direct file import and a wrong hash 
             ),
           )) as Response,
         );
-        assert.deepEqual(response?.content, [{ type: "text", text: expected }], name);
+        assert.deepEqual(
+          response?.content,
+          [{ type: "text", text: expected }],
+          name,
+        );
       } finally {
         await server.close();
       }
@@ -975,15 +1010,22 @@ test("an exact Browser client hash trusts a direct file import and a wrong hash 
 test("timeout and cancellation reset the child and leave the next call usable", async () => {
   await withServer(async (server) => {
     const timedOut = result(
-      (await server.dispatch(js(1, "await new Promise(() => {})", 25))) as Response,
+      (await server.dispatch(
+        js(1, "await new Promise(() => {})", 25),
+      )) as Response,
     );
     assert.equal(timedOut?.isError, true);
-    assert.match(String(timedOut?.content?.[0]?.text), /js execution timed out/u);
+    assert.match(
+      String(timedOut?.content?.[0]?.text),
+      /js execution timed out/u,
+    );
     const afterTimeout = result(
       (await server.dispatch(js(2, "nodeRepl.write('fresh')"))) as Response,
     );
     assert.deepEqual(afterTimeout?.content, [{ type: "text", text: "fresh" }]);
-    const cancellation = server.dispatch(js(3, "await new Promise(() => {})", 5_000));
+    const cancellation = server.dispatch(
+      js(3, "await new Promise(() => {})", 5_000),
+    );
     await new Promise((resolve) => setTimeout(resolve, 10));
     await server.dispatch({
       jsonrpc: "2.0",
@@ -1044,7 +1086,10 @@ test("idle cancellation tombstones are bounded and retain the newest ids", async
     const state = manager as unknown as {
       cancellationTombstones: Set<string>;
     };
-    assert.equal(state.cancellationTombstones.size, MAX_CANCELLATION_TOMBSTONES);
+    assert.equal(
+      state.cancellationTombstones.size,
+      MAX_CANCELLATION_TOMBSTONES,
+    );
 
     const evicted = await manager.execute("nodeRepl.write('evicted-runs')", {
       requestId: 0,
@@ -1094,7 +1139,10 @@ test("late async callbacks stay in their finished execution context", async () =
   await withServer(async (server) => {
     const first = result(
       (await server.dispatch(
-        js(1, "setTimeout(() => nodeRepl.write('late'), 35); nodeRepl.write('first')"),
+        js(
+          1,
+          "setTimeout(() => nodeRepl.write('late'), 35); nodeRepl.write('first')",
+        ),
       )) as Response,
     );
     assert.deepEqual(first?.content, [{ type: "text", text: "first" }]);
@@ -1108,7 +1156,11 @@ test("late async callbacks stay in their finished execution context", async () =
 
 test("trusted packages use Node resolution, exact binary fetch bytes, TOML serialization, and protected config checks", async () => {
   const directory = await mkdtemp(join(tmpdir(), "cua-node-node-resolution-"));
-  const packageDirectory = join(directory, "node_modules", "conditional-fixture");
+  const packageDirectory = join(
+    directory,
+    "node_modules",
+    "conditional-fixture",
+  );
   const outputPath = join(directory, "output.toml");
   const protectedLink = join(directory, "protected-config.toml");
   const entrypoint = join(packageDirectory, "index.mjs");
@@ -1150,9 +1202,6 @@ test("trusted packages use Node resolution, exact binary fetch bytes, TOML seria
       "export const kind = 'import'; export async function readCommon() { const value = await import('conditional-fixture/common'); return [value.default.kind, value.kind, value.default.bytes].join('|'); } export async function fetchBytes(url) { const response = await nodeRepl.fetch(url, { method: 'POST', body: new Uint8Array([0xaa, 0x00, 0xff, 0x17]).subarray(1) }); return Array.from(new Uint8Array(await response.arrayBuffer())).join(','); } export function writeConfig(path) { return nodeRepl.config.writeToml(path, { title: 'fixture', enabled: true, nested: { count: 2 } }); }\n",
       "utf8",
     );
-    const digest = createHash("sha256")
-      .update(await readFile(entrypoint))
-      .digest("hex");
     await symlink(
       join(process.env.HOME ?? "/tmp", ".codex", "config.toml"),
       protectedLink,
@@ -1171,7 +1220,7 @@ test("trusted packages use Node resolution, exact binary fetch bytes, TOML seria
       runtimeMetadata: null,
       env: {
         NODE_REPL_NODE_MODULE_DIRS: join(directory, "node_modules"),
-        NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S: digest,
+        NODE_REPL_TRUSTED_CODE_PATHS: packageDirectory,
       },
     });
     const mcp = new McpServer({ manager });
@@ -1195,7 +1244,9 @@ test("trusted packages use Node resolution, exact binary fetch bytes, TOML seria
           ),
         )) as Response,
       );
-      assert.deepEqual(fetched?.content, [{ type: "text", text: "4,0,254,25" }]);
+      assert.deepEqual(fetched?.content, [
+        { type: "text", text: "4,0,254,25" },
+      ]);
       const written = result(
         (await mcp.dispatch(
           js(
