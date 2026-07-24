@@ -235,9 +235,12 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
     assert (install_root / "new-marker").is_file()
 
 
-def test_install_preserves_unresolvable_user_node_symlink(tmp_path: Path) -> None:
+def test_install_preserves_unresolvable_user_node_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = tmp_path / "fixture"
     core, cua_node = _fixture_repo(root)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", root)
     payload = tmp_path / "payload"
     assemble_payload(payload, core_root=core, cua_node_root=cua_node)
     home = tmp_path / "home"
