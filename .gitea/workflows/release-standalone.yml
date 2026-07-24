@@ -1,0 +1,95 @@
+name: release standalone
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing standalone-v<VERSION> tag to publish
+        required: true
+
+jobs:
+  release:
+    runs-on: asgard-build-1
+    env:
+      TAG: ${{ inputs.tag }}
+      ARCHIVE: dist/sky-cua-linux-x64-glibc.tar.gz
+    steps:
+      - name: Validate requested tag
+        run: |
+          if [[ ! "$TAG" =~ ^standalone-v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid standalone tag: $TAG" >&2
+            exit 2
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          clean: true
+
+      - name: Verify checked-out tag identity
+        run: |
+          commit="$(git rev-parse HEAD)"
+          tag_commit="$(git rev-list -n 1 "refs/tags/$TAG")"
+          test "$commit" = "$tag_commit"
+          PYTHONPATH=scripts python3 - <<'PY'
+          import os
+          import release_pipeline
+          import standalone_release
+
+          tag_version = release_pipeline.parse_tag(os.environ["TAG"])
+          if tag_version != standalone_release.PRODUCT_VERSION:
+              raise SystemExit(
+                  f"tag version {tag_version!r} does not match source version "
+                  f"{standalone_release.PRODUCT_VERSION!r}"
+              )
+          PY
+          echo "source commit: $commit"
+
+      - name: Preflight build disk space
+        run: |
+          available="$(df --output=avail -B1 . | tail -n 1 | tr -d ' ')"
+          minimum="$((20 * 1024 * 1024 * 1024))"
+          if [ "$available" -lt "$minimum" ]; then
+            echo "release build requires at least 20 GiB free; found $available bytes" >&2
+            exit 1
+          fi
+
+      - name: Prepare verification dependencies
+        working-directory: packages/browser-use
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Sync Python environment
+        run: uv sync --dev
+
+      - name: Verify source
+        run: just verify
+
+      - name: Build standalone archive
+        run: |
+          git diff --exit-code
+          git diff --cached --exit-code
+          python3 install.py build
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -f "$ARCHIVE"
+
+      - name: Validate archive and isolated install
+        run: |
+          python3 scripts/release_pipeline.py validate --archive "$ARCHIVE" --tag "$TAG"
+          python3 scripts/release_pipeline.py smoke-install --archive "$ARCHIVE" --tag "$TAG"
+
+      - name: Publish, read back, and dispatch Saga deployment
+        env:
+          SKY_CUA_GITEA_TOKEN: ${{ secrets.SKY_CUA_GITEA_TOKEN }}
+          GITEA_SERVER_URL: ${{ gitea.server_url }}
+          GITEA_REPOSITORY: ${{ gitea.repository }}
+        run: |
+          python3 scripts/release_pipeline.py publish \
+            --server-url "$GITEA_SERVER_URL" \
+            --repository "$GITEA_REPOSITORY" \
+            --archive "$ARCHIVE" \
+            --tag "$TAG" \
+            --commit "$(git rev-parse HEAD)"

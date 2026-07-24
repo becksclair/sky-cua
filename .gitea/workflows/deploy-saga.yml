@@ -1,0 +1,36 @@
+name: deploy Saga
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published standalone-v<VERSION> release tag
+        required: true
+      archive_sha256:
+        description: Expected SHA-256 of the published archive
+        required: true
+
+jobs:
+  deploy:
+    runs-on: asgard-build-1
+    env:
+      TAG: ${{ inputs.tag }}
+      ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
+    steps:
+      - name: Validate deployment identity
+        run: |
+          if [[ ! "$TAG" =~ ^standalone-v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid standalone tag: $TAG" >&2
+            exit 2
+          fi
+          if [[ ! "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "archive SHA-256 must be 64 lowercase hexadecimal characters" >&2
+            exit 2
+          fi
+
+      - name: Deploy published identity to Saga
+        run: |
+          ssh -o BatchMode=yes saga -- \
+            /opt/homelab/scripts/deploy-sky-cua \
+            "$TAG" \
+            "$ARCHIVE_SHA256"

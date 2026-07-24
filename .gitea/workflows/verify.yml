@@ -1,0 +1,39 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: asgard-build-1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Verify Rust
+        run: just verify-rust
+
+  python:
+    runs-on: asgard-build-1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Build Browser Use client
+        working-directory: packages/browser-use
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Sync Python environment
+        run: uv sync --dev
+
+      - name: Verify Python
+        run: just verify-python
+
+  # Kotlin companion unit tests remain a local gate through `just verify-kotlin`.
+  # The Gitea host runner does not need an Android SDK solely for this workflow.
