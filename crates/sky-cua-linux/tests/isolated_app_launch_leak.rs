@@ -101,9 +101,8 @@ impl LaunchApp {
 /// backend's `hydrate_session_env` can set, so the test cannot leak its sandbox
 /// env into the rest of the process even on a panic. It covers the full
 /// `GRAPHICAL_SESSION_ENV_KEYS` set (what hydration touches — including
-/// `XDG_RUNTIME_DIR`/`XDG_CURRENT_DESKTOP`/`DESKTOP_SESSION`) plus the launch-only
-/// toolkit vars and the cleared-keys signal the test sets; iterating the constant
-/// rather than hand-listing keeps it from drifting if that set grows. Captures
+/// `XDG_RUNTIME_DIR`/`XDG_CURRENT_DESKTOP`/`DESKTOP_SESSION`), `XAUTHORITY`, the
+/// launch-only toolkit vars, and the cleared-keys signal the test sets. Captures
 /// the ORIGINAL `DISPLAY` so the host-absence assertion can query the user's real
 /// display.
 struct EnvRestore {
@@ -143,12 +142,13 @@ impl Drop for EnvRestore {
 }
 
 /// Every key the test mutates or the backend's `hydrate_session_env` can set: the
-/// full graphical-session set plus the launch-only toolkit vars and the
-/// cleared-keys signal. `GRAPHICAL_SESSION_ENV_KEYS` already includes
+/// full graphical-session set plus `XAUTHORITY`, the launch-only toolkit vars,
+/// and the cleared-keys signal. `GRAPHICAL_SESSION_ENV_KEYS` already includes
 /// DISPLAY/XDG_SESSION_TYPE/WAYLAND_DISPLAY/DBUS_SESSION_BUS_ADDRESS/XDG_RUNTIME_DIR/
 /// XDG_CURRENT_DESKTOP/DESKTOP_SESSION.
 fn restorable_env_keys() -> Vec<&'static str> {
     let mut keys: Vec<&'static str> = GRAPHICAL_SESSION_ENV_KEYS.to_vec();
+    keys.push("XAUTHORITY");
     keys.push("QT_QPA_PLATFORM");
     keys.push("GDK_BACKEND");
     keys.push(CLIENT_CLEARED_SESSION_ENV_KEYS_ENV);
@@ -301,6 +301,7 @@ fn isolated_app_launch_leak_guard_keeps_app_off_host() {
     set_var("QT_QPA_PLATFORM", "xcb");
     set_var("GDK_BACKEND", "x11");
     remove_var("WAYLAND_DISPLAY");
+    remove_var("XAUTHORITY");
     // Replicate the daemon's spawn contract: the client tells the isolated daemon
     // which graphical-session keys it deliberately cleared, so the daemon's
     // session-env hydration (LinuxDesktopBackend::new -> hydrate_session_env) does
@@ -417,6 +418,15 @@ fn isolated_app_launch_leak_guard_keeps_app_off_host() {
             .collect::<Vec<_>>()
     );
     assert!(
+        !environ.iter().any(|entry| entry.starts_with("XAUTHORITY=")),
+        "launched {} (pid {pid}) environ must NOT contain XAUTHORITY; got {:?}",
+        app.command(),
+        environ
+            .iter()
+            .filter(|entry| entry.starts_with("XAUTHORITY="))
+            .collect::<Vec<_>>()
+    );
+    assert!(
         environ.iter().any(|entry| entry == "QT_QPA_PLATFORM=xcb"),
         "launched {} (pid {pid}) environ must contain QT_QPA_PLATFORM=xcb so Qt cannot prefer \
          Wayland; got {:?}",
@@ -520,13 +530,16 @@ fn command_on_path(name: &str) -> bool {
 }
 
 /// The JSON array the client passes to the daemon via
-/// `CLIENT_CLEARED_SESSION_ENV_KEYS`, listing the graphical-session keys it
-/// cleared so `hydrate_session_env` will not re-add them from the host session.
+/// `CLIENT_CLEARED_SESSION_ENV_KEYS`, listing the graphical-session and
+/// spawn-only keys it cleared so `hydrate_session_env` will not re-add graphical
+/// values from the host session.
 /// Built by hand (matching `serde_json::to_string(&[&str])`) to avoid a
 /// dev-dependency just for this one string.
 fn cleared_graphical_keys_json() -> String {
     let quoted: Vec<String> = GRAPHICAL_SESSION_ENV_KEYS
         .iter()
+        .copied()
+        .chain(std::iter::once("XAUTHORITY"))
         .map(|key| format!("\"{key}\""))
         .collect();
     format!("[{}]", quoted.join(","))

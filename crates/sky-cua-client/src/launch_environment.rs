@@ -130,15 +130,28 @@ fn probe_desktop_env_vars(remote_or_detached: bool) -> Vec<(String, String)> {
             || (remote_or_detached && GRAPHICAL_SESSION_ENV_KEYS.contains(&key))
     };
 
-    if let Some(session_env) = graphical_session_environment() {
-        for key in GRAPHICAL_SESSION_ENV_KEYS {
-            if should_repair(key)
+    if let Some(session_env) =
+        graphical_session_environment().or_else(graphical_process_environment)
+    {
+        let replacing_display = remote_or_detached
+            && session_env
+                .get("DISPLAY")
+                .is_some_and(|value| !value.trim().is_empty());
+        for key in DESKTOP_LAUNCH_ENV_KEYS {
+            if *key == "PATH" {
+                continue;
+            }
+            if (should_repair(key) || (*key == "XAUTHORITY" && replacing_display))
                 && let Some(value) = session_env
                     .get(*key)
                     .filter(|value| !value.trim().is_empty())
             {
                 push_repaired_var(&mut found, *key, value.clone());
             }
+        }
+        if has_repaired_var(&found, "DISPLAY") {
+            push_repaired_var(&mut found, "NO_AT_BRIDGE", "0");
+            push_repaired_var(&mut found, "ACCESSIBILITY_ENABLED", "1");
         }
     }
 
@@ -332,6 +345,68 @@ fn graphical_session_environment() -> Option<HashMap<String, String>> {
     }
 }
 
+fn graphical_process_environment() -> Option<HashMap<String, String>> {
+    graphical_process_environment_from(Path::new("/proc"), Path::new("/tmp/.X11-unix"))
+}
+
+fn graphical_process_environment_from(
+    proc_root: &Path,
+    x11_socket_root: &Path,
+) -> Option<HashMap<String, String>> {
+    let mut candidates = std::fs::read_dir(proc_root)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
+        .filter_map(|pid| read_process_environ_from(proc_root, pid).map(|env| (pid, env)))
+        .filter(|(_, env)| graphical_process_environment_is_live(env, x11_socket_root))
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(pid, env)| (graphical_process_environment_rank(env), *pid));
+    candidates.pop().map(|(_, env)| env)
+}
+
+fn graphical_process_environment_is_live(
+    environment: &HashMap<String, String>,
+    x11_socket_root: &Path,
+) -> bool {
+    let runtime_ok = environment
+        .get("XDG_RUNTIME_DIR")
+        .is_some_and(|value| Path::new(value).is_dir());
+    let bus_ok = environment
+        .get("DBUS_SESSION_BUS_ADDRESS")
+        .is_some_and(|value| value.starts_with("unix:"));
+    let x11_ok = environment
+        .get("DISPLAY")
+        .and_then(|value| local_x11_display_number(value))
+        .is_some_and(|display| x11_socket_root.join(format!("X{display}")).exists());
+    let wayland_ok = environment
+        .get("WAYLAND_DISPLAY")
+        .zip(environment.get("XDG_RUNTIME_DIR"))
+        .is_some_and(|(display, runtime)| Path::new(runtime).join(display).exists());
+    runtime_ok && bus_ok && (x11_ok || wayland_ok)
+}
+
+fn graphical_process_environment_rank(environment: &HashMap<String, String>) -> usize {
+    DESKTOP_LAUNCH_ENV_KEYS
+        .iter()
+        .filter(|key| {
+            environment
+                .get(**key)
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+        .count()
+}
+
+fn local_x11_display_number(display: &str) -> Option<&str> {
+    let value = display.trim();
+    let value = value
+        .strip_prefix("unix/:")
+        .or_else(|| value.strip_prefix("unix:"))
+        .or_else(|| value.strip_prefix(':'))?;
+    let number = value.split('.').next()?;
+    (!number.is_empty() && number.chars().all(|character| character.is_ascii_digit()))
+        .then_some(number)
+}
+
 fn insert_if_missing_or_empty(environment: &mut HashMap<String, String>, key: &str, value: String) {
     if environment
         .get(key)
@@ -522,7 +597,11 @@ fn logind_session_rank(session: &LogindSession) -> (u8, u8, u8, u8, String) {
 }
 
 fn read_process_environ(pid: u32) -> Option<HashMap<String, String>> {
-    let bytes = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    read_process_environ_from(Path::new("/proc"), pid)
+}
+
+fn read_process_environ_from(proc_root: &Path, pid: u32) -> Option<HashMap<String, String>> {
+    let bytes = std::fs::read(proc_root.join(pid.to_string()).join("environ")).ok()?;
     Some(parse_environ(&bytes))
 }
 
@@ -635,14 +714,13 @@ fn ensure_health_satisfies_desktop_env(
     } else {
         Vec::new()
     };
-    // Health equality is scoped to the graphical-session set. Repaired PATH
-    // is launch-spawn material only (DESKTOP_LAUNCH_ENV_KEYS): every host has
-    // a different PATH, so requiring the daemon's PATH to equal this client's
-    // would make a daemon spawned by one host permanently unhealthy for all
-    // others.
+    // Health equality includes every value this client explicitly repaired
+    // except PATH. Hosts legitimately have divergent PATHs, so requiring the
+    // daemon's PATH to equal this client's would make a daemon spawned by one
+    // host permanently unhealthy for all others.
     for (key, value) in desktop_vars {
         let key = key.as_str();
-        if GRAPHICAL_SESSION_ENV_KEYS.contains(&key) && !value.is_empty() {
+        if key != "PATH" && DESKTOP_LAUNCH_ENV_KEYS.contains(&key) && !value.is_empty() {
             required.retain(|(required_key, _)| *required_key != key);
             required.push((key, value.clone()));
         }
@@ -726,6 +804,49 @@ mod tests {
     use super::*;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn discovers_detached_xpra_graphical_process_environment() {
+        let tmp_path = std::env::temp_dir().join(format!(
+            "sky-cua-xpra-env-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos()
+        ));
+        let proc_root = tmp_path.join("proc");
+        let socket_root = tmp_path.join("x11");
+        let runtime = tmp_path.join("xpra-runtime");
+        fs::create_dir_all(proc_root.join("42")).expect("fake proc pid should be created");
+        fs::create_dir_all(&socket_root).expect("fake X11 socket root should be created");
+        fs::create_dir_all(&runtime).expect("fake Xpra runtime should be created");
+        fs::write(socket_root.join("X100"), b"").expect("fake X11 socket should be created");
+        fs::write(runtime.join("Xauthority"), b"cookie")
+            .expect("fake Xauthority should be created");
+        fs::write(
+            proc_root.join("42/environ"),
+            format!(
+                "DISPLAY=:100\0XAUTHORITY={}\0XDG_RUNTIME_DIR={}\0DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-xpra\0XDG_SESSION_TYPE=x11\0",
+                runtime.join("Xauthority").display(),
+                runtime.display(),
+            ),
+        )
+        .expect("fake process environment should be created");
+
+        let environment = graphical_process_environment_from(&proc_root, &socket_root)
+            .expect("Xpra environment should be selected");
+
+        assert_eq!(environment.get("DISPLAY").map(String::as_str), Some(":100"));
+        assert_eq!(
+            environment.get("XDG_RUNTIME_DIR").map(String::as_str),
+            Some(runtime.to_string_lossy().as_ref())
+        );
+        assert_eq!(local_x11_display_number("unix:100.0"), Some("100"));
+        assert_eq!(local_x11_display_number("unix/:100.0"), Some("100"));
+        assert_eq!(local_x11_display_number("localhost:10.0"), None);
+        fs::remove_dir_all(tmp_path).expect("fake process tree should be removed");
+    }
 
     #[test]
     fn for_isolated_daemon_scopes_health_to_sandbox_graphical_identity() {
@@ -833,6 +954,36 @@ mod tests {
             .expect_err("stale service env should be rejected");
 
         assert!(error.to_string().contains("XDG_RUNTIME_DIR"));
+    }
+
+    #[test]
+    fn startup_health_rejects_service_missing_spawn_only_repairs() {
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env: BTreeMap::from([("DISPLAY".to_string(), ":100".to_string())]),
+            browser_env: BTreeMap::new(),
+            protocol_version: 1,
+            service_version: "0.1.0".to_string(),
+            capabilities: Vec::new(),
+        };
+        let desktop_vars = vec![
+            ("DISPLAY".to_string(), ":100".to_string()),
+            (
+                "XAUTHORITY".to_string(),
+                "/run/user/1000/xpra/Xauthority".to_string(),
+            ),
+            ("NO_AT_BRIDGE".to_string(), "0".to_string()),
+            ("ACCESSIBILITY_ENABLED".to_string(), "1".to_string()),
+        ];
+
+        let error = ensure_health_satisfies_desktop_env(&response, &desktop_vars, false)
+            .expect_err("daemon missing spawn-only repairs should be rejected");
+
+        let detail = error.to_string();
+        assert!(detail.contains("XAUTHORITY"));
+        assert!(detail.contains("NO_AT_BRIDGE"));
+        assert!(detail.contains("ACCESSIBILITY_ENABLED"));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::{
 };
 
 use sky_cua_platform::{
-    CLIENT_CLEARED_SESSION_ENV_KEYS_ENV, CLIENT_SESSION_ENV_REPAIRS_ENV,
+    CLIENT_CLEARED_SESSION_ENV_KEYS_ENV, CLIENT_SESSION_ENV_REPAIRS_ENV, DESKTOP_LAUNCH_ENV_KEYS,
     GRAPHICAL_SESSION_ENV_KEYS,
     model::{DoctorSessionEnvRepair, DoctorSessionEnvReport},
 };
@@ -68,7 +68,7 @@ fn merge_client_launch_repairs(report: &mut DoctorSessionEnvReport) {
     match serde_json::from_str::<Vec<DoctorSessionEnvRepair>>(&raw_repairs) {
         Ok(repairs) => {
             for repair in repairs {
-                if !GRAPHICAL_SESSION_ENV_KEYS.contains(&repair.key.as_str()) {
+                if repair.key == "PATH" || !DESKTOP_LAUNCH_ENV_KEYS.contains(&repair.key.as_str()) {
                     continue;
                 }
                 report.repaired.push(DoctorSessionEnvRepair {
@@ -447,6 +447,16 @@ mod tests {
                 value: Some("wayland".to_string()),
             },
             DoctorSessionEnvRepair {
+                key: "XAUTHORITY".to_string(),
+                source: "ignored".to_string(),
+                value: Some("/run/user/1000/xpra/Xauthority".to_string()),
+            },
+            DoctorSessionEnvRepair {
+                key: "PATH".to_string(),
+                source: "ignored".to_string(),
+                value: Some("/custom/bin:/usr/bin".to_string()),
+            },
+            DoctorSessionEnvRepair {
                 key: "UNRELATED".to_string(),
                 source: "ignored".to_string(),
                 value: Some("nope".to_string()),
@@ -462,10 +472,16 @@ mod tests {
 
         merge_client_launch_repairs(&mut report);
 
-        assert_eq!(report.repaired.len(), 1);
+        assert_eq!(report.repaired.len(), 2);
         assert_eq!(report.repaired[0].key, "XDG_SESSION_TYPE");
         assert_eq!(report.repaired[0].source, "client-launch");
         assert_eq!(report.repaired[0].value.as_deref(), Some("wayland"));
+        assert_eq!(report.repaired[1].key, "XAUTHORITY");
+        assert_eq!(report.repaired[1].source, "client-launch");
+        assert_eq!(
+            report.repaired[1].value.as_deref(),
+            Some("/run/user/1000/xpra/Xauthority")
+        );
     }
 
     #[test]

@@ -25,7 +25,6 @@ LAUNCHER_NAMES = (
     "sky-cua-client",
     "sky-cua-service",
     "sky-cua-overlay-host",
-    "node",
     "node_repl",
     "sky-cua-chrome-host",
 )
@@ -323,11 +322,18 @@ def _replace_symlink(source: Path, destination: Path) -> None:
 
 def _install_launchers(install_root: Path, home: Path) -> tuple[Path, ...]:
     bin_root = home / ".local/bin"
+    legacy_node = bin_root / "node"
+    if legacy_node.is_symlink():
+        try:
+            legacy_target = legacy_node.resolve(strict=False)
+        except RuntimeError:
+            legacy_target = None
+        if legacy_target is not None and legacy_target.is_relative_to(install_root.resolve()):
+            legacy_node.unlink()
     targets = {
         "sky-cua-client": install_root / "bin/sky-cua-client",
         "sky-cua-service": install_root / "bin/sky-cua-service",
         "sky-cua-overlay-host": install_root / "bin/sky-cua-overlay-host",
-        "node": install_root / "bin/node",
         "node_repl": install_root / "bin/node_repl",
         "sky-cua-chrome-host": install_root / "browser/native-host/sky-cua-chrome-host",
     }

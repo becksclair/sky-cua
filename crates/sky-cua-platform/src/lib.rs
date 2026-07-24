@@ -18,11 +18,14 @@ mod overlay_spec_tests;
 /// service processes, and reported in daemon desktop health. Includes `PATH`
 /// because launch repair normalizes and forwards it alongside session vars.
 pub const DESKTOP_LAUNCH_ENV_KEYS: &[&str] = &[
+    "ACCESSIBILITY_ENABLED",
     "DBUS_SESSION_BUS_ADDRESS",
     "DESKTOP_SESSION",
     "DISPLAY",
+    "NO_AT_BRIDGE",
     "PATH",
     "WAYLAND_DISPLAY",
+    "XAUTHORITY",
     "XDG_CURRENT_DESKTOP",
     "XDG_RUNTIME_DIR",
     "XDG_SESSION_TYPE",
@@ -87,8 +90,15 @@ mod env_key_tests {
     }
 
     #[test]
-    fn launch_keys_are_graphical_session_keys_plus_path() {
-        assert!(DESKTOP_LAUNCH_ENV_KEYS.contains(&"PATH"));
+    fn launch_keys_cover_graphical_session_and_spawn_only_keys() {
+        for key in [
+            "ACCESSIBILITY_ENABLED",
+            "NO_AT_BRIDGE",
+            "PATH",
+            "XAUTHORITY",
+        ] {
+            assert!(DESKTOP_LAUNCH_ENV_KEYS.contains(&key));
+        }
         for key in GRAPHICAL_SESSION_ENV_KEYS {
             assert!(
                 DESKTOP_LAUNCH_ENV_KEYS.contains(key),
@@ -97,7 +107,7 @@ mod env_key_tests {
         }
         assert_eq!(
             DESKTOP_LAUNCH_ENV_KEYS.len(),
-            GRAPHICAL_SESSION_ENV_KEYS.len() + 1
+            GRAPHICAL_SESSION_ENV_KEYS.len() + 4
         );
     }
 }

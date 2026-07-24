@@ -31,7 +31,7 @@ ${XDG_DATA_HOME:-~/.local/share}/sky-cua
 The installer projects these stable user-facing surfaces:
 
 - launchers in `~/.local/bin` for `sky-cua-client`, `sky-cua-service`,
-  `sky-cua-overlay-host`, `node`, `node_repl`, and `sky-cua-chrome-host`;
+  `sky-cua-overlay-host`, `node_repl`, and `sky-cua-chrome-host`;
 - Chrome, Chromium, Brave, and Brave Origin native-messaging manifests;
 - `computer-use`, `browser-use`, and `phone-use` skill links for detected
   agent homes;
@@ -58,16 +58,19 @@ From a checkout, `install` runs the same durable build used by
 `out/components/`, and `dist/`. From an extracted archive, the packaged payload
 is already complete and no source build occurs.
 
-The installer validates the payload, copies it into a sibling staging directory,
-and recoverably replaces the fixed destination. The sibling stage is only an
-install transaction; it is not a build directory and does not discard compiler
-caches. A second install converges to the same tree. Replacing the payload also
-removes files that existed only in the previous install, so stale generation
-contents cannot accumulate.
+The installer validates the payload, removes the fixed destination, and copies
+the payload directly into its place before projecting integrations. A second
+install converges to the same tree. Replacing the payload also removes files
+that existed only in the previous install, so stale contents cannot accumulate.
 
 The native-host manifests target the stable `~/.local/bin/sky-cua-chrome-host`
 launcher. The installed standalone payload carries exactly one Chrome extension:
 the latest version selected during build.
+
+The payload retains its private `bin/node` runtime for `node_repl`, but the
+installer does not project it as the user's `~/.local/bin/node`. Upgrading
+removes that legacy launcher only when it is a symlink into the sky-cua install
+root; a user-owned file or unrelated symlink at that path is preserved.
 
 ## Source paths
 

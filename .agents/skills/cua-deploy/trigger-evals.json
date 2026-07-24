@@ -1,18 +1,18 @@
 [
   {
-    "query": "Rebuild the current sky-cua checkout and deploy it into my local Codex environment so the installed MCP runtime uses these changes.",
+    "query": "Install the current sky-cua checkout into the fixed local runtime so Codex and the projected skills use these changes.",
     "should_trigger": true
   },
   {
-    "query": "Deploy the plugin bundle locally for an unreleased development iteration; do not make a release tarball.",
+    "query": "Run the canonical checkout install for an unreleased development iteration; do not separately build a transfer archive.",
     "should_trigger": true
   },
   {
-    "query": "Build a complete immutable sky-cua release tarball for a clean machine and tell me how to activate and verify it there.",
+    "query": "Build the standalone sky-cua tarball for a clean machine and tell me how to install the extracted archive there.",
     "should_trigger": true
   },
   {
-    "query": "Install the existing sky-cua complete-release bundle on another machine and verify its activation without rebuilding it.",
+    "query": "Install an extracted sky-cua-linux-x64-glibc archive on another machine without rebuilding it.",
     "should_trigger": true
   },
   {
@@ -24,7 +24,7 @@
     "should_trigger": true
   },
   {
-    "query": "Rebuild and deploy sky-cua, then sync the repo-local computer-use, browser-use, and phone-use skills into the global agent skill root.",
+    "query": "Install sky-cua from this checkout and confirm its computer-use, browser-use, and phone-use skills were projected.",
     "should_trigger": true
   },
   {
@@ -36,7 +36,7 @@
     "should_trigger": true
   },
   {
-    "query": "Ship this unreleased sky-cua branch: build the plugin, deploy it locally, sync skills, create the semantic commit, and push it.",
+    "query": "Ship this sky-cua branch: run the canonical checkout install, then create the semantic commit and push it.",
     "should_trigger": true
   },
   {

@@ -1,34 +1,52 @@
-# Release package details
+# Standalone package details
 
-Load this reference only when building or installing a self-contained release
-package for a clean target.
+Load this reference only when building or installing the self-contained archive
+for a clean target.
 
-Build the immutable release under `dist/complete-release/` with
-`scripts/build_complete_release.py`. Capture its JSON result, especially
-`release_root`, `release_id`, `manifest_sha256`, and `fat_archive`. Verify the
-release-root `install.py`, `RELEASE.json`, component archives, and fat archive
-before handoff. A target with no checkout extracts the archive and runs:
+## Build
+
+Run from the checkout:
 
 ```bash
-tar xzf sky-cua-<release-id>-linux-x64-glibc.tar.gz
-cd sky-cua-<release-id>
-python3 install.py verify --manifest-sha256 <manifest-sha256>
-python3 install.py install --manifest-sha256 <manifest-sha256>
-python3 install.py verify-activation --manifest-sha256 <manifest-sha256>
+python3 install.py build
 ```
 
-`install` is the single normal activation transaction. It promotes the
-immutable generation, installs native-messaging manifests, replaces known
-mutable compatibility copies with stable links through `current`, drains
-obsolete runtime processes, writes `activation-receipt.json`, and prunes only
-after those steps succeed. `ensure` performs the same repair only when
-artifact-derived verification fails. `verify-activation` is read-only.
+The command owns Browser Use, model-documentation, Node runtime, Rust runtime,
+plugin, skill, and archive construction. It reuses durable outputs beneath
+`target/`, `out/`, and `dist/`; do not prebuild Browser Use or copy the checkout
+to a temporary directory.
 
-Never substitute `scripts/release_generation.py install`; it is an internal
-generation-store primitive and intentionally refuses normal operator use.
-`scripts/package.py` and its generic top-level installer are legacy
-compatibility packaging, not the complete release workflow. Release packaging
-does not deploy the local development runtime or sync global skill links.
+The single output archive is:
 
-For exact package flags and installer options, load
-`command-and-flag-catalog.md`.
+```text
+dist/sky-cua-linux-x64-glibc.tar.gz
+```
+
+Inspect that it contains one top-level `sky-cua-linux-x64-glibc/` tree with
+`install.py`, `RELEASE.json`, stable `bin/` programs, exactly one Chrome/Codex
+extension, Browser client/native host, both Codex plugins and marketplace,
+three skills, documentation, and runtime assets. It must not contain
+`releases/`, `current`, activation receipts, or promotion journals.
+
+## Target install
+
+```bash
+tar xzf sky-cua-linux-x64-glibc.tar.gz
+cd sky-cua-linux-x64-glibc
+python3 install.py install
+```
+
+The artifact validates itself and directly replaces
+`${XDG_DATA_HOME:-~/.local/share}/sky-cua`, then projects stable launchers,
+skills, native messaging manifests, detected host integrations, and the global
+OpenClaw `node_repl` definition. There is no release ID, manifest hash,
+`verify`, `ensure`, `verify-activation`, staging, backup, or rollback command.
+
+OpenClaw separately reconciles `computer-use@openai-bundled` and
+`browser-use@openai-bundled` into each agent Codex home from:
+
+```text
+~/.local/share/sky-cua/codex/openai-bundled/.agents/plugins/marketplace.json
+```
+
+For exact command selection, load `command-and-flag-catalog.md`.

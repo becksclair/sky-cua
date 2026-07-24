@@ -848,10 +848,15 @@ fn configure_launch_environment_env(command: &mut Command, launch_environment: &
     // initialize its platform backends even when the MCP host did not pass
     // them through.
     if launch_environment.detached_graphical_env() {
-        for key in GRAPHICAL_SESSION_ENV_KEYS {
+        let cleared_keys = GRAPHICAL_SESSION_ENV_KEYS
+            .iter()
+            .copied()
+            .chain(std::iter::once("XAUTHORITY"))
+            .collect::<Vec<_>>();
+        for key in &cleared_keys {
             command.env_remove(key);
         }
-        if let Ok(serialized) = serde_json::to_string(GRAPHICAL_SESSION_ENV_KEYS) {
+        if let Ok(serialized) = serde_json::to_string(&cleared_keys) {
             command.env(CLIENT_CLEARED_SESSION_ENV_KEYS_ENV, serialized);
         }
     }
@@ -1207,6 +1212,10 @@ mod tests {
                 vec![
                     ("XDG_RUNTIME_DIR".to_string(), "/run/user/1000".to_string()),
                     ("DISPLAY".to_string(), ":0".to_string()),
+                    (
+                        "XAUTHORITY".to_string(),
+                        "/run/user/1000/xpra/Xauthority".to_string(),
+                    ),
                 ],
                 true,
             );
@@ -1215,6 +1224,10 @@ mod tests {
         configure_launch_environment_env(&mut command, &launch_environment);
 
         assert_eq!(command_env_value(&command, "WAYLAND_DISPLAY"), Some(None));
+        assert_eq!(
+            command_env_value(&command, "XAUTHORITY"),
+            Some(Some(OsStr::new("/run/user/1000/xpra/Xauthority")))
+        );
         assert_eq!(
             command_env_value(&command, "XDG_RUNTIME_DIR"),
             Some(Some(OsStr::new("/run/user/1000")))
@@ -1230,7 +1243,7 @@ mod tests {
             .expect("client launch repairs should be serialized");
         let repairs = serde_json::from_str::<Vec<DoctorSessionEnvRepair>>(raw_repairs)
             .expect("client launch repairs should be valid JSON");
-        assert_eq!(repairs.len(), 2);
+        assert_eq!(repairs.len(), 3);
         assert!(
             repairs
                 .iter()
@@ -1248,6 +1261,25 @@ mod tests {
             serde_json::from_str::<Vec<String>>(raw_cleared).expect("cleared keys should be JSON");
         assert!(cleared.iter().any(|key| key == "DISPLAY"));
         assert!(cleared.iter().any(|key| key == "WAYLAND_DISPLAY"));
+        assert!(cleared.iter().any(|key| key == "XAUTHORITY"));
+    }
+
+    #[test]
+    fn detached_launch_clears_inherited_xauthority_when_selected_display_has_none() {
+        let launch_environment =
+            LaunchEnvironment::from_repaired_desktop_vars_and_detached_for_tests(
+                vec![("DISPLAY".to_string(), ":100".to_string())],
+                true,
+            );
+        let mut command = Command::new("sky-cua-service");
+
+        configure_launch_environment_env(&mut command, &launch_environment);
+
+        assert_eq!(command_env_value(&command, "XAUTHORITY"), Some(None));
+        assert_eq!(
+            command_env_value(&command, "DISPLAY"),
+            Some(Some(OsStr::new(":100")))
+        );
     }
 
     #[test]

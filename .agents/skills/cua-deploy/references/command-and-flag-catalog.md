@@ -1,19 +1,25 @@
-# Command and flag catalog
+# Command catalog
 
-Load only when the selected lane needs a non-default command or exact flag.
+Load only when selecting an exact deployment command.
 
-| Lane | Command | Useful flags |
+| Lane | Command | Result |
 | --- | --- | --- |
-| Local deploy | `python3 scripts/deploy_plugin.py` | `--no-build`, `--symlink`, `--kwin-effect`, `--no-companion`, `--force-companion`, `--refresh-accessibility`, `--local-install-host` |
-| Complete release | `python3 scripts/build_complete_release.py` | `--output-root`, `--core-source`, `--cua-node-component`, `--producer-commit`, `--no-fat-archive` |
-| Target activation | `python3 install.py install --manifest-sha256 <sha256>` | `--store-root`, `--profile`, `--native-messaging-home`, `--bin-dir`, optional `--host` integration flags |
-| Idempotent repair | `python3 install.py ensure --manifest-sha256 <sha256>` | same activation roots/profile/integration flags |
-| Activation proof | `python3 install.py verify-activation --manifest-sha256 <sha256>` | `--store-root`, `--profile`, `--native-messaging-home`, `--bin-dir` |
-| MCP restart | `python3 scripts/install_mcp_server.py` | `--host`, `--restart-runtime`, `--refresh-accessibility`, `--kwin-effect` |
-| Skill sync | `python3 scripts/sync_agent_skills.py` | no lane flags |
-| Freshness | `python3 scripts/deploy_freshness.py` | `--client bin/sky-cua-client` |
+| Checkout build | `python3 install.py build` | Refresh durable outputs and create `dist/sky-cua-linux-x64-glibc.tar.gz` |
+| Checkout install | `python3 install.py install` | Build or refresh durable outputs, then replace the fixed install tree and project integrations |
+| Extracted archive install | `python3 install.py install` | Validate and install the extracted artifact into the fixed tree |
+| MCP restart | `python3 scripts/install_mcp_server.py --host claude-code --restart-runtime` | Refresh the selected standalone MCP runtime without a distribution rebuild |
+| KWin effect | `python3 scripts/install_mcp_server.py --host <host> --kwin-effect` | Refresh the selected MCP installation, then build, install, and reload the KDE agent-cursor effect |
+| Freshness | `python3 scripts/deploy_freshness.py --client ~/.local/share/sky-cua/bin/sky-cua-client` | Compare the installed fixed-root client when a freshness check is specifically needed |
 
-Use deploy `--no-build` only when the existing development bundle is the
-requested input; it does not run the companion build lane. Raw
-`scripts/release_generation.py install` is internal-only. The legacy
-`scripts/package.py` installer is not a complete release activation command.
+The standalone installer exposes no deployment flags or other subcommands.
+Never add release IDs, manifest hashes, generation-store paths, activation
+verification, rollback, staging, host-selector, or marketplace-selector options.
+
+When a global Cargo configuration sets `target-cpu=native` and the target CPU
+cannot run those instructions, a build may use an explicit portable override:
+
+```bash
+RUSTFLAGS=-Ctarget-cpu=x86-64-v3 python3 install.py build
+```
+
+This is a machine-specific build input, not a required install argument.

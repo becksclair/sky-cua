@@ -3,15 +3,30 @@
 Load only for KWin, AT-SPI, OpenClaw reload, stale-deploy checks, or live
 smoke/device testing.
 
-## KWin and accessibility
+## Desktop integration and accessibility
 
-- Add `--kwin-effect` to deploy or install commands only when the KWin
-  agent-cursor effect must be rebuilt/reloaded.
-- `--refresh-accessibility` resets the user AT-SPI registry. It is opt-in and
-  should be used only when the registry is genuinely wedged: the reset wipes
-  every running app’s accessibility registration. Chromium re-registers
-  lazily; GTK apps register eagerly and remain semantically dark until
-  relaunched. sky-cua self-heals a wedged connection on reconnect.
+`install.py` has no KWin or accessibility flags. It projects detected supported
+host integrations as part of the canonical install.
+
+To build, install, and reload the KDE agent-cursor effect, use the selected MCP
+host configuration:
+
+```bash
+python3 scripts/install_mcp_server.py --host <host> --kwin-effect
+```
+
+This refreshes that host's standalone MCP installation before the KWin effect
+step.
+
+Use the installed client for an explicit accessibility repair:
+
+```bash
+~/.local/bin/sky-cua-client setup-accessibility
+```
+
+Restart the affected graphical service or applications only when live evidence
+shows AT-SPI is wedged. Chromium can re-register lazily; GTK applications may
+need relaunching.
 
 ## OpenClaw
 
@@ -29,12 +44,11 @@ Live tests must use binaries built from current Rust sources. Check the local
 client with:
 
 ```bash
-python3 scripts/deploy_freshness.py
+python3 scripts/deploy_freshness.py --client ~/.local/share/sky-cua/bin/sky-cua-client
 ```
 
-For a specific client, add `--client bin/sky-cua-client`. If stale, deploy
-again before running the live test. Set `SKY_CUA_ALLOW_STALE_DEPLOY=1` only
-when intentionally bypassing this gate, and report that bypass.
+If stale, run `python3 install.py install` again before the live test. Do not
+use a generation path as freshness truth.
 
 ## Validation scope
 

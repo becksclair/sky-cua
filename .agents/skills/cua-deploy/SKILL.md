@@ -1,132 +1,117 @@
 ---
 name: cua-deploy
 description: >-
-  Use for sky-cua operational requests in one of four lanes: local plugin
-  deploy/rebuild/install, release package build or target bundle install,
-  standalone MCP runtime restart, or explicitly requested git commit and/or
-  push closeout. Deploy/build/package/install/restart never authorize git
-  actions; commit and push each require explicit wording, and push is an
-  external write. Do not use for Gradle-only Android companion builds,
-  config/skill-sync-only tasks, tests or smokes, reviews, docs, or code changes
-  outside these lanes.
+  Build, package, install, or refresh the standalone fixed-root sky-cua
+  distribution; restart its standalone MCP runtime; or perform an explicitly
+  requested git closeout. Use for checkout installs, clean-target tarball
+  handoffs, and deployment verification. Do not use for tests or smokes alone,
+  reviews, docs-only work, Gradle-only Android builds, or unrelated code changes.
 ---
 
 # cua-deploy
 
-Route the request into the smallest requested sky-cua operational lane. A bare
-“deploy” means local deploy; choose release packaging only when a clean target,
-tarball, or bundle install is requested.
-
-## Mandatory plan contract
-
-Every plan and report must copy the selected lane's exact commands, order, and stop dependency rather than paraphrasing them:
-
-- Local: `python3 scripts/deploy_plugin.py`, then only on success `python3 scripts/sync_agent_skills.py`. The first command already builds, bundles, installs, and refreshes the runtime; never split it.
-- Release: `python3 scripts/build_complete_release.py`, inspect the JSON-selected immutable release and fat archive; target handoff is `tar xzf sky-cua-<release-id>-linux-x64-glibc.tar.gz`, `cd sky-cua-<release-id>`, `python3 install.py install --manifest-sha256 <manifest-sha256>`. This is the only normal machine-activation path. Do not call `scripts/release_generation.py install` or the legacy `scripts/package.py` installer.
-- Standalone restart: exactly `python3 scripts/install_mcp_server.py --host claude-code --restart-runtime`, without build/deploy/package/sync. Do not add `--refresh-accessibility` unless AT-SPI is proven wedged; report that decision.
-- Git: only when explicitly requested, with explicit pathspecs; stop before git writes when the prerequisite lane fails, and never push after a failed deploy or commit.
-
-Always report each exact command's result, unrelated-work preservation, skipped validation/live-smoke gates, and whether commit or push was intentionally not authorized.
-
-## Contract
-
-- Deploy, build, package, install, and restart are local operational actions.
-  None authorizes `git commit` or `git push`.
-- `git commit` requires an explicit request to commit. `git push` requires an
-  explicit request to push. If both are explicitly named, commit first and push
-  only after it succeeds; push is an external write. Never infer either action
-  from “ship”, “release”, “deploy”, or similar wording, and never add automatic
-  git behavior.
-- Preserve unrelated worktree changes. The repository has no marketplace or
-  publish flow.
-
-## Lane router
-
-### Local deploy
-
-For unreleased local iteration, the mandatory sequence is:
+Use the smallest requested operational lane. The supported distribution has one
+mutable install tree and two canonical commands:
 
 ```bash
-# Step 1
-python3 scripts/deploy_plugin.py
-# Step 2, only when step 1 exits successfully
-python3 scripts/sync_agent_skills.py
+python3 install.py build
+python3 install.py install
 ```
 
-This order is normative for unreleased checkout iteration only:
-`deploy_plugin.py` is the development build, bundle, compatibility install,
-and runtime-refresh entrypoint. It is not the immutable release activation
-interface. Do not split it into `build_plugin.py` plus a manual installer. No build, install, or sync command may precede step 1, and
-step 2 must never run before it succeeds. Plans and reports must name both
-exact commands in this order. The sync only replaces the sky-cua-owned global
-skill links. Load
-`references/local-deploy.md` for link ownership, worktree caveats, or local
-deploy behavior; load `references/command-and-flag-catalog.md` for variants;
-load `references/android-phone-companion.md` when the deploy reports companion
-status; load `references/rare-operations.md` for KWin, AT-SPI, freshness, or
-live-smoke details.
+`build` refreshes durable outputs under `target/`, `out/`, and `dist/`, producing
+`dist/sky-cua-linux-x64-glibc.tar.gz`. `install` from a checkout builds or
+refreshes those outputs and then installs them. The same `install.py` inside an
+extracted archive installs that artifact without a checkout build.
 
-### Release package
+## Hard boundaries
 
-For a clean machine, use this exact order:
+- Install only into `${XDG_DATA_HOME:-~/.local/share}/sky-cua`. Do not invent
+  release IDs, generations, `releases/`, a `current` symlink, manifest-hash
+  arguments, activation receipts, staging trees, rollback, or verification
+  subcommands.
+- Do not prebuild Browser Use manually or build in a temporary checkout. Reuse
+  the canonical durable build outputs.
+- Installation validates the artifact, replaces the fixed tree directly, and
+  projects integrations. Do not add backup or power-loss machinery.
+- Build portability overrides such as `RUSTFLAGS=-Ctarget-cpu=x86-64-v3` are
+  allowed when a machine-wide Cargo configuration selects unsupported native
+  CPU instructions. Do not make them part of the artifact contract.
+- Deploy/build/install/restart do not authorize `git commit` or `git push`.
+  Each Git action requires explicit wording. Preserve unrelated work.
+
+## Lanes
+
+### Build a transferable archive
+
+From the checkout:
 
 ```bash
-python3 scripts/build_complete_release.py
-# On the target:
-tar xzf sky-cua-<release-id>-linux-x64-glibc.tar.gz
-cd sky-cua-<release-id>
-python3 install.py install --manifest-sha256 <manifest-sha256>
-python3 install.py verify-activation --manifest-sha256 <manifest-sha256>
+python3 install.py build
 ```
 
-Use the `release_root`, `release_id`, `manifest_sha256`, and `fat_archive`
-reported by the builder; inspect the release and archive before handoff. The
-target command atomically promotes the generation, writes native manifests,
-projects stable commands through `current`, drains stale runtimes, records the
-activation receipt, and only then prunes. `ensure` is the idempotent first-start
-repair command. Raw `release_generation.py install` is internal-only, and the
-legacy `scripts/package.py` package is not a complete activation. Load
-`references/release-package.md` for package evidence and target install;
-`references/command-and-flag-catalog.md` for flags.
+Inspect `dist/sky-cua-linux-x64-glibc.tar.gz`. Load
+`references/release-package.md` for the required artifact shape and target
+handoff.
 
-### Standalone MCP restart
+### Install from a checkout
 
-For an MCP configuration refresh without a full deploy, run:
+Run exactly:
+
+```bash
+python3 install.py install
+```
+
+This is the normal checkout deployment command; do not precede it with a manual
+Browser Use build or the archive build unless the user separately requested an
+archive. Load `references/local-deploy.md` for projected integrations and live
+evidence.
+
+### Install an extracted archive
+
+On the target:
+
+```bash
+tar xzf sky-cua-linux-x64-glibc.tar.gz
+cd sky-cua-linux-x64-glibc
+python3 install.py install
+```
+
+There is no hash argument or follow-up activation command. Validate the fixed
+installed paths and, when requested, the actual host integration.
+
+### Restart a standalone MCP runtime
+
+For a configuration refresh without a full distribution rebuild or deploy. This
+refreshes the standalone MCP installation before restarting its runtime:
 
 ```bash
 python3 scripts/install_mcp_server.py --host claude-code --restart-runtime
 ```
 
-This combined command is the standalone lane; do not replace it with a full
-deploy or split it into unrelated helpers. Do not run skill sync. Load
-`references/command-and-flag-catalog.md` for host/flag variants and
-`references/rare-operations.md` for AT-SPI or OpenClaw reload cases.
+Do not add `--refresh-accessibility` unless AT-SPI is proven wedged. Load
+`references/rare-operations.md` for accessibility or OpenClaw reload cases.
 
-### Explicit git closeout
+### Explicit Git closeout
 
-Use this lane only for explicitly requested commit and/or push work, either
-alone or after a named operational lane. Respect any user-stated dependency
-such as “after deploy succeeds”. Stop if deploy or commit fails; never push
-after a failed prerequisite. Load `references/git-closeout.md`.
+Only when explicitly requested, use scoped pathspecs and preserve unrelated
+changes. If Git closeout depends on a successful deployment, stop on the first
+failed prerequisite. Load `references/git-closeout.md`.
 
-## Stop and evidence
+## Completion evidence
 
-Execute only the selected lane and its required local substeps. If a required
-step fails, stop dependent steps and report the exact failed command; do not
-claim downstream success. Load `references/troubleshooting.md` for a lane
-failure or unexpected result. After success, capture the lane’s concrete evidence:
-installed runtime/result and skill-sync result for local deploy, tarball path
-and shape for release packaging, restart result for MCP refresh, or commit ID
-and push result for git closeout. For restart, report whether accessibility
-refresh was used and which live-smoke gates were not run. Run only narrow checks relevant to the
-request, and state skipped checks and live-smoke gates. Before any live test,
-prove the deployed binary is fresh; load `references/rare-operations.md`.
+Report the exact commands and outcomes. For packaging, report the archive path
+and inspected shape. For installation, verify the fixed root, stable launchers,
+three projected skills, native messaging manifests, and both Codex plugins in
+the local marketplace. When OpenClaw is in scope, verify global `node_repl` uses
+the fixed tree; OpenClaw itself owns per-agent native plugin reconciliation.
 
-## Relevant checks
+For a live OpenClaw acceptance, require the requested provider/model with
+`fallbackUsed=false`, Computer Use on the intended desktop session, and Browser
+Use reporting `extension_native_host` with `isIab=false`. State any live gates
+not run. Load `references/troubleshooting.md` after a failure.
 
-Select only checks relevant to the changed seam: Rust `cargo fmt --check &&
-cargo nextest run`; Python `uv run ruff format --check scripts && uv run ruff
-check scripts && uv run basedpyright && uv run pytest`. A standalone restart
-does not imply source checks. Run broader checks only when shared contracts
-changed or the user asks for them. Packaging also requires inspecting the
-staged bundle shape.
+Relevant source checks remain proportional to changed code: Rust `cargo fmt
+--check && cargo clippy --workspace --all-targets && cargo nextest run`; Python
+`uv run ruff format --check scripts && uv run ruff check scripts && uv run
+basedpyright && uv run pytest`. A pure install or restart does not imply broad
+source validation.

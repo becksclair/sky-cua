@@ -201,10 +201,18 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
     first_report = install_payload(first, home=home, env=env, configure_hosts=False)
     install_root = Path(str(first_report["install_root"]))
     assert (install_root / "old-only-marker").is_file()
+    legacy_node = home / ".local/bin/node"
+    legacy_node.symlink_to(install_root / "bin/node")
 
     second = tmp_path / "second"
     assemble_payload(second, core_root=core, cua_node_root=cua_node)
     _write(second / "new-marker")
+    install_payload(second, home=home, env=env, configure_hosts=False)
+    assert not legacy_node.exists()
+    assert not legacy_node.is_symlink()
+
+    host_node = legacy_node
+    _write(host_node, "#!/bin/sh\nprintf 'host node\\n'\n", executable=True)
     second_report = install_payload(second, home=home, env=env, configure_hosts=False)
 
     assert second_report["install_root"] == str(install_root)
@@ -212,6 +220,7 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
     assert not (install_root / "old-only-marker").exists()
     assert not (install_root / "current").exists()
     assert not (install_root / "releases").exists()
+    assert host_node.read_text(encoding="utf-8") == "#!/bin/sh\nprintf 'host node\\n'\n"
     assert (home / ".local/bin/node_repl").resolve() == install_root / "bin/node_repl"
     for name in standalone_release.SKILL_NAMES:
         assert (home / ".agents/skills" / name).resolve() == install_root / "skills" / name
@@ -224,6 +233,22 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
 
     install_payload(second, home=home, env=env, configure_hosts=False)
     assert (install_root / "new-marker").is_file()
+
+
+def test_install_preserves_unresolvable_user_node_symlink(tmp_path: Path) -> None:
+    root = tmp_path / "fixture"
+    core, cua_node = _fixture_repo(root)
+    payload = tmp_path / "payload"
+    assemble_payload(payload, core_root=core, cua_node_root=cua_node)
+    home = tmp_path / "home"
+    legacy_node = home / ".local/bin/node"
+    legacy_node.parent.mkdir(parents=True)
+    legacy_node.symlink_to("node")
+
+    install_payload(payload, home=home, env={}, configure_hosts=False)
+
+    assert legacy_node.is_symlink()
+    assert legacy_node.readlink() == Path("node")
 
 
 def test_payload_rejects_legacy_browser_use_plugin_alias(

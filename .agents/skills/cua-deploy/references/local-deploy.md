@@ -1,40 +1,35 @@
-# Local deploy details
+# Checkout install details
 
-Load this reference only for the local deploy lane, its skill sync, or a
-worktree/linking question.
+Load this reference only for a checkout install or its projected integrations.
 
-`scripts/deploy_plugin.py` is the unreleased development compatibility lane. It
-installs the built bundle as `sky-cua@local`, points
-the computer-use compatibility plugin at it, and refreshes the installed MCP
-runtime. A normal build-bearing deploy therefore does not need a separate MCP
-restart. It does not create or activate an immutable complete release and must
-not be used as the clean-machine or Codex package activation path. `--no-build`
-installs the existing bundle and skips the companion build lane.
-
-After a successful local deploy, run:
+Run:
 
 ```bash
-python3 scripts/sync_agent_skills.py
+python3 install.py install
 ```
 
-The sync owns only these links:
+From a checkout, this command builds or refreshes the durable distribution
+outputs before installing. Do not run `scripts/deploy_plugin.py`, manually
+prebuild Browser Use, or run a separate skill-sync step.
+
+The fixed install root is:
 
 ```text
-~/.agents/skills/computer-use -> <checkout>/skills/computer-use
-~/.agents/skills/browser-use  -> <checkout>/skills/browser-use
-~/.agents/skills/phone-use    -> <checkout>/skills/phone-use
+${XDG_DATA_HOME:-~/.local/share}/sky-cua
 ```
 
-It replaces only sky-cua-owned links and preserves unrelated skills. It also
-maintains the managed Codex `[[skills.config]]` entries that disable the
-shared-link copies only inside Codex; the plugin-namespaced copies remain
-enabled. Do not remove the global links to fix Codex duplication: other agents
-use them.
+Expected projections include:
 
-The links point to the checkout from which sync ran. If that was a worktree,
-they remain pointed at the worktree; rerun sync from the main checkout to
-repoint them.
+- stable launchers under `~/.local/bin` for the sky-cua client, service,
+  overlay host, `node_repl`, and Chrome native host;
+- `computer-use`, `browser-use`, and `phone-use` skills in detected normal
+  agent skill roots;
+- Chrome, Chromium, and Brave native messaging manifests;
+- the two-plugin `openai-bundled` Codex marketplace in the fixed tree;
+- detected host configuration, including global OpenClaw `node_repl` using the
+  private bundled Node runtime without replacing the user's global `node`.
 
-Build-bearing deploys can rebuild and stage the Android companion before the
-bundle is built. Load `android-phone-companion.md` when the deploy prints a
-`[companion]` status or companion options are requested.
+OpenClaw owns per-agent Codex plugin installation before thread start. A live
+OpenClaw acceptance should show `computer-use.doctor`/`observe` and
+`node_repl.js`, the requested model with no fallback, and Browser Use as
+`extension_native_host` with `isIab=false`.
