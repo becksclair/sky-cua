@@ -1,11 +1,13 @@
 # Plugin deploy and standalone release runbook
 
 Use this runbook for Codex plugin lifecycle work. There are two producer lanes
-and no marketplace publish step:
+and one release pipeline; there is no marketplace publish step:
 
 - `python3 scripts/deploy_plugin.py` — fast local development deploy.
 - `python3 install.py build` and `python3 install.py install` — standalone
   distribution and fixed-root machine install.
+- Gitea `release standalone` — verify, publish the archive as a Gitea Release,
+  read it back, and dispatch the published identity to Saga.
 
 ## Core invariant
 
@@ -124,6 +126,27 @@ root with the same isolated environment. Validate:
 Remove the disposable home after inspection. Do not install, deploy, publish,
 or modify a consumer repository as part of producer validation.
 
+## Publish through Gitea
+
+Push a new version-matching `standalone-v*` tag to trigger
+`.gitea/workflows/release-standalone.yml`. The workflow can also be dispatched
+manually with an existing tag to retry publication or deployment without
+creating different bytes.
+
+The release job runs on `asgard-build-1`, executes the Rust and Python
+verification gates, builds and isolated-installs the standalone archive, and
+publishes exactly the archive plus its `.sha256` sidecar. It reads both
+attachments back before dispatching `.gitea/workflows/deploy-saga.yml` from
+`main`.
+
+Saga receives only the tag and expected digest. Its
+`/opt/homelab/scripts/deploy-sky-cua` hook downloads and validates the public
+release before service downtime, replaces `/home/ubuntu/.local/share/sky-cua`,
+starts Brave/Xpra before OpenClaw, and requires deterministic installed,
+native-host, plugin, service, and gateway health. Redispatch the same tag and
+digest after correcting an operational failure; never overwrite an existing
+release with different bytes.
+
 ## Local Codex config reset
 
 If local-development `~/.codex/config.toml` state is stale, clean only the
@@ -161,5 +184,6 @@ and OpenClaw repositories after the producer artifact is proven.
 ## Related
 
 - [`docs/features/release-package.md`](../features/release-package.md)
+- [`docs/features/gitea-release-and-saga-deployment.md`](../features/gitea-release-and-saga-deployment.md)
 - [`docs/features/one-shot-installer.md`](../features/one-shot-installer.md)
 - [`docs/features/codex-desktop-compat.md`](../features/codex-desktop-compat.md)

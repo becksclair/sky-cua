@@ -400,13 +400,16 @@ def test_dispatch_uses_reviewed_main_workflow_definition() -> None:
     assert expected == (204,)
 
 
-def test_release_workflow_remains_manual_until_cutover() -> None:
+def test_release_workflow_publishes_tags_and_keeps_manual_retry() -> None:
     release_workflow = (REPO_ROOT / ".gitea/workflows/release-standalone.yml").read_text()
     deploy_workflow = (REPO_ROOT / ".gitea/workflows/deploy-saga.yml").read_text()
 
     assert "workflow_dispatch:" in release_workflow
-    assert "push:" not in release_workflow
-    assert "tags:" not in release_workflow
+    assert "push:" in release_workflow
+    assert "tags:" in release_workflow
+    assert "- standalone-v*" in release_workflow
+    assert "${{ inputs.tag || gitea.ref_name }}" in release_workflow
+    assert "RUSTFLAGS: -Ctarget-cpu=x86-64-v3" in release_workflow
     assert "ssh -o BatchMode=yes saga" in deploy_workflow
     assert not (REPO_ROOT / ".github/workflows/verify.yml").exists()
 

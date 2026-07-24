@@ -1,6 +1,9 @@
 name: release standalone
 
 on:
+  push:
+    tags:
+      - standalone-v*
   workflow_dispatch:
     inputs:
       tag:
@@ -11,8 +14,11 @@ jobs:
   release:
     runs-on: asgard-build-1
     env:
-      TAG: ${{ inputs.tag }}
+      TAG: ${{ inputs.tag || gitea.ref_name }}
       ARCHIVE: dist/sky-cua-linux-x64-glibc.tar.gz
+      # The Asgard runner is configured for target-cpu=native. Release bytes
+      # must also run on Saga's older x86-64-v3 CPU.
+      RUSTFLAGS: -Ctarget-cpu=x86-64-v3
     steps:
       - name: Validate requested tag
         run: |
@@ -23,7 +29,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.tag || gitea.ref_name }}
           fetch-depth: 0
           clean: true
 

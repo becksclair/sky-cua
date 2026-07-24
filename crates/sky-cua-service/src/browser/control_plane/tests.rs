@@ -1785,6 +1785,7 @@ async fn in_flight_mutation_restarts_as_recovery_required() {
         .unwrap();
     operation.await.unwrap().unwrap();
     first.flush_persistence();
+    restart.flush_persistence();
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
