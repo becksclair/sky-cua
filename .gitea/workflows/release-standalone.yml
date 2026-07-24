@@ -65,7 +65,9 @@ jobs:
         run: uv sync --dev
 
       - name: Verify source
-        run: just verify
+        run: |
+          just verify-rust
+          just verify-python
 
       - name: Build standalone archive
         run: |
