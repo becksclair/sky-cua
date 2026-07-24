@@ -1,0 +1,16 @@
+{
+  "name": "browser",
+  "version": "1.0.0-sky-cua",
+  "description": "Control Codex Desktop's host-provided in-app browser through the shared sky-cua Browser client.",
+  "license": "MIT",
+  "keywords": ["browser", "iab", "node-repl", "browser-client"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Browser",
+    "shortDescription": "Control the in-app browser",
+    "developerName": "sky-cua",
+    "category": "Engineering",
+    "capabilities": ["Interactive", "Read", "Write"]
+  }
+}

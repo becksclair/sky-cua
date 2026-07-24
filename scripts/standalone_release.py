@@ -20,7 +20,7 @@ PRODUCT_VERSION = "0.1.0"
 ARCHIVE_NAME = f"sky-cua-{TARGET}.tar.gz"
 PAYLOAD_DIR_NAME = f"sky-cua-{TARGET}"
 SKILL_NAMES = ("computer-use", "browser-use", "phone-use")
-PLUGIN_NAMES = ("computer-use", "browser-use")
+PLUGIN_NAMES = ("computer-use", "browser")
 LAUNCHER_NAMES = (
     "sky-cua-client",
     "sky-cua-service",
@@ -159,8 +159,12 @@ def validate_payload(payload_root: Path) -> None:
         "browser/extension/manifest.json",
         "browser/native-host/sky-cua-chrome-host",
         "codex/openai-bundled/.agents/plugins/marketplace.json",
+        "codex/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json",
         "codex/openai-bundled/plugins/computer-use/.mcp.json",
-        "codex/openai-bundled/plugins/browser-use/.mcp.json",
+        "codex/openai-bundled/plugins/browser/.codex-plugin/plugin.json",
+        "codex/openai-bundled/plugins/browser/.mcp.json",
+        "codex/openai-bundled/plugins/browser/scripts/browser-client.mjs",
+        "codex/openai-bundled/plugins/browser/skills/control-in-app-browser/SKILL.md",
         "skills/computer-use/SKILL.md",
         "skills/browser-use/SKILL.md",
         "skills/phone-use/SKILL.md",
@@ -175,6 +179,38 @@ def validate_payload(payload_root: Path) -> None:
     missing = [relative for relative in required if not (payload_root / relative).is_file()]
     if missing:
         raise FileNotFoundError(f"standalone payload is incomplete: {missing}")
+    marketplace_root = payload_root / "codex/openai-bundled"
+    marketplace = json.loads(
+        (marketplace_root / ".agents/plugins/marketplace.json").read_text(encoding="utf-8")
+    )
+    plugins = marketplace.get("plugins")
+    if not isinstance(plugins, list) or [
+        plugin.get("name") for plugin in plugins if isinstance(plugin, dict)
+    ] != list(PLUGIN_NAMES):
+        raise ValueError(f"standalone Codex marketplace must expose exactly {list(PLUGIN_NAMES)}")
+    for plugin_name, plugin in zip(PLUGIN_NAMES, plugins, strict=True):
+        expected_path = f"./plugins/{plugin_name}"
+        source = plugin.get("source")
+        if not isinstance(source, dict) or source != {
+            "source": "local",
+            "path": expected_path,
+        }:
+            raise ValueError(f"standalone Codex plugin {plugin_name} must use {expected_path}")
+        plugin_root = marketplace_root / "plugins" / plugin_name
+        plugin_manifest = json.loads(
+            (plugin_root / ".codex-plugin/plugin.json").read_text(encoding="utf-8")
+        )
+        if plugin_manifest.get("name") != plugin_name:
+            raise ValueError(f"standalone Codex plugin manifest name does not match {plugin_name}")
+    plugin_dirs = sorted(
+        path.name
+        for path in (marketplace_root / "plugins").iterdir()
+        if path.is_dir() and not path.is_symlink()
+    )
+    if plugin_dirs != sorted(PLUGIN_NAMES):
+        raise ValueError(
+            f"standalone Codex plugin tree must contain exactly {sorted(PLUGIN_NAMES)}"
+        )
     forbidden = ("releases", "current", "activation-receipt.json", "promotion-journal.json")
     present = [name for name in forbidden if (payload_root / name).exists()]
     if present:
@@ -395,6 +431,12 @@ def _install_openclaw_node_repl(
     command_env = os.environ.copy()
     command_env.update(env)
     command_env["HOME"] = str(home)
+    projected_bin = (home / ".local/bin").resolve()
+    command_env["PATH"] = os.pathsep.join(
+        entry
+        for entry in command_env.get("PATH", "").split(os.pathsep)
+        if entry and Path(entry).expanduser().resolve() != projected_bin
+    )
     result = runner(
         [
             openclaw,

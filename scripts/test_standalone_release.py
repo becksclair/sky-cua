@@ -31,12 +31,57 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
         "packages/browser-use/build/browser-client.mjs",
         "resources/codex-compat/openai-bundled/.agents/plugins/marketplace.json",
         "resources/codex-compat/openai-bundled/plugins/computer-use/.mcp.json",
-        "resources/codex-compat/openai-bundled/plugins/browser-use/.mcp.json",
+        "resources/codex-compat/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json",
+        "resources/codex-compat/openai-bundled/plugins/browser/.mcp.json",
+        "resources/codex-compat/openai-bundled/plugins/browser/.codex-plugin/plugin.json",
+        "resources/codex-compat/openai-bundled/plugins/browser/scripts/browser-client.mjs",
+        "resources/codex-compat/openai-bundled/plugins/browser/skills/control-in-app-browser/SKILL.md",
         "resources/model-documentation/README.md",
         "scripts/_codex_app_server.py",
         "install.py",
     ):
         _write(root / relative, "{}\n" if relative.endswith(".json") else "fixture\n")
+    _write(
+        root / "resources/codex-compat/openai-bundled/.agents/plugins/marketplace.json",
+        json.dumps(
+            {
+                "name": "openai-bundled",
+                "plugins": [
+                    {
+                        "name": "computer-use",
+                        "source": {"source": "local", "path": "./plugins/computer-use"},
+                    },
+                    {
+                        "name": "browser",
+                        "source": {"source": "local", "path": "./plugins/browser"},
+                    },
+                ],
+            }
+        ),
+    )
+    _write(
+        root
+        / "resources/codex-compat/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json",
+        json.dumps({"name": "computer-use", "version": "test"}),
+    )
+    _write(
+        root / "resources/codex-compat/openai-bundled/plugins/browser/.codex-plugin/plugin.json",
+        json.dumps({"name": "browser", "version": "test"}),
+    )
+    _write(
+        root
+        / "resources/codex-compat/openai-bundled/plugins/browser/skills/control-in-app-browser/SKILL.md",
+        (
+            "setupBrowserRuntime\n"
+            'entry.type === "iab"\n'
+            'entry.transport === "host_provided_iab"\n'
+            "extension_native_host\n"
+        ),
+    )
+    _write(
+        root / "resources/codex-compat/openai-bundled/plugins/browser/scripts/browser-client.mjs",
+        "const semanticPath = release?.paths?.browser_client;\nsetupBrowserRuntime;\n",
+    )
     for name in standalone_release.SKILL_NAMES:
         _write(root / f"skills/{name}/SKILL.md", f"# {name}\n")
     _write(root / "out/components/model-documentation/README.md", "# model docs\n")
@@ -108,6 +153,37 @@ def test_build_owns_generated_inputs_and_emits_one_fixed_archive(
         names = set(bundle.getnames())
     assert f"{PAYLOAD_DIR_NAME}/bin/node_repl" in names
     assert f"{PAYLOAD_DIR_NAME}/codex/openai-bundled/plugins/computer-use/.mcp.json" in names
+    assert f"{PAYLOAD_DIR_NAME}/codex/openai-bundled/plugins/browser/.mcp.json" in names
+    assert (
+        f"{PAYLOAD_DIR_NAME}/codex/openai-bundled/plugins/browser/scripts/browser-client.mjs"
+        in names
+    )
+    assert not any(
+        name.startswith(f"{PAYLOAD_DIR_NAME}/codex/openai-bundled/plugins/browser-use/")
+        for name in names
+    )
+    marketplace = json.loads(
+        (payload / "codex/openai-bundled/.agents/plugins/marketplace.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [plugin["name"] for plugin in marketplace["plugins"]] == [
+        "computer-use",
+        "browser",
+    ]
+    browser_plugin = payload / "codex/openai-bundled/plugins/browser"
+    plugin_manifest = json.loads(
+        (browser_plugin / ".codex-plugin/plugin.json").read_text(encoding="utf-8")
+    )
+    assert plugin_manifest["name"] == "browser"
+    skill = (browser_plugin / "skills/control-in-app-browser/SKILL.md").read_text(encoding="utf-8")
+    assert "setupBrowserRuntime" in skill
+    assert 'entry.type === "iab"' in skill
+    assert 'entry.transport === "host_provided_iab"' in skill
+    assert "extension_native_host" in skill
+    adapter = (browser_plugin / "scripts/browser-client.mjs").read_text(encoding="utf-8")
+    assert "paths?.browser_client" in adapter
+    assert "setupBrowserRuntime" in adapter
 
 
 def test_install_replaces_one_tree_and_projects_stable_paths(
@@ -150,6 +226,23 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
     assert (install_root / "new-marker").is_file()
 
 
+def test_payload_rejects_legacy_browser_use_plugin_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    core, cua_node = _fixture_repo(repo)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", repo)
+    payload = tmp_path / "payload"
+    assemble_payload(payload, core_root=core, cua_node_root=cua_node)
+    _write(payload / "codex/openai-bundled/plugins/browser-use/.mcp.json", "{}\n")
+
+    with pytest.raises(
+        ValueError,
+        match="standalone Codex plugin tree must contain exactly",
+    ):
+        standalone_release.validate_payload(payload)
+
+
 def test_install_rejects_incomplete_payload_before_replacing_fixed_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -184,7 +277,11 @@ def test_detected_hosts_receive_native_plugins_and_hash_free_openclaw_definition
     home = tmp_path / "home"
     (home / ".codex").mkdir(parents=True)
     (home / ".openclaw").mkdir(parents=True)
-    env = {"HOME": str(home), "XDG_DATA_HOME": str(tmp_path / "xdg-data")}
+    env = {
+        "HOME": str(home),
+        "XDG_DATA_HOME": str(tmp_path / "xdg-data"),
+        "PATH": f"{home}/.local/bin:/usr/bin",
+    }
     plugin_calls: list[str] = []
     monkeypatch.setattr(
         standalone_release,
@@ -193,13 +290,13 @@ def test_detected_hosts_receive_native_plugins_and_hash_free_openclaw_definition
             plugin_calls.extend(standalone_release.PLUGIN_NAMES) or standalone_release.PLUGIN_NAMES
         ),
     )
-    openclaw_calls: list[list[str]] = []
+    openclaw_calls: list[tuple[list[str], dict[str, Any]]] = []
 
     def fake_which(name: str) -> str | None:
         return f"/usr/bin/{name}" if name in {"codex", "openclaw"} else None
 
-    def fake_run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        openclaw_calls.append(command)
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        openclaw_calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, 0, "", "")
 
     report = install_payload(
@@ -210,11 +307,13 @@ def test_detected_hosts_receive_native_plugins_and_hash_free_openclaw_definition
         runner=fake_run,
     )
 
-    assert plugin_calls == ["computer-use", "browser-use"]
-    assert report["codex_plugins"] == ["computer-use", "browser-use"]
+    assert plugin_calls == ["computer-use", "browser"]
+    assert report["codex_plugins"] == ["computer-use", "browser"]
     assert report["openclaw_node_repl"] is True
-    definition = json.loads(openclaw_calls[0][-1])
-    assert openclaw_calls[0][1:4] == ["mcp", "set", "node_repl"]
+    openclaw_command, openclaw_kwargs = openclaw_calls[0]
+    definition = json.loads(openclaw_command[-1])
+    assert openclaw_command[1:4] == ["mcp", "set", "node_repl"]
+    assert openclaw_kwargs["env"]["PATH"] == "/usr/bin"
     assert "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S" not in definition["env"]
     assert definition["command"].endswith("/sky-cua/bin/node_repl")
     for skill_root in (home / ".codex/skills", home / ".openclaw/skills"):

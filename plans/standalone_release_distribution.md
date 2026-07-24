@@ -33,9 +33,10 @@ activation, or verification commands in the normal path.
 Codex Desktop and OpenClaw use the fixed installed paths. They do not pin a
 release, commit, SHA, component tree, Browser client, marketplace manifest, or
 plugin bytes. They do not copy a sky-cua release into their own package. Native
-Codex `plugin/install` remains the mechanism that copies and enables the two
-plugins in each Codex home; consumers treat a successful native install request
-as authoritative instead of re-reading and hashing the result.
+Codex `plugin/install` remains the generic host integration request. Codex
+Desktop owns projection of the fixed producer directories into its active
+bundled marketplace because its built-in marketplace wins same-name inventory;
+consumers do not re-read and hash producer bytes as a separate trust framework.
 
 Observable success is:
 
@@ -46,11 +47,12 @@ Observable success is:
   `~/.local/share/sky-cua`, plus working stable launchers, native-host registration,
   plugins, and skills;
 - installing a second artifact replaces that tree, with no retained generations;
-- unchanged Codex Desktop and OpenClaw builds consume the replacement without a
-  repin or source edit; and
+- Codex Desktop projects the fixed producer roots and OpenClaw consumes the
+  replacement without a release repin or producer-byte hash framework; and
 - live Computer Use and external-extension Browser Use calls succeed through
-  Codex Desktop and through an OpenClaw Codex-harness agent with model fallback
-  disabled or explicitly reported as unused.
+  OpenClaw, while Codex Desktop selects the same shared client's task-scoped
+  `host_provided_iab` Browser; model fallback is disabled or explicitly
+  reported as unused.
 
 ## Progress
 
@@ -237,10 +239,14 @@ Observable success is:
   that file by SHA. Any package-manager integrity or compliance hashes unrelated
   to release selection remain out of scope.
 
-- Decision: let native Codex installation be authoritative.
-  Rationale: consumers call `plugin/install` with the fixed local marketplace
-  path for `computer-use` and `browser-use`. They do not call `plugin/read` merely
-  to attest the copy, hash cache trees, or maintain custom provenance state.
+- Decision: expose exact native plugin roots and let each consumer's native
+  ownership seam be authoritative.
+  Rationale: the producer installer requests `plugin/install` for
+  `computer-use` and `browser` from the fixed marketplace. Codex Desktop
+  projects those exact producer directories into its active bundled marketplace
+  because the built-in marketplace owns same-name inventory. Neither path calls
+  `plugin/read` merely to attest the copy, hashes cache trees, or maintains
+  custom provenance state.
 
 - Decision: preserve OpenClaw's required ownership behavior without preserving
   its verifier framework.
@@ -335,7 +341,7 @@ The target installed layout is stable and intentionally boring:
         openai-bundled/
           .agents/plugins/marketplace.json
           plugins/computer-use/
-          plugins/browser-use/
+          plugins/browser/
       skills/
         computer-use/
         browser-use/
@@ -501,7 +507,7 @@ Work, performed only in a dedicated task rooted at
   `plugin/installed`, and MCP-status proof in
   `extensions/codex/src/app-server/managed-native-plugins.ts` with a small
   single-flight function that derives the fixed marketplace manifest path and
-  sends `plugin/install` for `computer-use` and `browser-use` before thread start.
+  sends `plugin/install` for `computer-use` and `browser` before thread start.
 - Keep exact compatibility identities in policy/tests, but take plugin versions
   from the marketplace and do not hard-code or compare them in OpenClaw.
 - Preserve only the Codex projection rule that filters OpenClaw's global
@@ -638,13 +644,14 @@ sibling Codex `codex-rs/app-server/src/request_processors/plugins.rs` and
 The exact plugin identities remain:
 
     computer-use@openai-bundled  -> MCP computer-use
-    browser-use@openai-bundled   -> MCP node_repl
+    browser@openai-bundled       -> MCP node_repl
 
-Browser Use remains the OpenClaw-specific external Chrome/Chromium extension
-transport using `extension_native_host`. It is not IAB and has no
-`host_provided_iab`, Electron nativePipe, Playwright-launched browser, or
-codex-desktop dependency. OpenClaw's separately configured global `node_repl`
-MCP remains available outside the Codex harness.
+OpenClaw's use of the shared Browser client remains the external
+Chrome/Chromium extension transport using `extension_native_host`; it is not
+relabeled as IAB. Codex Desktop uses the same shared client but must select the
+task-scoped `type="iab"` plus `transport="host_provided_iab"` backend.
+OpenClaw's separately configured global `node_repl` MCP remains available
+outside the Codex harness.
 
 Checksums that are intrinsic to third-party package managers, lockfiles, extension
 IDs, APK signing, SBOMs, or unrelated compliance records are not part of this

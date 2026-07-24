@@ -4,18 +4,25 @@
 tool surfaces. Downstream packagers — primarily the codex-desktop repo — may
 materialize compatibility plugin roots that present sky-cua under other
 plugin identities (for example the OpenAI built-in IDs
-`computer-use@openai-bundled` and `browser-use@openai-bundled`). This
+`computer-use@openai-bundled` and `browser@openai-bundled`). This
 document is the contract those wrappers can rely on.
+
+The standalone fixed-root distribution owns ready-to-install roots for those
+two identities at
+`${XDG_DATA_HOME:-~/.local/share}/sky-cua/codex/openai-bundled/plugins/`.
+Its marketplace is
+`codex/openai-bundled/.agents/plugins/marketplace.json`. Consumers should
+project or install `plugins/browser/` exactly; `plugins/browser-use/` is not a
+compatibility alias.
 
 Ownership split, decided 2026-06-11:
 
-- sky-cua owns behavior: the MCP server, tool surfaces, skills, runtime
-  binaries, and this payload contract. sky-cua is tested as sky-cua and never
-  ships under another plugin identity from this repo.
-- codex-desktop owns impersonation/materialization: bundling the sky-cua
-  payload, generating plugin cache roots whose `.codex-plugin/plugin.json`
-  matches the built-in plugin IDs Codex Desktop expects, enabling those IDs
-  in `~/.codex/config.toml`, and keeping materialized roots valid for an
+- sky-cua owns behavior and producer bytes: the MCP server, shared Browser
+  client, tool surfaces, skills, runtime binaries, fixed-root
+  `computer-use`/`browser` plugin directories, and this payload contract.
+- codex-desktop owns materialization: projecting those fixed-root plugin
+  directories into the active bundled marketplace/cache shape, enabling the
+  IDs in `~/.codex/config.toml`, and keeping materialized roots valid for an
   unpatched Codex CLI.
 
 ## Payload layout
@@ -115,6 +122,14 @@ A materialized compat plugin is an ordinary Codex plugin directory:
 ├── .mcp.json                   # server definition pointing at the payload
 └── skills/                     # copied or symlinked from sky-cua skills/
 ```
+
+For `browser@openai-bundled`, the fixed-root producer directory also contains
+`scripts/browser-client.mjs`. The adapter resolves the shared
+`RELEASE.json` `paths.browser_client` file and exports
+`setupBrowserRuntime`. Its routing skill selects only an entry with
+`type === "iab"` and `transport === "host_provided_iab"` for Codex Desktop.
+The same shared client retains its separate `extension_native_host` lane for
+OpenClaw and other external Chrome-family consumers.
 
 Rules for the generator (lives in codex-desktop, not here):
 

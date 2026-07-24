@@ -17,10 +17,10 @@
       "category": "Productivity"
     },
     {
-      "name": "browser-use",
+      "name": "browser",
       "source": {
         "source": "local",
-        "path": "./plugins/browser-use"
+        "path": "./plugins/browser"
       },
       "policy": {
         "installation": "AVAILABLE",

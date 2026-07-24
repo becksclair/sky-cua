@@ -3,7 +3,7 @@
 ## Status
 
 Shipped for Linux x86-64 glibc. Last verified against the standalone producer
-implementation on 2026-07-22.
+implementation on 2026-07-24.
 
 ## Summary
 
@@ -35,11 +35,21 @@ The installer projects these stable user-facing surfaces:
 - Chrome, Chromium, Brave, and Brave Origin native-messaging manifests;
 - `computer-use`, `browser-use`, and `phone-use` skill links for detected
   agent homes;
-- native Codex compatibility plugins when Codex is detected;
+- fixed-root Codex compatibility plugins `computer-use@openai-bundled` and
+  `browser@openai-bundled`, plus native install requests when Codex is detected;
 - the global OpenClaw `node_repl` registration when OpenClaw is detected.
 
 Consumer configuration points at stable paths under the fixed root. It does not
 pin an artifact hash or trust a Browser client by hash.
+
+The installed Codex marketplace is
+`codex/openai-bundled/.agents/plugins/marketplace.json`. Its Browser source is
+`codex/openai-bundled/plugins/browser/`; there is no `browser-use` plugin alias.
+That plugin carries a `scripts/browser-client.mjs` adapter which resolves the
+shared client through the `RELEASE.json` `paths.browser_client` semantic path.
+The shared client accepts Codex Desktop's task-scoped
+`type="iab"`/`transport="host_provided_iab"` backend and retains the distinct
+`extension_native_host` transport used by non-IAB consumers.
 
 ## Behavior
 
@@ -74,8 +84,9 @@ uv run pytest scripts/test_standalone_release.py
 
 The focused tests use disposable `HOME` and `XDG_DATA_HOME` values. They prove
 fixed-root replacement, stable launcher and native-manifest targets, skill links,
-idempotence, stale-file removal, and detected Codex/OpenClaw calls without a
-Browser trust-hash environment contract.
+idempotence, stale-file removal, the exact `computer-use`/`browser` marketplace
+inventory, the Browser client adapter and IAB routing skill, and detected
+Codex/OpenClaw calls without a Browser trust-hash environment contract.
 
 Clean-artifact validation extracts
 `dist/sky-cua-linux-x64-glibc.tar.gz` into a disposable directory and invokes:

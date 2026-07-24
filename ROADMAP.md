@@ -135,12 +135,12 @@ Open boxes link to the active ExecPlan that owns the work.
 - [ ] Codex Desktop compat materialization contract (decided 2026-06-11:
       sky-cua owns behavior; the codex-desktop repo owns impersonation and
       materialization of the OpenAI built-in plugin identities —
-      `computer-use@openai-bundled`, `browser-use@openai-bundled` — by
+      `computer-use@openai-bundled`, `browser@openai-bundled` — by
       generating plugin cache roots that point at the packaged sky-cua
       implementation)
   - [x] sky-cua side: stable wrapper-friendly plugin assets (`.mcp.json`
-        server definitions, `skills/computer-use/SKILL.md`,
-        `skills/browser-use/SKILL.md`, assets/docs)
+        server definitions, the Browser `scripts/browser-client.mjs` adapter,
+        IAB routing skill, assets/docs)
   - [x] sky-cua side: MCP server runs from a copied/symlinked packaged
         location, not only the dev checkout (symlink-safe `bin/` launchers,
         exe-sibling service resolution, exe-ancestor app-instructions root)

@@ -12,8 +12,11 @@ and no marketplace publish step:
 Keep exactly one active `computer-use` MCP server. Local development retains
 the compat-first `computer-use@openai-bundled` projection with
 `sky-cua@local` as its disabled payload carrier. Standalone distribution ships
-native compatibility plugins and lets the consumer repositories own their
-final enablement and convergence.
+native `computer-use@openai-bundled` and `browser@openai-bundled` plugins and
+lets consumer repositories own their final enablement and convergence. The
+Browser plugin source is the fixed-root
+`codex/openai-bundled/plugins/browser/` directory; do not add or project a
+`browser-use` plugin alias.
 
 Keep one enabled copy of each bundled sky-cua skill. The standalone installer
 projects `computer-use`, `browser-use`, and `phone-use` from the fixed installed
@@ -107,6 +110,11 @@ For an extracted artifact, use the packaged `install.py` from its extraction
 root with the same isolated environment. Validate:
 
 - install root equals `$XDG_DATA_HOME/sky-cua`;
+- `RELEASE.json` resolves `paths.codex_marketplace` and
+  `paths.browser_client` to files under that root;
+- the marketplace entries are exactly `computer-use` and `browser`, and
+  `plugins/browser/scripts/browser-client.mjs` exports the shared
+  `setupBrowserRuntime` adapter;
 - all launcher symlinks resolve under that root;
 - native-host manifests target the stable launcher;
 - the payload has one `browser/extension/manifest.json` tree;
