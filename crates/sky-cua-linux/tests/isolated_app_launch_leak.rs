@@ -21,8 +21,8 @@
 //!   1. is PRESENT on the sandbox display `:N`,
 //!   2. is ABSENT from the user's real (host) display, and
 //!   3. carries the sandbox markers in `/proc/<pid>/environ` — `DISPLAY=:N`,
-//!      no `WAYLAND_DISPLAY`, `QT_QPA_PLATFORM=xcb`, and the private sandbox
-//!      `DBUS_SESSION_BUS_ADDRESS`.
+//!      no `WAYLAND_DISPLAY`, `QT_QPA_PLATFORM=xcb`, xpra's `XAUTHORITY`, and
+//!      the private sandbox `DBUS_SESSION_BUS_ADDRESS`.
 //!
 //! The OTHER half — that the sandbox env recipe itself is correct (i.e. that
 //! `WAYLAND_DISPLAY` is removed and `QT_QPA_PLATFORM=xcb`/`GDK_BACKEND=x11` are
@@ -281,6 +281,13 @@ fn isolated_app_launch_leak_guard_keeps_app_off_host() {
         guard.teardown();
         panic!("throwaway display {display} never became ready: {error}");
     });
+    let sandbox_xauthority = match provider {
+        DisplayProvider::Xpra => Some(xpra_xauthority(&display).unwrap_or_else(|error| {
+            guard.teardown();
+            panic!("could not resolve Xpra XAUTHORITY for {display}: {error}");
+        })),
+        DisplayProvider::Xvfb => None,
+    };
 
     // Apply the FULL sandbox env to THIS process (mirroring the isolated
     // daemon's spawn_env / removed_env). launch_application inherits the process
@@ -301,7 +308,10 @@ fn isolated_app_launch_leak_guard_keeps_app_off_host() {
     set_var("QT_QPA_PLATFORM", "xcb");
     set_var("GDK_BACKEND", "x11");
     remove_var("WAYLAND_DISPLAY");
-    remove_var("XAUTHORITY");
+    match sandbox_xauthority.as_deref() {
+        Some(xauthority) => set_var("XAUTHORITY", xauthority),
+        None => remove_var("XAUTHORITY"),
+    }
     // Replicate the daemon's spawn contract: the client tells the isolated daemon
     // which graphical-session keys it deliberately cleared, so the daemon's
     // session-env hydration (LinuxDesktopBackend::new -> hydrate_session_env) does
@@ -417,15 +427,30 @@ fn isolated_app_launch_leak_guard_keeps_app_off_host() {
             .filter(|entry| entry.starts_with("WAYLAND_DISPLAY="))
             .collect::<Vec<_>>()
     );
-    assert!(
-        !environ.iter().any(|entry| entry.starts_with("XAUTHORITY=")),
-        "launched {} (pid {pid}) environ must NOT contain XAUTHORITY; got {:?}",
-        app.command(),
-        environ
-            .iter()
-            .filter(|entry| entry.starts_with("XAUTHORITY="))
-            .collect::<Vec<_>>()
-    );
+    match sandbox_xauthority.as_deref() {
+        Some(xauthority) => assert!(
+            environ
+                .iter()
+                .any(|entry| entry == &format!("XAUTHORITY={xauthority}")),
+            "launched {} (pid {pid}) environ must contain Xpra's \
+             XAUTHORITY={xauthority}; got {:?}",
+            app.command(),
+            environ
+                .iter()
+                .filter(|entry| entry.starts_with("XAUTHORITY="))
+                .collect::<Vec<_>>()
+        ),
+        None => assert!(
+            !environ.iter().any(|entry| entry.starts_with("XAUTHORITY=")),
+            "launched {} (pid {pid}) environ must not invent XAUTHORITY for unauthenticated Xvfb; \
+             got {:?}",
+            app.command(),
+            environ
+                .iter()
+                .filter(|entry| entry.starts_with("XAUTHORITY="))
+                .collect::<Vec<_>>()
+        ),
+    }
     assert!(
         environ.iter().any(|entry| entry == "QT_QPA_PLATFORM=xcb"),
         "launched {} (pid {pid}) environ must contain QT_QPA_PLATFORM=xcb so Qt cannot prefer \
@@ -687,6 +712,25 @@ fn xdpyinfo_reachable(display: &str) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+/// Read the Xauthority path used by Xpra's Xorg server. This mirrors the
+/// production isolated-desktop handle, which must explicitly forward the
+/// display's credential after detached launch setup clears inherited values.
+fn xpra_xauthority(display: &str) -> Result<String, String> {
+    let output = Command::new("xpra")
+        .arg("info")
+        .arg(display)
+        .output()
+        .map_err(|error| format!("running xpra info: {error}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .filter_map(|line| line.split_once('='))
+        .find_map(|(key, value)| {
+            (key.trim() == "env.XAUTHORITY" && !value.trim().is_empty())
+                .then(|| value.trim().to_string())
+        })
+        .ok_or_else(|| "xpra info did not report a non-empty env.XAUTHORITY".to_string())
 }
 
 /// Bounded poll until a window owned by `pid` (via `_NET_WM_PID`) appears on

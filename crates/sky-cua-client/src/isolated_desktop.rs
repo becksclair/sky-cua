@@ -39,9 +39,10 @@ use owned_bus::{
 // unqualified and so the public-API types keep their existing visibility.
 pub use probe::{DisplayGeometry, IsolatedDesktopDependencies};
 use probe::{
-    XPRA_INFO_DBUS_ADDRESS_KEY, ensure_dependencies, first_free_display_number,
-    parse_display_number, parse_resolution, parse_xdpyinfo_dimensions,
-    parse_xpra_info_dbus_address, read_x_lock_names, xpra_list_has_live_display,
+    XPRA_INFO_DBUS_ADDRESS_KEY, XPRA_INFO_XAUTHORITY_KEY, ensure_dependencies,
+    first_free_display_number, parse_display_number, parse_resolution, parse_xdpyinfo_dimensions,
+    parse_xpra_info_dbus_address, parse_xpra_info_xauthority, read_x_lock_names,
+    xpra_list_has_live_display,
 };
 
 /// Bounded poll budget waiting for `xdpyinfo` to reach a freshly started
@@ -74,6 +75,8 @@ pub struct IsolatedDesktopHandle {
     geometry: DisplayGeometry,
     /// The sandbox `DBUS_SESSION_BUS_ADDRESS` the isolated daemon runs under.
     dbus_address: String,
+    /// The Xauthority file used by xpra's Xorg server.
+    xauthority: String,
     /// The isolated daemon's IPC socket path
     /// (`$XDG_RUNTIME_DIR/sky-cua/service-isolated-<N>.sock`).
     socket_path: PathBuf,
@@ -124,7 +127,8 @@ impl IsolatedDesktopHandle {
             // its `dbus-daemon` is still alive. Erroring (rather than guessing) is
             // the safe floor: an unset bus would let the daemon fall back to the
             // user's real session bus.
-            let dbus_address = match xpra_info_dbus_address(&display)? {
+            let (xpra_dbus_address, xauthority) = xpra_info_environment(&display)?;
+            let dbus_address = match xpra_dbus_address {
                 Some(address) => address,
                 None => recover_owned_bus(display_number).ok_or_else(|| {
                     anyhow!(
@@ -144,6 +148,7 @@ impl IsolatedDesktopHandle {
                 display,
                 geometry,
                 dbus_address,
+                xauthority,
                 socket_path,
                 owns_bus: false,
             });
@@ -155,7 +160,7 @@ impl IsolatedDesktopHandle {
         // fails, the just-started xpra session (and its `/tmp/.X<N>-lock`) would
         // be orphaned with no handle to reap it — the exact host residue this
         // feature exists to avoid. Tear it back down before propagating the error.
-        let (geometry, dbus_address, owns_bus, bus_child) =
+        let (geometry, dbus_address, xauthority, owns_bus, bus_child) =
             match finish_session_bringup(&display, expected) {
                 Ok(values) => values,
                 Err(error) => {
@@ -181,6 +186,7 @@ impl IsolatedDesktopHandle {
             display,
             geometry,
             dbus_address,
+            xauthority,
             socket_path,
             owns_bus,
         })
@@ -210,7 +216,12 @@ impl IsolatedDesktopHandle {
     /// helper it spawns) lands on the private X11 desktop with the private
     /// session bus and the isolated socket.
     pub fn spawn_env(&self) -> Vec<(String, String)> {
-        build_spawn_env(&self.display, &self.dbus_address, &self.socket_path)
+        build_spawn_env(
+            &self.display,
+            &self.dbus_address,
+            &self.xauthority,
+            &self.socket_path,
+        )
     }
 
     /// Environment variables to **remove** on the isolated daemon. Clearing
@@ -388,7 +399,12 @@ pub fn stop(cfg: &ResolvedIsolatedDesktop) -> Result<String> {
 
 /// Build the daemon spawn environment for the given display, sandbox bus, and
 /// isolated socket. Pure so it can be unit-tested without a real xpra.
-fn build_spawn_env(display: &str, dbus_address: &str, socket_path: &Path) -> Vec<(String, String)> {
+fn build_spawn_env(
+    display: &str,
+    dbus_address: &str,
+    xauthority: &str,
+    socket_path: &Path,
+) -> Vec<(String, String)> {
     let codex_socket_path = socket_path.with_extension("codex-browser.sock");
     vec![
         ("DISPLAY".to_string(), display.to_string()),
@@ -399,6 +415,7 @@ fn build_spawn_env(display: &str, dbus_address: &str, socket_path: &Path) -> Vec
             "DBUS_SESSION_BUS_ADDRESS".to_string(),
             dbus_address.to_string(),
         ),
+        ("XAUTHORITY".to_string(), xauthority.to_string()),
         (
             "SKY_CUA_SERVICE_SOCKET_PATH".to_string(),
             socket_path.to_string_lossy().into_owned(),
@@ -607,13 +624,14 @@ fn start_xpra_desktop(
 fn finish_session_bringup(
     display: &str,
     expected: Option<DisplayGeometry>,
-) -> Result<(DisplayGeometry, String, bool, Option<Child>)> {
+) -> Result<(DisplayGeometry, String, String, bool, Option<Child>)> {
     wait_for_display(display)?;
     let geometry = read_settled_geometry(display, expected)?;
     // Primary path: xpra's own default dbus launch records the sandbox bus
     // address in `xpra info`. Fall back to a client-owned dbus-daemon only if
     // xpra did not provide one.
-    let (dbus_address, owns_bus, bus_child) = match xpra_info_dbus_address(display)? {
+    let (xpra_dbus_address, xauthority) = xpra_info_environment(display)?;
+    let (dbus_address, owns_bus, bus_child) = match xpra_dbus_address {
         Some(address) => (address, false, None),
         None => {
             let (address, child) = start_owned_session_bus().context(
@@ -623,7 +641,7 @@ fn finish_session_bringup(
             (address, true, Some(child))
         }
     };
-    Ok((geometry, dbus_address, owns_bus, bus_child))
+    Ok((geometry, dbus_address, xauthority, owns_bus, bus_child))
 }
 
 /// Bounded-poll `xdpyinfo` until the display is reachable. No fixed sleep.
@@ -753,8 +771,10 @@ fn xpra_list_output() -> Result<String> {
     Ok(text)
 }
 
-/// Read the sandbox session-bus address xpra recorded for `display`, if any.
-fn xpra_info_dbus_address(display: &str) -> Result<Option<String>> {
+/// Read the sandbox session-bus address and Xauthority file xpra recorded for
+/// `display`. The authority is required because detached launch setup clears
+/// inherited graphical credentials before applying this isolated environment.
+fn xpra_info_environment(display: &str) -> Result<(Option<String>, String)> {
     let output = Command::new("xpra")
         .arg("info")
         .arg(display)
@@ -762,7 +782,10 @@ fn xpra_info_dbus_address(display: &str) -> Result<Option<String>> {
         .output()
         .with_context(|| format!("failed to run xpra info on {display}"))?;
     let text = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_xpra_info_dbus_address(&text))
+    let xauthority = parse_xpra_info_xauthority(&text).ok_or_else(|| {
+        anyhow!("xpra info on {display} did not report a non-empty {XPRA_INFO_XAUTHORITY_KEY}")
+    })?;
+    Ok((parse_xpra_info_dbus_address(&text), xauthority))
 }
 
 /// Stop the xpra session on `display`. A failure to stop (for example because
@@ -844,6 +867,7 @@ mod tests {
         let env = build_spawn_env(
             ":100",
             "unix:path=/tmp/dbus-abc,guid=deadbeef",
+            "/run/user/1000/xpra/Xauthority",
             Path::new("/run/user/1000/sky-cua/service-isolated-100.sock"),
         );
         let lookup = |key: &str| {
@@ -859,6 +883,7 @@ mod tests {
             lookup("DBUS_SESSION_BUS_ADDRESS"),
             Some("unix:path=/tmp/dbus-abc,guid=deadbeef")
         );
+        assert_eq!(lookup("XAUTHORITY"), Some("/run/user/1000/xpra/Xauthority"));
         assert_eq!(
             lookup("SKY_CUA_SERVICE_SOCKET_PATH"),
             Some("/run/user/1000/sky-cua/service-isolated-100.sock")

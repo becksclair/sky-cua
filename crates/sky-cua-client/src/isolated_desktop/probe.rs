@@ -13,6 +13,8 @@ use anyhow::{Context, Result, bail};
 /// xpra `info` key carrying the sandbox session-bus address under xpra's
 /// default dbus launch. Confirmed by the Milestone 1b spike.
 pub(super) const XPRA_INFO_DBUS_ADDRESS_KEY: &str = "dbus.env.DBUS_SESSION_BUS_ADDRESS";
+/// xpra `info` key carrying the Xauthority file used by its Xorg server.
+pub(super) const XPRA_INFO_XAUTHORITY_KEY: &str = "env.XAUTHORITY";
 
 /// Settled virtual-display geometry, read after the server stops reporting the
 /// transient startup mode.
@@ -247,6 +249,25 @@ pub(super) fn parse_xpra_info_dbus_address(output: &str) -> Option<String> {
     None
 }
 
+/// Parse the Xauthority file used by the xpra server from `xpra info` output.
+/// The isolated daemon must inherit this exact value or X clients cannot
+/// authenticate to the private display.
+pub(super) fn parse_xpra_info_xauthority(output: &str) -> Option<String> {
+    for line in output.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != XPRA_INFO_XAUTHORITY_KEY {
+            continue;
+        }
+        let value = value.trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,6 +359,18 @@ env.DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
             parse_xpra_info_dbus_address("dbus.env.DBUS_SESSION_BUS_ADDRESS=\n"),
             None
         );
+    }
+
+    #[test]
+    fn isolated_desktop_parses_xpra_info_xauthority() {
+        assert_eq!(
+            parse_xpra_info_xauthority(
+                "env.DISPLAY=:100\nenv.XAUTHORITY=/run/user/1000/xpra/Xauthority\n"
+            ),
+            Some("/run/user/1000/xpra/Xauthority".to_string())
+        );
+        assert_eq!(parse_xpra_info_xauthority("env.XAUTHORITY=\n"), None);
+        assert_eq!(parse_xpra_info_xauthority("env.DISPLAY=:100\n"), None);
     }
 
     #[test]

@@ -78,7 +78,7 @@ impl LaunchEnvironment {
     ) -> Self {
         let repaired_desktop_vars = spawn_env
             .iter()
-            .filter(|(key, _)| GRAPHICAL_SESSION_ENV_KEYS.contains(&key.as_str()))
+            .filter(|(key, _)| DESKTOP_LAUNCH_ENV_KEYS.contains(&key.as_str()))
             .filter(|(key, _)| !removed_env.contains(&key.as_str()))
             .cloned()
             .collect();
@@ -862,6 +862,10 @@ mod tests {
                 "unix:path=/tmp/dbus-sandbox".to_string(),
             ),
             (
+                "XAUTHORITY".to_string(),
+                "/run/user/1000/xpra/Xauthority".to_string(),
+            ),
+            (
                 "SKY_CUA_SERVICE_SOCKET_PATH".to_string(),
                 "/run/user/1000/sky-cua/service-isolated-131.sock".to_string(),
             ),
@@ -883,6 +887,10 @@ mod tests {
             env.repaired_desktop_var("DBUS_SESSION_BUS_ADDRESS"),
             Some("unix:path=/tmp/dbus-sandbox")
         );
+        assert_eq!(
+            env.repaired_desktop_var("XAUTHORITY"),
+            Some("/run/user/1000/xpra/Xauthority")
+        );
 
         // WAYLAND_DISPLAY is removed on the daemon, so it must NOT become a
         // health expectation even though it is a graphical key — this exclusion
@@ -890,8 +898,9 @@ mod tests {
         // run without Wayland).
         assert_eq!(env.repaired_desktop_var("WAYLAND_DISPLAY"), None);
 
-        // Non-graphical sandbox vars are launch material, not health identity, so
-        // they are excluded from the required set.
+        // Toolkit and socket vars outside DESKTOP_LAUNCH_ENV_KEYS are launch
+        // material, not health identity, so they are excluded from the required
+        // set.
         assert_eq!(env.repaired_desktop_var("QT_QPA_PLATFORM"), None);
         assert_eq!(env.repaired_desktop_var("GDK_BACKEND"), None);
         assert_eq!(
