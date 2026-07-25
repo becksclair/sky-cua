@@ -95,7 +95,7 @@ afterEach(() => {
 
 describe("@heliasar/sky-cua/phone", () => {
   test("keeps the root Computer facade unchanged and the Phone singleton lazy", () => {
-    expect(Object.keys(sky)).toEqual(["activate_window", "click", "drag", "get_screenshot", "move", "press_key", "scroll", "type_text"]);
+    expect(Object.keys(sky)).toEqual(["activate_window", "appshot_capture", "click", "drag", "get_screenshot", "move", "press_key", "scroll", "type_text"]);
     expect(typeof phone.connect).toBe("function");
     expect(Object.keys(phone)).toEqual([
       "request", "status", "list_devices", "pair_wireless", "connect", "bind", "observe",

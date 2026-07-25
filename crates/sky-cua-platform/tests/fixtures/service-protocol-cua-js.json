@@ -60,6 +60,7 @@
             "enum": [
               "action.held_key",
               "action.post_action_sleep_ms",
+              "appshot_capture.v1",
               "linux.activate_window",
               "linux.click",
               "linux.click.button",
@@ -112,6 +113,7 @@
       "capabilities": [
         "action.held_key",
         "action.post_action_sleep_ms",
+        "appshot_capture.v1",
         "linux.activate_window",
         "linux.click",
         "linux.click.button",
@@ -179,7 +181,8 @@
         "activate_window"
       ],
       "forbidden_for": [
-        "health"
+        "health",
+        "appshot_capture"
       ],
       "cancel_turn_fields_are_context_equivalent": true,
       "session_id_and_turn_id_must_be_non_empty": true,
@@ -556,6 +559,46 @@
       "additionalProperties": false,
       "idempotency": "idempotent_set"
     },
+    "appshot_capture": {
+      "type": "object",
+      "required": ["type", "request_id"],
+      "properties": {
+        "type": { "const": "appshot_capture" },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?!\\.)[A-Za-z0-9._-]+$"
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "window_id": { "type": "string", "minLength": 1 },
+            "pid": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+            "tty": { "type": "string", "minLength": 1 },
+            "terminal_pid": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+            "terminal_command": { "type": "string", "minLength": 1 },
+            "terminal_cwd": { "type": "string", "minLength": 1 },
+            "app_id": { "type": "string", "minLength": 1 },
+            "wm_class": { "type": "string", "minLength": 1 },
+            "title": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false,
+          "minProperties": 1
+        },
+        "frontmost": { "type": "boolean", "default": false },
+        "flags": {
+          "type": "object",
+          "properties": {
+            "include_ax_text": { "type": "boolean", "default": true }
+          },
+          "additionalProperties": false
+        }
+      },
+      "selector": { "exactly_one_of": ["target", "frontmost=true"] },
+      "additionalProperties": false,
+      "idempotency": "idempotent_read"
+    },
     "cancel_turn": {
       "type": "object",
       "required": [
@@ -685,6 +728,51 @@
       },
       "additionalProperties": false
     },
+    "appshot_capture": {
+      "type": "object",
+      "required": ["type", "result"],
+      "properties": {
+        "type": { "const": "appshot_capture" },
+        "result": {
+          "type": "object",
+          "required": [
+            "request_id", "application", "image", "ax_status",
+            "capture_scope", "capture_backend", "diagnostics"
+          ],
+          "properties": {
+            "request_id": { "type": "string", "minLength": 1 },
+            "application": { "type": "object" },
+            "image": {
+              "type": "object",
+              "required": ["path", "mime_type", "size_bytes", "dimensions"],
+              "properties": {
+                "path": { "type": "string", "minLength": 1 },
+                "mime_type": { "enum": ["image/png", "image/jpeg", "image/webp"] },
+                "size_bytes": { "type": "integer", "minimum": 1 },
+                "dimensions": {
+                  "type": "object",
+                  "required": ["width", "height"],
+                  "properties": {
+                    "width": { "type": "integer", "minimum": 1 },
+                    "height": { "type": "integer", "minimum": 1 }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "ax_status": { "enum": ["available", "empty", "unavailable"] },
+            "ax_text": { "type": ["string", "null"] },
+            "capture_scope": { "const": "window" },
+            "capture_backend": { "type": "string", "minLength": 1 },
+            "image_backend": { "type": ["string", "null"] },
+            "display": { "type": ["object", "null"] },
+            "diagnostics": { "type": "array" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "cancel_turn": {
       "type": "object",
       "required": [
@@ -725,7 +813,6 @@
       "type": "object",
       "required": [
         "type",
-        "ok",
         "code",
         "message"
       ],
@@ -902,6 +989,7 @@
       "drag": "non_idempotent_mutation",
       "get_screenshot": "idempotent_read",
       "activate_window": "idempotent_set",
+      "appshot_capture": "idempotent_read",
       "move": "idempotent_set",
       "press_key": "non_idempotent_mutation",
       "scroll": "non_idempotent_mutation",
@@ -932,6 +1020,7 @@
   "compatibility": {
     "linux_methods": [
       "activate_window",
+      "appshot_capture",
       "click",
       "drag",
       "get_screenshot",

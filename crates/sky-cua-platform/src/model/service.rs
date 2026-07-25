@@ -13,9 +13,10 @@ use super::browser::BrowserRequestContext;
 use super::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AgentCursorCapabilities,
     AgentCursorState, AppInfo, AppSelector, AppStateSnapshot, BrowserRequest, BrowserResponse,
-    BrowserSessionIdentity, CaptureScreenMode, DiagnosticEntry, DisplayTarget, DoctorReport,
-    EnvironmentInfo, InputBackendKind, PhoneRequest, PhoneResponse, SessionPresenceIntent,
-    SessionPresenceStatus, WindowInfo, WindowTarget, WindowTargetingSetupReport,
+    BrowserSessionIdentity, CaptureBackendKind, CaptureScope, CaptureScreenMode, DiagnosticEntry,
+    DisplayRef, DisplayTarget, DoctorReport, EnvironmentInfo, InputBackendKind, PhoneRequest,
+    PhoneResponse, PixelSize, SessionPresenceIntent, SessionPresenceStatus, WindowInfo,
+    WindowTarget, WindowTargetingSetupReport,
 };
 
 pub const CUA_SERVICE_PROTOCOL_VERSION: u32 = 1;
@@ -23,11 +24,13 @@ pub const CUA_SERVICE_VERSION: &str = "0.1.0";
 pub const CUA_SERVICE_MAX_DEADLINE_MS: u32 = 30_000;
 pub const CUA_SERVICE_DEFAULT_MOUSE_SIZE_PX: u32 = 12;
 pub const BROWSER_CONTROL_CAPABILITY_V1: &str = "browser_control.v1";
+pub const APPSHOT_CAPTURE_CAPABILITY_V1: &str = "appshot_capture.v1";
 const BROWSER_CONTROL_MODE_CAPABILITY_PREFIX: &str = "browser_control.mode=";
 
 pub const CUA_SERVICE_CAPABILITIES: &[&str] = &[
     "action.held_key",
     "action.post_action_sleep_ms",
+    APPSHOT_CAPTURE_CAPABILITY_V1,
     "linux.activate_window",
     "linux.click",
     "linux.click.button",
@@ -48,6 +51,74 @@ pub const CUA_SERVICE_CAPABILITIES: &[&str] = &[
     "turn.cancel",
 ];
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AppShotCaptureFlags {
+    #[serde(default = "default_true")]
+    pub include_ax_text: bool,
+}
+
+impl Default for AppShotCaptureFlags {
+    fn default() -> Self {
+        Self {
+            include_ax_text: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AppShotAccessibilityStatus {
+    Available,
+    Empty,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AppShotApplication {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_file_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AppShotImage {
+    pub path: String,
+    pub mime_type: String,
+    pub size_bytes: u64,
+    pub dimensions: PixelSize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AppShotCaptureResult {
+    pub request_id: String,
+    pub application: AppShotApplication,
+    pub image: AppShotImage,
+    pub ax_status: AppShotAccessibilityStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ax_text: Option<String>,
+    pub capture_scope: CaptureScope,
+    pub capture_backend: CaptureBackendKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_backend: Option<CaptureBackendKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<DisplayRef>,
+    #[serde(default)]
+    pub diagnostics: Vec<DiagnosticEntry>,
+}
+
 #[must_use]
 pub fn cua_service_capabilities() -> Vec<String> {
     CUA_SERVICE_CAPABILITIES
@@ -67,9 +138,11 @@ pub fn cua_service_capabilities_for_input_backend(backend: &InputBackendKind) ->
     CUA_SERVICE_CAPABILITIES
         .iter()
         .filter(|capability| {
-            ((**capability == "linux.activate_window" || **capability == "linux.get_screenshot")
-                || !capability.starts_with("linux.")
-                || supports_linux_input)
+            (**capability != APPSHOT_CAPTURE_CAPABILITY_V1 || cfg!(target_os = "linux"))
+                && ((**capability == "linux.activate_window"
+                    || **capability == "linux.get_screenshot")
+                    || !capability.starts_with("linux.")
+                    || supports_linux_input)
                 && (**capability != "linux.scroll.pixels"
                     || *backend == InputBackendKind::PortalRemoteDesktop)
         })
@@ -450,6 +523,16 @@ pub enum ServiceRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         display_target: Option<DisplayTarget>,
     },
+    #[serde(rename = "appshot_capture")]
+    AppShotCapture {
+        request_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<WindowTarget>,
+        #[serde(default)]
+        frontmost: bool,
+        #[serde(default)]
+        flags: AppShotCaptureFlags,
+    },
     ResetPortalTokens,
     AgentCursorStatus,
     SetAgentCursor {
@@ -515,6 +598,7 @@ impl ServiceRequest {
             | Self::FocusedWindow
             | Self::GetAppState { .. }
             | Self::Screenshot { .. }
+            | Self::AppShotCapture { .. }
             | Self::AgentCursorStatus
             | Self::SetAgentCursor { .. }
             | Self::HideAgentCursor { .. }
@@ -637,6 +721,10 @@ pub enum ServiceResponse {
     },
     Screenshot {
         snapshot: Box<AppStateSnapshot>,
+    },
+    #[serde(rename = "appshot_capture")]
+    AppShotCapture {
+        result: Box<AppShotCaptureResult>,
     },
     ResetPortalTokens {
         cleared: bool,
@@ -1021,6 +1109,32 @@ mod tests {
 
         assert_eq!(rendered["type"], "screenshot");
         assert!(rendered.get("display_target").is_none());
+    }
+
+    #[test]
+    fn appshot_capture_contract_round_trips() {
+        let request = ServiceRequest::AppShotCapture {
+            request_id: "composer-request-1".to_string(),
+            target: Some(WindowTarget {
+                window_id: Some("kwin:42".to_string()),
+                ..Default::default()
+            }),
+            frontmost: false,
+            flags: AppShotCaptureFlags {
+                include_ax_text: false,
+            },
+        };
+        let rendered = serde_json::to_value(&request).expect("AppShot request serializes");
+        assert_eq!(rendered["type"], "appshot_capture");
+        assert_eq!(rendered["request_id"], "composer-request-1");
+        assert_eq!(rendered["target"]["window_id"], "kwin:42");
+        assert_eq!(rendered["flags"]["include_ax_text"], false);
+        assert!(rendered.get("frontmost").is_some());
+        assert_eq!(
+            serde_json::from_value::<ServiceRequest>(rendered).expect("AppShot round trip"),
+            request
+        );
+        assert!(request.is_idempotent());
     }
 
     #[test]

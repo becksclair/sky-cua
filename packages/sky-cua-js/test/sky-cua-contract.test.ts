@@ -61,7 +61,7 @@ async function expectReject(operation: Promise<unknown>, code: string): Promise<
 function actionResponse(
   request: Exclude<
     ServiceRequest,
-    { type: "health" | "get_screenshot" | "activate_window" | "cancel_turn" }
+    { type: "health" | "get_screenshot" | "activate_window" | "appshot_capture" | "cancel_turn" }
   >
 ): ActionResponse {
   return {
@@ -82,6 +82,7 @@ describe("@heliasar/sky-cua public contract", () => {
     try {
       expect(Object.keys(sky)).toEqual([
         "activate_window",
+        "appshot_capture",
         "click",
         "drag",
         "get_screenshot",
@@ -973,7 +974,7 @@ describe("Node 24 release surface", () => {
     expect(result.exitCode).toBe(1);
     expect(rerun.exitCode).toBe(0);
     expect(new TextDecoder().decode(rerun.stdout)).toEqual(
-      "[\"activate_window\",\"click\",\"drag\",\"get_app_state\",\"list_apps\",\"perform_secondary_action\",\"press_key\",\"scroll\",\"select_text\",\"set_value\",\"type_text\"]\n"
+      "[\"activate_window\",\"appshot_capture\",\"click\",\"drag\",\"get_app_state\",\"list_apps\",\"perform_secondary_action\",\"press_key\",\"scroll\",\"select_text\",\"set_value\",\"type_text\"]\n"
     );
   });
 });

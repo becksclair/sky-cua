@@ -96,6 +96,23 @@ pub fn approvals_path() -> io::Result<PathBuf> {
     Ok(sky_cua_state_dir()?.join("approvals.json"))
 }
 
+#[must_use]
+pub fn appshot_artifacts_dir() -> PathBuf {
+    runtime_artifacts_root().join("appshots")
+}
+
+#[must_use]
+pub fn capture_artifacts_dir() -> PathBuf {
+    runtime_artifacts_root().join("captures")
+}
+
+fn runtime_artifacts_root() -> PathBuf {
+    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
+        return runtime_dir.join("sky-cua");
+    }
+    std::env::temp_dir().join(format!("sky-cua-uid-{}", current_uid()))
+}
+
 #[cfg(unix)]
 fn current_uid() -> u32 {
     // SAFETY: `geteuid` is a simple libc query with no preconditions.

@@ -145,6 +145,24 @@ function defaultResponse(request: TransportRequest): TransportResponse {
           diagnostics: []
         }
       };
+    case "appshot_capture":
+      return {
+        type: "appshot_capture",
+        result: {
+          request_id: request.request_id,
+          application: { name: "Fixture", window_id: "fixture-window" },
+          image: {
+            path: "/tmp/appshot.webp",
+            mime_type: "image/webp",
+            size_bytes: 1,
+            dimensions: { width: 1, height: 1 }
+          },
+          ax_status: "empty",
+          capture_scope: "window",
+          capture_backend: "portal_pipe_wire",
+          diagnostics: []
+        }
+      };
     default:
       return {
         type: request.type,

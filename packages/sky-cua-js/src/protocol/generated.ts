@@ -133,6 +133,18 @@ export type ActivateWindowRequest = {
   context?: RequestContext;
 };
 
+export type AppShotCaptureFlags = {
+  include_ax_text?: boolean;
+};
+
+export type AppShotCaptureRequest = {
+  type: "appshot_capture";
+  request_id: string;
+  target?: WindowTarget;
+  frontmost?: boolean;
+  flags?: AppShotCaptureFlags;
+};
+
 export type ServiceRequest =
   | HealthRequest
   | ClickRequest
@@ -143,9 +155,11 @@ export type ServiceRequest =
   | ScrollRequest
   | TypeTextRequest
   | ActivateWindowRequest
+  | AppShotCaptureRequest
   | CancelTurnRequest;
 
 export type CuaJsCapability =
+  | "appshot_capture.v1"
   | "action.held_key"
   | "action.post_action_sleep_ms"
   | "linux.activate_window"
@@ -233,7 +247,54 @@ export type ActivateWindowResponse = {
   outcome: WindowActionOutcome;
 };
 
-export type ServiceErrorCode =
+export type AppShotAccessibilityStatus = "available" | "empty" | "unavailable";
+
+export type CaptureBackendKind =
+  | "portal_pipe_wire"
+  | "portal_screenshot"
+  | "x11"
+  | "windows_gdi"
+  | "none";
+
+export type DisplayRef = {
+  display_id: string;
+  name?: string;
+  index: number;
+  primary: boolean;
+  backend: string;
+};
+
+export type AppShotCaptureResult = {
+  request_id: string;
+  application: {
+    name: string;
+    app_id?: string;
+    desktop_file_id?: string;
+    pid?: number;
+    window_id?: string;
+    window_title?: string;
+  };
+  image: {
+    path: string;
+    mime_type: "image/png" | "image/jpeg" | "image/webp";
+    size_bytes: number;
+    dimensions: { width: number; height: number };
+  };
+  ax_status: AppShotAccessibilityStatus;
+  ax_text?: string;
+  capture_scope: "window";
+  capture_backend: CaptureBackendKind;
+  image_backend?: CaptureBackendKind;
+  display?: DisplayRef;
+  diagnostics: WindowActionDiagnostic[];
+};
+
+export type AppShotCaptureResponse = {
+  type: "appshot_capture";
+  result: AppShotCaptureResult;
+};
+
+export type CuaJsServiceErrorCode =
   | "SKY_CUA_SERVICE_RESTART_REQUIRED"
   | "SKY_CUA_SERVICE_DISCONNECTED"
   | "SKY_CUA_PROTOCOL_UNSUPPORTED"
@@ -250,6 +311,31 @@ export type ServiceErrorCode =
   | "SKY_CUA_TARGET_UNAVAILABLE"
   | "SKY_CUA_INTERNAL";
 
+export type BackendServiceErrorCode =
+  | "UnsupportedEnvironment"
+  | "PortalUnavailable"
+  | "PortalCapabilityMissing"
+  | "PortalApprovalPending"
+  | "PortalRequestDenied"
+  | "CaptureBackendDowngraded"
+  | "CaptureSourceGeometryMissing"
+  | "CaptureFrameBlank"
+  | "PipeWireUnavailable"
+  | "PipeWireStreamFailed"
+  | "AccessibilityUnavailable"
+  | "AccessibilityCoverageLimited"
+  | "SnapshotStale"
+  | "ActionRequiresPhysicalInput"
+  | "ActionUnsupportedForEnvironment"
+  | "ServiceUnavailable"
+  | "InvalidRequest"
+  | "CuaActionOutcomeUnknown"
+  | "NotImplemented"
+  | "Internal"
+  | "DesktopRequestDeadlineExceeded";
+
+export type ServiceErrorCode = CuaJsServiceErrorCode | BackendServiceErrorCode;
+
 export type ServiceErrorRetry =
   | "never"
   | "safe_after_reconnect"
@@ -257,7 +343,8 @@ export type ServiceErrorRetry =
 
 export type ServiceError = {
   type: "error";
-  ok: false;
+  /** Legacy CUA errors include this; native service errors omit it. */
+  ok?: false;
   code: ServiceErrorCode;
   message: string;
   session_id?: string;
@@ -270,6 +357,7 @@ export type ServiceResponse =
   | ActionResponse
   | GetScreenshotResponse
   | ActivateWindowResponse
+  | AppShotCaptureResponse
   | CancelTurnResponse
   | ServiceError;
 
@@ -287,7 +375,7 @@ export type IdempotencyClass =
   | "not_applicable";
 
 export const REQUEST_IDEMPOTENCY: Readonly<Record<
-  "health" | ActionType | "get_screenshot" | "activate_window" | "cancel_turn" | "error",
+  "health" | ActionType | "get_screenshot" | "activate_window" | "appshot_capture" | "cancel_turn" | "error",
   IdempotencyClass
 >> = {
   health: "idempotent_read",
@@ -295,6 +383,7 @@ export const REQUEST_IDEMPOTENCY: Readonly<Record<
   drag: "non_idempotent_mutation",
   get_screenshot: "idempotent_read",
   activate_window: "idempotent_set",
+  appshot_capture: "idempotent_read",
   move: "idempotent_set",
   press_key: "non_idempotent_mutation",
   scroll: "non_idempotent_mutation",
@@ -306,6 +395,7 @@ export const REQUEST_IDEMPOTENCY: Readonly<Record<
 export const HEALTH_CAPABILITIES: readonly CuaJsCapability[] = [
   "action.held_key",
   "action.post_action_sleep_ms",
+  "appshot_capture.v1",
   "linux.activate_window",
   "linux.click",
   "linux.click.button",
@@ -388,6 +478,7 @@ export const SERVICE_PROTOCOL = {
             "enum": [
               "action.held_key",
               "action.post_action_sleep_ms",
+              "appshot_capture.v1",
               "linux.activate_window",
               "linux.click",
               "linux.click.button",
@@ -440,6 +531,7 @@ export const SERVICE_PROTOCOL = {
       "capabilities": [
         "action.held_key",
         "action.post_action_sleep_ms",
+        "appshot_capture.v1",
         "linux.activate_window",
         "linux.click",
         "linux.click.button",
@@ -507,7 +599,8 @@ export const SERVICE_PROTOCOL = {
         "activate_window"
       ],
       "forbidden_for": [
-        "health"
+        "health",
+        "appshot_capture"
       ],
       "cancel_turn_fields_are_context_equivalent": true,
       "session_id_and_turn_id_must_be_non_empty": true,
@@ -913,6 +1006,91 @@ export const SERVICE_PROTOCOL = {
       "additionalProperties": false,
       "idempotency": "idempotent_set"
     },
+    "appshot_capture": {
+      "type": "object",
+      "required": [
+        "type",
+        "request_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "appshot_capture"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?!\\.)[A-Za-z0-9._-]+$"
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "window_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "tty": {
+              "type": "string",
+              "minLength": 1
+            },
+            "terminal_pid": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "terminal_command": {
+              "type": "string",
+              "minLength": 1
+            },
+            "terminal_cwd": {
+              "type": "string",
+              "minLength": 1
+            },
+            "app_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "wm_class": {
+              "type": "string",
+              "minLength": 1
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false,
+          "minProperties": 1
+        },
+        "frontmost": {
+          "type": "boolean",
+          "default": false
+        },
+        "flags": {
+          "type": "object",
+          "properties": {
+            "include_ax_text": {
+              "type": "boolean",
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "selector": {
+        "exactly_one_of": [
+          "target",
+          "frontmost=true"
+        ]
+      },
+      "additionalProperties": false,
+      "idempotency": "idempotent_read"
+    },
     "cancel_turn": {
       "type": "object",
       "required": [
@@ -1057,6 +1235,120 @@ export const SERVICE_PROTOCOL = {
       },
       "additionalProperties": false
     },
+    "appshot_capture": {
+      "type": "object",
+      "required": [
+        "type",
+        "result"
+      ],
+      "properties": {
+        "type": {
+          "const": "appshot_capture"
+        },
+        "result": {
+          "type": "object",
+          "required": [
+            "request_id",
+            "application",
+            "image",
+            "ax_status",
+            "capture_scope",
+            "capture_backend",
+            "diagnostics"
+          ],
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "application": {
+              "type": "object"
+            },
+            "image": {
+              "type": "object",
+              "required": [
+                "path",
+                "mime_type",
+                "size_bytes",
+                "dimensions"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "mime_type": {
+                  "enum": [
+                    "image/png",
+                    "image/jpeg",
+                    "image/webp"
+                  ]
+                },
+                "size_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "dimensions": {
+                  "type": "object",
+                  "required": [
+                    "width",
+                    "height"
+                  ],
+                  "properties": {
+                    "width": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "height": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "ax_status": {
+              "enum": [
+                "available",
+                "empty",
+                "unavailable"
+              ]
+            },
+            "ax_text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "capture_scope": {
+              "const": "window"
+            },
+            "capture_backend": {
+              "type": "string",
+              "minLength": 1
+            },
+            "image_backend": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "display": {
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "diagnostics": {
+              "type": "array"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "cancel_turn": {
       "type": "object",
       "required": [
@@ -1097,7 +1389,6 @@ export const SERVICE_PROTOCOL = {
       "type": "object",
       "required": [
         "type",
-        "ok",
         "code",
         "message"
       ],
@@ -1274,6 +1565,7 @@ export const SERVICE_PROTOCOL = {
       "drag": "non_idempotent_mutation",
       "get_screenshot": "idempotent_read",
       "activate_window": "idempotent_set",
+      "appshot_capture": "idempotent_read",
       "move": "idempotent_set",
       "press_key": "non_idempotent_mutation",
       "scroll": "non_idempotent_mutation",
@@ -1304,6 +1596,7 @@ export const SERVICE_PROTOCOL = {
   "compatibility": {
     "linux_methods": [
       "activate_window",
+      "appshot_capture",
       "click",
       "drag",
       "get_screenshot",

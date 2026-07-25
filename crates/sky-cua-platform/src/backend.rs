@@ -127,6 +127,15 @@ pub trait DesktopBackend: Send + Sync {
             .into_iter()
             .find(|window| window.focused))
     }
+    async fn resolve_window_target(
+        &self,
+        _target: &WindowTarget,
+    ) -> Result<WindowInfo, BackendError> {
+        Err(BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            "window target resolution is not available for this backend",
+        ))
+    }
     /// Enumerate the host display topology (logical rects, pixel sizes, scale).
     ///
     /// Defaults to an empty list for backends without display discovery; callers

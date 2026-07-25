@@ -16,7 +16,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isServiceError(value: unknown): value is ServiceError {
-  return isRecord(value) && value.type === "error" && value.ok === false &&
+  return isRecord(value) && value.type === "error" &&
     typeof value.code === "string" && typeof value.message === "string";
 }
 

@@ -159,14 +159,7 @@ pub(crate) fn prepare_model_capture_from_image(
 }
 
 fn captures_dir() -> PathBuf {
-    runtime_root().join("captures")
-}
-
-fn runtime_root() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("sky-cua")
+    sky_cua_platform::capture_artifacts_dir()
 }
 
 fn file_path_from_uri(uri: &str) -> Result<PathBuf, BackendError> {

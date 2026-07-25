@@ -101,6 +101,7 @@ struct SessionPresenceConfig {
 }
 
 mod agent_cursor;
+mod appshot;
 mod browser;
 mod capture_reuse;
 mod desktop;
@@ -951,7 +952,19 @@ impl ServiceDaemon {
         &self,
         future: impl std::future::Future<Output = Result<T, BackendError>>,
     ) -> Result<T, BackendError> {
-        match tokio::time::timeout(desktop_request_deadline(), future).await {
+        self.with_desktop_deadline_until(
+            tokio::time::Instant::now() + desktop_request_deadline(),
+            future,
+        )
+        .await
+    }
+
+    async fn with_desktop_deadline_until<T>(
+        &self,
+        deadline: tokio::time::Instant,
+        future: impl std::future::Future<Output = Result<T, BackendError>>,
+    ) -> Result<T, BackendError> {
+        match tokio::time::timeout_at(deadline, future).await {
             Ok(result) => result,
             Err(_) => {
                 // Best-effort session reset, itself bounded (see

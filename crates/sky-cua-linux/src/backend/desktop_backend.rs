@@ -130,6 +130,18 @@ impl DesktopBackend for LinuxDesktopBackend {
             .map(|windows| windows.into_iter().map(Into::into).collect())
     }
 
+    async fn resolve_window_target(
+        &self,
+        target: &WindowTarget,
+    ) -> Result<sky_cua_platform::model::WindowInfo, BackendError> {
+        let environment = self.probe_environment().await?;
+        require_supported_environment(&environment)?;
+        let windows = linux_windowing::discover_activation_windows(&environment).await?;
+        linux_windowing::resolve_window_target(&windows, &target.clone().into())
+            .cloned()
+            .map(Into::into)
+    }
+
     async fn list_displays(&self) -> Result<Vec<DisplayInfo>, BackendError> {
         // Reuse the same discovery (and cache) the doctor/screenshot paths use.
         // An unsupported environment yields an empty topology rather than an

@@ -30,6 +30,9 @@ packaged adapter around that runtime, not the runtime boundary itself.
 - explicit capture metadata:
   - `capture.backend` is the selected primary lane
   - `capture.image_backend` is the backend that produced the image
+- a dedicated native Linux `appshot_capture` service/Node API for verified
+  window crops with app identity, best-effort AT-SPI text, capture provenance,
+  and service-owned temporary artifacts
 - semantic AT-SPI actions for `click`, `perform_secondary_action`, `set_value`,
   and focus
 - physical Wayland and X11 routing for `click`, `perform_secondary_action`,

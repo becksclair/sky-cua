@@ -10,7 +10,7 @@ import { SkyCuaError, errorFromService } from "../errors";
 import type { TransportResponse } from "../window-action";
 
 export function isServiceError(response: TransportResponse): response is Extract<TransportResponse, { type: "error" }> {
-  return response.type === "error" && response.ok === false;
+  return response.type === "error";
 }
 
 export function validateHealth(response: TransportResponse): HealthResponse {

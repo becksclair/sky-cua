@@ -1,5 +1,7 @@
 import { invalidArgument } from "../errors";
 import {
+  type AppShotCaptureRequest,
+  type AppShotCaptureResult,
   type ClickRequest,
   type CuaJsCapability,
   type DragRequest,
@@ -61,8 +63,11 @@ export type TypeTextInput = {
 
 export type ActivateWindowInput = WindowTarget;
 
+export type AppShotCaptureInput = Omit<AppShotCaptureRequest, "type">;
+
 export type LinuxClient = {
   activate_window(input: ActivateWindowInput): Promise<WindowActionOutcome>;
+  appshot_capture(input: AppShotCaptureInput): Promise<AppShotCaptureResult>;
   click(input: ClickInput): Promise<void>;
   drag(input: DragInput): Promise<void>;
   get_screenshot(): Promise<ReturnType<typeof decodeScreenshots>>;
@@ -74,6 +79,7 @@ export type LinuxClient = {
 
 const LINUX_KEYS = [
   "activate_window",
+  "appshot_capture",
   "click",
   "drag",
   "get_screenshot",
@@ -252,6 +258,69 @@ export function createLinuxClient(config: SkyConfig): LinuxClient {
       const outcome = windowActionOutcome(response.outcome);
       setComputerUseResponseMeta();
       return outcome;
+    },
+
+    async appshot_capture(input: AppShotCaptureInput): Promise<AppShotCaptureResult> {
+      const value = recordInput(input, "appshot_capture");
+      assertKeys(value, ["request_id", "target", "frontmost", "flags"], "appshot_capture");
+      if (
+        typeof value.request_id !== "string" ||
+        !/^(?!\.)[A-Za-z0-9._-]{1,128}$/.test(value.request_id)
+      ) {
+        throw invalidArgument(
+          "request_id must contain 1-128 ASCII letters, digits, '-', '_', or '.', and may not start with '.'."
+        );
+      }
+      const frontmost = value.frontmost === true;
+      if (value.frontmost !== undefined && typeof value.frontmost !== "boolean") {
+        throw invalidArgument("frontmost must be a boolean when supplied.");
+      }
+      const target = value.target === undefined
+        ? undefined
+        : normalizeWindowTarget(value.target as WindowTarget);
+      if ((target !== undefined) === frontmost) {
+        throw invalidArgument(
+          "appshot_capture requires exactly one target selector: target or frontmost=true."
+        );
+      }
+      let flags: AppShotCaptureInput["flags"];
+      if (value.flags !== undefined) {
+        const flagValues = recordInput(value.flags, "appshot_capture flags");
+        assertKeys(flagValues, ["include_ax_text"], "appshot_capture flags");
+        if (
+          flagValues.include_ax_text !== undefined &&
+          typeof flagValues.include_ax_text !== "boolean"
+        ) {
+          throw invalidArgument("include_ax_text must be a boolean when supplied.");
+        }
+        flags = {
+          ...(flagValues.include_ax_text === undefined
+            ? {}
+            : { include_ax_text: flagValues.include_ax_text })
+        };
+      }
+      const response = await withSuspendedTimeout(async () => transport.request({
+        type: "appshot_capture",
+        request_id: value.request_id as string,
+        ...(target === undefined ? {} : { target }),
+        ...(frontmost ? { frontmost: true } : {}),
+        ...(flags === undefined ? {} : { flags })
+      }, {
+        requiredCapabilities: ["appshot_capture.v1"]
+      }));
+      if (
+        response.type !== "appshot_capture" ||
+        response.result.request_id !== value.request_id ||
+        response.result.capture_scope !== "window" ||
+        typeof response.result.image.path !== "string" ||
+        response.result.image.path.length === 0 ||
+        response.result.image.size_bytes <= 0 ||
+        response.result.image.dimensions.width <= 0 ||
+        response.result.image.dimensions.height <= 0
+      ) {
+        throw invalidArgument("Sky-cua service returned an invalid appshot_capture response.");
+      }
+      return response.result;
     },
 
     async click(input: ClickInput): Promise<void> {

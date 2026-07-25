@@ -276,6 +276,60 @@ describe("ordinary public facade live-action contract", () => {
     }
   });
 
+  test("exposes the dedicated AppShot producer request without an MCP capture shim", async () => {
+    const path = fixturePath("appshot");
+    const daemon = new FakeDaemon(path);
+    await daemon.start();
+    const restore = setSocket(path);
+    try {
+      const result = await client().appshot_capture({
+        request_id: "composer-1",
+        frontmost: true,
+        flags: { include_ax_text: true }
+      });
+      expect(result.capture_scope).toBe("window");
+      expect(result.application.window_id).toBe("fixture-window");
+      expect(daemon.requests).toEqual([
+        { type: "health" },
+        {
+          type: "appshot_capture",
+          request_id: "composer-1",
+          frontmost: true,
+          flags: { include_ax_text: true }
+        }
+      ]);
+    } finally {
+      restore();
+      await daemon.close();
+      cleanup();
+    }
+  });
+
+  test("preserves native AppShot failure codes when the legacy error omits ok", async () => {
+    const path = fixturePath("appshot-error");
+    const daemon = new FakeDaemon(path, {
+      onRequest: ({ request }) => request.type === "appshot_capture"
+        ? {
+            type: "error",
+            code: "PortalApprovalPending",
+            message: "The screenshot portal request is still pending."
+          }
+        : undefined
+    });
+    await daemon.start();
+    const restore = setSocket(path);
+    try {
+      await expectSkyReject(
+        client().appshot_capture({ request_id: "composer-pending", frontmost: true }),
+        "PortalApprovalPending"
+      );
+    } finally {
+      restore();
+      await daemon.close();
+      cleanup();
+    }
+  });
+
   test("uses request metadata deadline and the control connection for activation cancellation", async () => {
     const path = fixturePath("deadline");
     let activationCount = 0;

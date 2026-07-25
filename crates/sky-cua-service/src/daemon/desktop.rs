@@ -336,6 +336,15 @@ impl ServiceDaemon {
                     }
                 }
             }
+            ServiceRequest::AppShotCapture {
+                request_id,
+                target,
+                frontmost,
+                flags,
+            } => {
+                self.handle_appshot_capture(request_id, target, frontmost, flags)
+                    .await
+            }
             ServiceRequest::AgentCursorStatus => {
                 let status = self.overlay.lock().await.status();
                 agent_cursor_status_response(status, AgentCursorResponseKind::Status)

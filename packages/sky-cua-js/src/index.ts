@@ -5,6 +5,7 @@ import { createMacPlaceholder, macOwnKeys, type MacPlaceholderClient } from "./t
 export type { SkyConfig, SkyTarget } from "./config";
 export type {
   ActivateWindowInput,
+  AppShotCaptureInput,
   ClickInput,
   DragInput,
   LinuxClient,
@@ -15,6 +16,10 @@ export type {
   TypeTextInput
 } from "./targets/linux";
 export type { WindowActionDiagnostic, WindowActionOutcome, WindowTarget } from "./window-action";
+export type {
+  AppShotAccessibilityStatus,
+  AppShotCaptureResult
+} from "./protocol/generated";
 
 type SkyClient = LinuxClient | MacPlaceholderClient;
 

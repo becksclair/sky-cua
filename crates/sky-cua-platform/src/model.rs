@@ -54,11 +54,13 @@ pub use phone::{
     PhoneTargetDeviceKind, PhoneTypeTextRequest, PhoneUnavailableAction,
 };
 pub use service::{
-    BROWSER_CONTROL_CAPABILITY_V1, CUA_SERVICE_CAPABILITIES, CUA_SERVICE_DEFAULT_MOUSE_SIZE_PX,
-    CUA_SERVICE_MAX_DEADLINE_MS, CUA_SERVICE_PROTOCOL_VERSION, CUA_SERVICE_VERSION,
-    CuaActionRequest, CuaBackendResponse, CuaCancelStatus, CuaCancellation, CuaMouseButton,
-    CuaRequestContext, CuaScreenshot, CuaScrollDirection, ServiceRequest, ServiceResponse,
-    SessionPresenceAction, browser_control_mode_capability, browser_control_mode_from_capabilities,
+    APPSHOT_CAPTURE_CAPABILITY_V1, AppShotAccessibilityStatus, AppShotApplication,
+    AppShotCaptureFlags, AppShotCaptureResult, AppShotImage, BROWSER_CONTROL_CAPABILITY_V1,
+    CUA_SERVICE_CAPABILITIES, CUA_SERVICE_DEFAULT_MOUSE_SIZE_PX, CUA_SERVICE_MAX_DEADLINE_MS,
+    CUA_SERVICE_PROTOCOL_VERSION, CUA_SERVICE_VERSION, CuaActionRequest, CuaBackendResponse,
+    CuaCancelStatus, CuaCancellation, CuaMouseButton, CuaRequestContext, CuaScreenshot,
+    CuaScrollDirection, ServiceRequest, ServiceResponse, SessionPresenceAction,
+    browser_control_mode_capability, browser_control_mode_from_capabilities,
     cua_service_capabilities, cua_service_capabilities_for_input_backend,
 };
 
