@@ -103,6 +103,12 @@ Open boxes link to the active ExecPlan that owns the work.
 - [x] Display-targeted desktop screenshots (single-screen capture: main-display default, explicit display/window selectors, and snapshot coordinate remapping) — [`docs/features/display-targeted-screenshots.md`](docs/features/display-targeted-screenshots.md)
 - [x] Native Linux AppShot producer (dedicated service/Node API, proven window crop, app identity, AT-SPI text, private TTL artifacts) — [`docs/features/native-linux-appshots.md`](docs/features/native-linux-appshots.md)
   - [x] Desktop observation visual attachment now prefers focused/selected window crops, falls back only to target/primary display scopes, and exposes `inspection_image_path` for visual inspection
+- [ ] Future project, after AppShots: consumer registration and action broker.
+      Persistent Sky CUA owns native keybindings/input, permissions,
+      capture/action execution, routing, and lifecycle. Clients such as Codex
+      Desktop, OpenCode, and OpenClaw register their identity and subscribed
+      actions, then receive scoped, authenticated events and artifacts over
+      IPC.
 - [x] First-class browser MCP tools for `user_chrome` — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
   - [x] Explicit host opt-in gate for OpenCode/Pi, with Codex Desktop kept on the companion Browser Use path
   - [x] Real user-tab listing, session-owned tab creation, existing-tab claiming, and Brave/Chrome/Chromium socket selection
