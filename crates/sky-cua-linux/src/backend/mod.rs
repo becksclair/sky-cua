@@ -21,7 +21,11 @@ use crate::app_match::{
 };
 use crate::app_policy::{AppActionPolicies, ResolvedSetValueFallbackPolicy};
 use crate::apps::discovery::{DiscoveredApp, discover_apps};
-use crate::atspi::{actions as atspi_actions, connect, snapshot::snapshot_for_app};
+use crate::apps::window_correlation::{WindowAccessibilityMatch, match_window_accessibility};
+use crate::atspi::{
+    actions as atspi_actions, connect,
+    snapshot::{snapshot_for_app, snapshot_for_top_level},
+};
 use crate::env_probe::{probe_environment, require_supported_environment};
 use crate::focus::pick_focused_app_with_fallback;
 use crate::portal::remote_desktop::{
@@ -284,9 +288,16 @@ impl LinuxDesktopBackend {
     async fn discover_accessible_apps(
         &self,
     ) -> Result<(AccessibilityConnection, Vec<DiscoveredApp>), BackendError> {
+        self.discover_accessible_apps_for_window_pid(None).await
+    }
+
+    async fn discover_accessible_apps_for_window_pid(
+        &self,
+        window_pid: Option<u32>,
+    ) -> Result<(AccessibilityConnection, Vec<DiscoveredApp>), BackendError> {
         let connection = self.accessibility_connection().await?;
         match self
-            .at_spi_call_with_timeout(discover_apps(&connection))
+            .at_spi_call_with_timeout(discover_apps(&connection, window_pid))
             .await
         {
             Ok(apps) => Ok((connection, apps)),
@@ -294,7 +305,7 @@ impl LinuxDesktopBackend {
                 self.reset_accessibility_connection().await;
                 let connection = self.accessibility_connection().await?;
                 let apps = self
-                    .at_spi_call_with_timeout(discover_apps(&connection))
+                    .at_spi_call_with_timeout(discover_apps(&connection, window_pid))
                     .await?;
                 Ok((connection, apps))
             }

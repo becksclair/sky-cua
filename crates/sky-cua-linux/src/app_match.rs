@@ -619,6 +619,7 @@ mod tests {
         DiscoveredApp {
             info: app_info(app_id, name),
             object_ref: object_ref(path),
+            top_levels: None,
         }
     }
 

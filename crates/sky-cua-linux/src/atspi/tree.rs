@@ -15,8 +15,16 @@ pub async fn flatten_accessible_tree(
     app: &DiscoveredApp,
     max_nodes: usize,
 ) -> Vec<ElementNode> {
+    flatten_accessible_tree_from_ref(connection, &app.object_ref, max_nodes).await
+}
+
+pub async fn flatten_accessible_tree_from_ref(
+    connection: &AccessibilityConnection,
+    root: &atspi::ObjectRefOwned,
+    max_nodes: usize,
+) -> Vec<ElementNode> {
     let mut nodes = Vec::new();
-    let mut stack = vec![(app.object_ref.clone(), None, 0usize)];
+    let mut stack = vec![(root.clone(), None, 0usize)];
 
     while let Some((object_ref, parent_index, depth)) = stack.pop() {
         if nodes.len() >= max_nodes {

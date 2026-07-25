@@ -156,6 +156,20 @@ pub trait DesktopBackend: Send + Sync {
         selector: Option<AppSelector>,
         capture_screen: CaptureScreenMode,
     ) -> Result<AppStateSnapshot, BackendError>;
+    /// Read accessibility state for one already-resolved compositor window.
+    ///
+    /// Backends must fail closed rather than substituting a different app or
+    /// window when the native window cannot be correlated exactly.
+    async fn get_app_state_for_window(
+        &self,
+        _window: &WindowInfo,
+        _capture_screen: CaptureScreenMode,
+    ) -> Result<AppStateSnapshot, BackendError> {
+        Err(BackendError::new(
+            BackendErrorCode::ActionUnsupportedForEnvironment,
+            "exact-window accessibility is not available for this backend",
+        ))
+    }
     async fn screenshot(
         &self,
         target: Option<WindowTarget>,

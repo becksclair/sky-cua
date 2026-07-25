@@ -95,10 +95,7 @@ impl ServiceDaemon {
                 if flags.include_ax_text {
                     match self
                         .backend
-                        .get_app_state(
-                            Some(appshot_selector(&resolved_window.1)),
-                            CaptureScreenMode::Never,
-                        )
+                        .get_app_state_for_window(&resolved_window.1, CaptureScreenMode::Never)
                         .await
                     {
                         Ok(ax_snapshot) => {
@@ -303,15 +300,6 @@ fn cleanup_expired(root: &Path, now: SystemTime) {
         if expired {
             let _ = fs::remove_file(path);
         }
-    }
-}
-
-fn appshot_selector(window: &WindowInfo) -> sky_cua_platform::model::AppSelector {
-    sky_cua_platform::model::AppSelector {
-        app_id: window.app_id.clone(),
-        desktop_file_id: None,
-        window_title: window.title.clone(),
-        name: window.wm_class.clone(),
     }
 }
 

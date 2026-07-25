@@ -484,6 +484,134 @@ impl DesktopBackend for LinuxDesktopBackend {
         })
     }
 
+    async fn get_app_state_for_window(
+        &self,
+        window: &sky_cua_platform::model::WindowInfo,
+        capture_screen: CaptureScreenMode,
+    ) -> Result<AppStateSnapshot, BackendError> {
+        let _ = self.portal.take_lifecycle_events().await;
+        let snapshot_id = new_snapshot_id();
+        let (environment, display_topology) = self.probe_environment_with_display_report().await?;
+        require_supported_environment(&environment)?;
+        let capabilities = Self::capabilities(&environment);
+        let session_presence = self.session_presence.doctor_report().await;
+        let doctor_report = crate::doctor::build_doctor_report_with_session_presence(
+            environment.clone(),
+            Some(display_topology.clone()),
+            self.session_env_report(),
+            Some(session_presence),
+        );
+        let mut diagnostics = DiagnosticBuilder::new();
+        push_display_topology_diagnostics(&environment, &display_topology, &mut diagnostics);
+        if let Some(diagnostic) = doctor_report
+            .session_env
+            .as_ref()
+            .and_then(session_env::session_env_diagnostic)
+        {
+            diagnostics.push_code(diagnostic.code, diagnostic.message, diagnostic.details);
+        }
+
+        let registry_windows = linux_windowing::discover_app_windows(&environment).await?;
+        let target_window = registry_windows
+            .iter()
+            .find(|candidate| candidate.window_id == window.window_id)
+            .ok_or_else(|| {
+                BackendError::new(
+                    BackendErrorCode::InvalidRequest,
+                    "the resolved AppShot window is no longer present",
+                )
+            })?;
+        let current_window: sky_cua_platform::model::WindowInfo = target_window.clone().into();
+
+        let elements = match self
+            .discover_accessible_apps_for_window_pid(current_window.pid)
+            .await
+        {
+            Ok((connection, apps)) => match match_window_accessibility(&current_window, &apps) {
+                WindowAccessibilityMatch::Matched {
+                    top_level,
+                    provenance,
+                } => {
+                    diagnostics.push_code(
+                        "AccessibilityWindowCorrelated",
+                        "AT-SPI application and top-level window were correlated exactly.",
+                        Some(format!(
+                            "pid={}; normalized_title={}; active_bounds_tiebreak={}; bounds_iou={}",
+                            provenance.pid,
+                            provenance.normalized_title,
+                            provenance.active_bounds_tiebreak,
+                            provenance
+                                .bounds_iou
+                                .map(|value| format!("{value:.3}"))
+                                .unwrap_or_else(|| "not_required".to_string())
+                        )),
+                    );
+                    let (elements, snapshot_diags) = self
+                        .at_spi_call_with_timeout(snapshot_for_top_level(&connection, top_level))
+                        .await?;
+                    for entry in snapshot_diags {
+                        diagnostics.push(
+                            BackendErrorCode::AccessibilityCoverageLimited,
+                            entry.message,
+                            entry.details,
+                        );
+                    }
+                    elements
+                }
+                WindowAccessibilityMatch::Unavailable { reason } => {
+                    diagnostics.push(
+                        BackendErrorCode::AccessibilityCoverageLimited,
+                        "No exact AT-SPI window correlation was available.",
+                        Some(reason.to_string()),
+                    );
+                    Vec::new()
+                }
+                WindowAccessibilityMatch::Ambiguous {
+                    reason,
+                    candidate_count,
+                } => {
+                    diagnostics.push(
+                        BackendErrorCode::AccessibilityCoverageLimited,
+                        "AT-SPI window correlation was ambiguous and was rejected.",
+                        Some(format!("{reason}; candidate_count={candidate_count}")),
+                    );
+                    Vec::new()
+                }
+            },
+            Err(error) => {
+                diagnostics.push(
+                    BackendErrorCode::AccessibilityUnavailable,
+                    error.message,
+                    None,
+                );
+                Vec::new()
+            }
+        };
+
+        let capture = self
+            .get_app_state_capture(
+                &snapshot_id,
+                capture_screen,
+                &environment,
+                Some(target_window),
+                &mut diagnostics,
+            )
+            .await?;
+        Ok(AppStateSnapshot {
+            snapshot_id,
+            created_at: chrono::Utc::now(),
+            environment,
+            capabilities,
+            focused_app: Some(Self::focused_from_linux_window(target_window)),
+            capture,
+            elements,
+            diagnostics: diagnostics.finish(),
+            app_guidance: None,
+            doctor_report: Some(doctor_report),
+            agent_cursor: None,
+        })
+    }
+
     async fn screenshot(
         &self,
         target: Option<WindowTarget>,

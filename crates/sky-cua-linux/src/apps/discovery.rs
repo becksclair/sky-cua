@@ -2,11 +2,12 @@ use std::fs;
 use std::path::PathBuf;
 
 use atspi::AccessibilityConnection;
+use atspi::CoordType;
 use atspi::State;
 use atspi::proxy::accessible::ObjectRefExt;
 use atspi::proxy::proxy_ext::ProxyExt;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
-use sky_cua_platform::model::AppInfo;
+use sky_cua_platform::model::{AppInfo, CoordinateSpace, RectF};
 use tracing::debug;
 use zbus::fdo::DBusProxy;
 
@@ -14,10 +15,24 @@ use zbus::fdo::DBusProxy;
 pub struct DiscoveredApp {
     pub info: AppInfo,
     pub object_ref: atspi::ObjectRefOwned,
+    /// Populated only by exact-window discovery. `None` means top-level
+    /// enumeration was not requested or was incomplete and must not be used
+    /// to infer a unique accessibility window.
+    pub top_levels: Option<Vec<AccessibleTopLevel>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccessibleTopLevel {
+    pub object_ref: atspi::ObjectRefOwned,
+    pub title: String,
+    pub active: bool,
+    pub focused: bool,
+    pub bounds: Option<RectF>,
 }
 
 pub async fn discover_apps(
     connection: &AccessibilityConnection,
+    window_pid: Option<u32>,
 ) -> Result<Vec<DiscoveredApp>, BackendError> {
     debug!("discovering AT-SPI applications");
     let root = connection
@@ -94,7 +109,16 @@ pub async fn discover_apps(
                     normalize_name(&name).replace(' ', "-")
                 ))
             });
-        let window_title = best_window_like_title(&accessible, connection.connection()).await;
+        let window_title = if window_pid.is_none() {
+            best_window_like_title(&accessible, connection.connection()).await
+        } else {
+            None
+        };
+        let top_levels = if window_pid.is_some_and(|window_pid| pid == Some(window_pid)) {
+            collect_top_levels(&accessible, connection.connection()).await
+        } else {
+            None
+        };
 
         let app_id = format!(
             "{}:{}",
@@ -115,11 +139,61 @@ pub async fn discover_apps(
                 is_focused_candidate: false,
             },
             object_ref,
+            top_levels,
         });
     }
 
     debug!(count = apps.len(), "finished AT-SPI app discovery");
     Ok(apps)
+}
+
+async fn collect_top_levels(
+    accessible: &atspi::proxy::accessible::AccessibleProxy<'_>,
+    connection: &zbus::Connection,
+) -> Option<Vec<AccessibleTopLevel>> {
+    let mut top_levels = Vec::new();
+    for object_ref in accessible.get_children().await.unwrap_or_default() {
+        let child = object_ref.as_accessible_proxy(connection).await.ok()?;
+        let role = child.get_role_name().await.ok()?.to_ascii_lowercase();
+        if !role.contains("frame")
+            && !role.contains("window")
+            && !role.contains("dialog")
+            && !role.contains("alert")
+        {
+            continue;
+        }
+        let title = child.name().await.ok()?;
+        let states = child.get_state().await.ok();
+        let bounds = if let Ok(proxies) = child.proxies().await
+            && let Ok(component) = proxies.component().await
+        {
+            component
+                .get_extents(CoordType::Screen)
+                .await
+                .ok()
+                .map(|(x, y, width, height)| RectF {
+                    x: f64::from(x),
+                    y: f64::from(y),
+                    width: f64::from(width),
+                    height: f64::from(height),
+                    space: CoordinateSpace::DesktopLogical,
+                })
+        } else {
+            None
+        };
+        top_levels.push(AccessibleTopLevel {
+            object_ref,
+            title,
+            active: states
+                .as_ref()
+                .is_some_and(|states| states.contains(State::Active)),
+            focused: states
+                .as_ref()
+                .is_some_and(|states| states.contains(State::Focused)),
+            bounds,
+        });
+    }
+    Some(top_levels)
 }
 
 async fn best_window_like_title(

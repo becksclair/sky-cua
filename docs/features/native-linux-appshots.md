@@ -46,11 +46,20 @@ Screenshot portal fallback, and crops to proven window bounds. AppShot accepts
 only `capture_scope: "window"`; a display, primary-display, or unknown frame is
 a terminal failure rather than a successful downgraded AppShot.
 
-When requested, AT-SPI state is read for the resolved app without another
-screenshot. `ax_status` distinguishes `available`, `empty`, and `unavailable`;
-AT-SPI failures remain in structured diagnostics. Portal approval pending,
-denial, unsupported compositor, missing source geometry, and the shared
-desktop-request deadline preserve their existing stable service error codes.
+When requested, AT-SPI state is read for the already-resolved compositor
+window without another screenshot or a reconstructed generic app selector.
+Correlation first requires one AT-SPI application with the exact compositor
+PID, then an exact normalized top-level title. Duplicate titles require one
+active or focused frame whose screen bounds have at least 0.80 IoU with the
+compositor bounds and beat every sibling by at least 0.50. Ambiguous or
+insufficient evidence fails closed and attaches no accessibility tree. Only
+the selected top-level subtree is flattened.
+
+`ax_status` distinguishes `available`, `empty`, and `unavailable`; AT-SPI
+failures and rejected correlations remain in structured diagnostics. Portal
+approval pending, denial, unsupported compositor, missing source geometry,
+and the shared desktop-request deadline preserve their existing stable
+service error codes.
 
 The whole operation runs in the serialized desktop lane under the existing
 server-side desktop deadline. The client may disconnect without leaving the
@@ -70,17 +79,22 @@ session state consistently with other desktop reads.
 
 - Platform serialization and capability contract tests.
 - Service request-ID, AX text, artifact persistence, and daemon dispatch tests.
+- Linux correlation fixtures cover Kate dash/whitespace normalization,
+  multi-window Dolphin, Ghostty, duplicate-title ChatGPT/Electron, PID
+  mismatch, no-winner ambiguity, and sibling-subtree isolation.
 - `cargo nextest run -p sky-cua-platform -p sky-cua-service`
+- 2026-07-25 isolated live AppShot against ChatGPT/Electron: exact window
+  capture, `portal_pipe_wire`, available AX text, and duplicate-title
+  active/bounds selection at 0.915 IoU.
 - `bun run typecheck` and `bun test test` in `packages/sky-cua-js`
-
-No interactive Linux AppShot smoke was run for the initial producer slice.
-The existing targeted-screenshot VM profile remains the live proof for the
-underlying window crop and focus-verification lane.
 
 ## Known limitations
 
 - AT-SPI text is a bounded, flattened text projection, not a serialized
   accessibility tree.
+- Windows without a compositor PID or usable title, or duplicate-title windows
+  without a unique active high-IoU frame, deliberately report accessibility as
+  unavailable instead of risking a sibling window's tree.
 - Artifact cleanup is opportunistic on subsequent AppShot requests; there is no
   dedicated timer.
 - Codex Desktop packaging and consumer IPC validation are intentionally outside

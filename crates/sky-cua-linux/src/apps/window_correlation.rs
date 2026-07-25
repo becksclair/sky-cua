@@ -1,0 +1,525 @@
+use sky_cua_platform::model::{CoordinateSpace, RectF, WindowInfo};
+
+use super::discovery::{AccessibleTopLevel, DiscoveredApp};
+
+const MIN_BOUNDS_IOU: f64 = 0.80;
+const MIN_BOUNDS_IOU_MARGIN: f64 = 0.50;
+
+#[derive(Debug)]
+pub(crate) enum WindowAccessibilityMatch<'a> {
+    Matched {
+        top_level: &'a AccessibleTopLevel,
+        provenance: MatchProvenance,
+    },
+    Unavailable {
+        reason: &'static str,
+    },
+    Ambiguous {
+        reason: &'static str,
+        candidate_count: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct MatchProvenance {
+    pub pid: u32,
+    pub normalized_title: bool,
+    pub active_bounds_tiebreak: bool,
+    pub bounds_iou: Option<f64>,
+}
+
+pub(crate) fn match_window_accessibility<'a>(
+    window: &WindowInfo,
+    apps: &'a [DiscoveredApp],
+) -> WindowAccessibilityMatch<'a> {
+    let Some(pid) = window.pid.filter(|pid| *pid != 0) else {
+        return WindowAccessibilityMatch::Unavailable {
+            reason: "the compositor window did not expose a client PID",
+        };
+    };
+    let app_candidates = apps
+        .iter()
+        .filter(|app| app.info.pid == Some(pid))
+        .collect::<Vec<_>>();
+    let app = match app_candidates.as_slice() {
+        [app] => *app,
+        [] => {
+            return WindowAccessibilityMatch::Unavailable {
+                reason: "no AT-SPI application root had the compositor client PID",
+            };
+        }
+        candidates => {
+            return WindowAccessibilityMatch::Ambiguous {
+                reason: "multiple AT-SPI application roots shared the compositor client PID",
+                candidate_count: candidates.len(),
+            };
+        }
+    };
+
+    let wanted_title = normalize_title(window.title.as_deref().unwrap_or_default());
+    if wanted_title.is_empty() {
+        return WindowAccessibilityMatch::Unavailable {
+            reason: "the compositor window did not expose a usable title",
+        };
+    }
+    let Some(top_levels) = app.top_levels.as_ref() else {
+        return WindowAccessibilityMatch::Unavailable {
+            reason: "top-level AT-SPI window discovery was incomplete",
+        };
+    };
+    let title_candidates = top_levels
+        .iter()
+        .filter(|candidate| normalize_title(&candidate.title) == wanted_title)
+        .collect::<Vec<_>>();
+    match title_candidates.as_slice() {
+        [top_level] => WindowAccessibilityMatch::Matched {
+            top_level,
+            provenance: MatchProvenance {
+                pid,
+                normalized_title: true,
+                active_bounds_tiebreak: false,
+                bounds_iou: None,
+            },
+        },
+        [] => WindowAccessibilityMatch::Unavailable {
+            reason: "no top-level AT-SPI window had the normalized compositor title",
+        },
+        candidates => match duplicate_title_winner(window.bounds.as_ref(), candidates) {
+            Some((top_level, iou)) => WindowAccessibilityMatch::Matched {
+                top_level,
+                provenance: MatchProvenance {
+                    pid,
+                    normalized_title: true,
+                    active_bounds_tiebreak: true,
+                    bounds_iou: Some(iou),
+                },
+            },
+            None => WindowAccessibilityMatch::Ambiguous {
+                reason: "duplicate-title AT-SPI windows had no unique active high-IoU winner",
+                candidate_count: candidates.len(),
+            },
+        },
+    }
+}
+
+fn duplicate_title_winner<'a>(
+    window_bounds: Option<&RectF>,
+    candidates: &[&'a AccessibleTopLevel],
+) -> Option<(&'a AccessibleTopLevel, f64)> {
+    let window_bounds = window_bounds?;
+    if window_bounds.space != CoordinateSpace::DesktopLogical {
+        return None;
+    }
+    let active = candidates
+        .iter()
+        .copied()
+        .filter(|candidate| candidate.active || candidate.focused)
+        .collect::<Vec<_>>();
+    let [winner] = active.as_slice() else {
+        return None;
+    };
+    if candidates.iter().any(|candidate| {
+        candidate
+            .bounds
+            .as_ref()
+            .is_none_or(|bounds| bounds.space != CoordinateSpace::DesktopLogical)
+    }) {
+        return None;
+    }
+    let winner_iou = winner
+        .bounds
+        .as_ref()
+        .map(|bounds| rect_iou(window_bounds, bounds))?;
+    let runner_up_iou = candidates
+        .iter()
+        .copied()
+        .filter(|candidate| candidate.object_ref != winner.object_ref)
+        .filter_map(|candidate| candidate.bounds.as_ref())
+        .map(|bounds| rect_iou(window_bounds, bounds))
+        .fold(0.0, f64::max);
+    (winner_iou >= MIN_BOUNDS_IOU && winner_iou - runner_up_iou >= MIN_BOUNDS_IOU_MARGIN)
+        .then_some((*winner, winner_iou))
+}
+
+fn rect_iou(left: &RectF, right: &RectF) -> f64 {
+    if left.width <= 0.0 || left.height <= 0.0 || right.width <= 0.0 || right.height <= 0.0 {
+        return 0.0;
+    }
+    let intersection_width = (left.x + left.width).min(right.x + right.width) - left.x.max(right.x);
+    let intersection_height =
+        (left.y + left.height).min(right.y + right.height) - left.y.max(right.y);
+    if intersection_width <= 0.0 || intersection_height <= 0.0 {
+        return 0.0;
+    }
+    let intersection = intersection_width * intersection_height;
+    intersection / (left.width * left.height + right.width * right.height - intersection)
+}
+
+pub(crate) fn normalize_title(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| match character {
+            '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+            | '\u{2212}' => '-',
+            character if character.is_whitespace() => ' ',
+            character => character,
+        })
+        .collect::<String>()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace(" - ", "-")
+        .replace("- ", "-")
+        .replace(" -", "-")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sky_cua_platform::AppInfo;
+    use zbus::names::UniqueName;
+    use zbus::zvariant::ObjectPath;
+
+    fn object_ref(path: &str) -> atspi::ObjectRefOwned {
+        atspi::ObjectRef::new_owned(
+            UniqueName::try_from(":1.77".to_string()).expect("valid unique name"),
+            ObjectPath::try_from(path.to_string()).expect("valid object path"),
+        )
+    }
+
+    fn bounds(x: f64, y: f64, width: f64, height: f64) -> RectF {
+        RectF {
+            x,
+            y,
+            width,
+            height,
+            space: CoordinateSpace::DesktopLogical,
+        }
+    }
+
+    fn top_level(
+        path: &str,
+        title: &str,
+        active: bool,
+        focused: bool,
+        bounds: RectF,
+    ) -> AccessibleTopLevel {
+        AccessibleTopLevel {
+            object_ref: object_ref(path),
+            title: title.to_string(),
+            active,
+            focused,
+            bounds: Some(bounds),
+        }
+    }
+
+    fn app(pid: u32, name: &str, top_levels: Vec<AccessibleTopLevel>) -> DiscoveredApp {
+        DiscoveredApp {
+            info: AppInfo {
+                app_id: format!(":1.77:/org/a11y/{name}"),
+                name: name.to_string(),
+                pid: Some(pid),
+                executable: None,
+                desktop_file_id: None,
+                app_user_model_id: None,
+                window_handle: None,
+                toolkit_guess: None,
+                window_title: None,
+                is_focused_candidate: false,
+            },
+            object_ref: object_ref(&format!("/org/a11y/{name}")),
+            top_levels: Some(top_levels),
+        }
+    }
+
+    fn window(pid: u32, title: &str, bounds: RectF) -> WindowInfo {
+        WindowInfo {
+            window_id: "kwin:42".to_string(),
+            title: Some(title.to_string()),
+            app_id: None,
+            wm_class: None,
+            pid: Some(pid),
+            bounds: Some(bounds),
+            display: None,
+            display_intersections: Vec::new(),
+            workspace: None,
+            focused: true,
+            hidden: false,
+            client_type: None,
+            backend: "kwin".to_string(),
+            terminal: None,
+        }
+    }
+
+    fn matched_path<'a>(
+        window: &WindowInfo,
+        apps: &'a [DiscoveredApp],
+    ) -> &'a atspi::ObjectRefOwned {
+        match match_window_accessibility(window, apps) {
+            WindowAccessibilityMatch::Matched { top_level, .. } => &top_level.object_ref,
+            result => panic!("expected match, got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn kate_normalizes_whitespace_and_dash_variants() {
+        let apps = [app(
+            208_663,
+            "kate",
+            vec![top_level(
+                "/org/a11y/kate/frame/1",
+                "Welcome  — Kate",
+                true,
+                true,
+                bounds(0.0, 0.0, 900.0, 700.0),
+            )],
+        )];
+        let target = window(208_663, "Welcome — Kate", bounds(0.0, 0.0, 900.0, 700.0));
+        assert_eq!(
+            matched_path(&target, &apps),
+            &apps[0].top_levels.as_ref().unwrap()[0].object_ref
+        );
+    }
+
+    #[test]
+    fn dolphin_matches_the_named_window_within_the_pid_matched_app() {
+        let apps = [app(
+            37_544,
+            "dolphin",
+            vec![
+                top_level(
+                    "/org/a11y/dolphin/frame/1",
+                    ".openclaw",
+                    false,
+                    false,
+                    bounds(0.0, 0.0, 500.0, 500.0),
+                ),
+                top_level(
+                    "/org/a11y/dolphin/frame/2",
+                    "Downloads",
+                    true,
+                    true,
+                    bounds(500.0, 0.0, 800.0, 700.0),
+                ),
+            ],
+        )];
+        let target = window(37_544, "Downloads", bounds(500.0, 0.0, 800.0, 700.0));
+        assert_eq!(
+            matched_path(&target, &apps),
+            &apps[0].top_levels.as_ref().unwrap()[1].object_ref
+        );
+    }
+
+    #[test]
+    fn ghostty_matches_exact_pid_and_title() {
+        let apps = [app(
+            51_001,
+            "ghostty",
+            vec![top_level(
+                "/org/a11y/ghostty/frame/1",
+                "sky-cua",
+                true,
+                true,
+                bounds(20.0, 30.0, 1000.0, 700.0),
+            )],
+        )];
+        let target = window(51_001, "sky-cua", bounds(20.0, 30.0, 1000.0, 700.0));
+        assert_eq!(
+            matched_path(&target, &apps),
+            &apps[0].top_levels.as_ref().unwrap()[0].object_ref
+        );
+    }
+
+    #[test]
+    fn refreshed_window_identity_selects_current_same_pid_top_level() {
+        let apps = [app(
+            51_001,
+            "editor",
+            vec![
+                top_level(
+                    "/org/a11y/editor/frame/old",
+                    "Old document",
+                    false,
+                    false,
+                    bounds(0.0, 0.0, 500.0, 500.0),
+                ),
+                top_level(
+                    "/org/a11y/editor/frame/current",
+                    "Current document",
+                    true,
+                    true,
+                    bounds(500.0, 0.0, 900.0, 700.0),
+                ),
+            ],
+        )];
+        let refreshed = window(51_001, "Current document", bounds(500.0, 0.0, 900.0, 700.0));
+        assert_eq!(
+            matched_path(&refreshed, &apps),
+            &apps[0].top_levels.as_ref().unwrap()[1].object_ref
+        );
+    }
+
+    #[test]
+    fn electron_duplicate_titles_use_unique_active_high_iou_frame() {
+        let apps = [app(
+            7_537,
+            "ChatGPT",
+            vec![
+                top_level(
+                    "/org/a11y/chatgpt/frame/1",
+                    "ChatGPT",
+                    true,
+                    true,
+                    bounds(72.0, 0.0, 1635.0, 1067.0),
+                ),
+                top_level(
+                    "/org/a11y/chatgpt/frame/2",
+                    "ChatGPT",
+                    false,
+                    false,
+                    bounds(100.0, 100.0, 400.0, 300.0),
+                ),
+            ],
+        )];
+        let target = window(7_537, "ChatGPT", bounds(72.0, 0.0, 1635.0, 1067.0));
+        assert_eq!(
+            matched_path(&target, &apps),
+            &apps[0].top_levels.as_ref().unwrap()[0].object_ref
+        );
+    }
+
+    #[test]
+    fn pid_mismatch_fails_closed() {
+        let apps = [app(99, "kate", Vec::new())];
+        let target = window(100, "Kate", bounds(0.0, 0.0, 800.0, 600.0));
+        assert!(matches!(
+            match_window_accessibility(&target, &apps),
+            WindowAccessibilityMatch::Unavailable { .. }
+        ));
+    }
+
+    #[test]
+    fn duplicate_titles_without_unique_active_frame_are_ambiguous() {
+        let shared = bounds(0.0, 0.0, 800.0, 600.0);
+        let apps = [app(
+            100,
+            "dolphin",
+            vec![
+                top_level(
+                    "/org/a11y/dolphin/frame/1",
+                    "Files",
+                    true,
+                    true,
+                    shared.clone(),
+                ),
+                top_level("/org/a11y/dolphin/frame/2", "Files", true, true, shared),
+            ],
+        )];
+        let target = window(100, "Files", bounds(0.0, 0.0, 800.0, 600.0));
+        assert!(matches!(
+            match_window_accessibility(&target, &apps),
+            WindowAccessibilityMatch::Ambiguous { .. }
+        ));
+    }
+
+    #[test]
+    fn duplicate_titles_without_high_iou_margin_have_no_winner() {
+        let apps = [app(
+            100,
+            "electron",
+            vec![
+                top_level(
+                    "/org/a11y/electron/frame/1",
+                    "Editor",
+                    true,
+                    true,
+                    bounds(0.0, 0.0, 800.0, 600.0),
+                ),
+                top_level(
+                    "/org/a11y/electron/frame/2",
+                    "Editor",
+                    false,
+                    false,
+                    bounds(10.0, 10.0, 800.0, 600.0),
+                ),
+            ],
+        )];
+        let target = window(100, "Editor", bounds(0.0, 0.0, 800.0, 600.0));
+        assert!(matches!(
+            match_window_accessibility(&target, &apps),
+            WindowAccessibilityMatch::Ambiguous { .. }
+        ));
+    }
+
+    #[test]
+    fn duplicate_title_with_unknown_sibling_bounds_fails_closed() {
+        let mut sibling = top_level(
+            "/org/a11y/electron/frame/2",
+            "Editor",
+            false,
+            false,
+            bounds(20.0, 20.0, 400.0, 300.0),
+        );
+        sibling.bounds = None;
+        let apps = [app(
+            100,
+            "electron",
+            vec![
+                top_level(
+                    "/org/a11y/electron/frame/1",
+                    "Editor",
+                    true,
+                    true,
+                    bounds(0.0, 0.0, 800.0, 600.0),
+                ),
+                sibling,
+            ],
+        )];
+        let target = window(100, "Editor", bounds(0.0, 0.0, 800.0, 600.0));
+        assert!(matches!(
+            match_window_accessibility(&target, &apps),
+            WindowAccessibilityMatch::Ambiguous { .. }
+        ));
+    }
+
+    #[test]
+    fn incomplete_top_level_discovery_fails_closed() {
+        let mut discovered = app(100, "electron", Vec::new());
+        discovered.top_levels = None;
+        let target = window(100, "Editor", bounds(0.0, 0.0, 800.0, 600.0));
+        assert!(matches!(
+            match_window_accessibility(&target, &[discovered]),
+            WindowAccessibilityMatch::Unavailable { .. }
+        ));
+    }
+
+    #[test]
+    fn selected_top_level_root_isolated_from_sibling_tree() {
+        let apps = [app(
+            100,
+            "dolphin",
+            vec![
+                top_level(
+                    "/org/a11y/dolphin/frame/sibling",
+                    "Other",
+                    false,
+                    false,
+                    bounds(0.0, 0.0, 400.0, 400.0),
+                ),
+                top_level(
+                    "/org/a11y/dolphin/frame/selected",
+                    "Files",
+                    true,
+                    true,
+                    bounds(500.0, 0.0, 800.0, 600.0),
+                ),
+            ],
+        )];
+        let target = window(100, "Files", bounds(500.0, 0.0, 800.0, 600.0));
+        assert_eq!(
+            matched_path(&target, &apps),
+            &object_ref("/org/a11y/dolphin/frame/selected")
+        );
+    }
+}
