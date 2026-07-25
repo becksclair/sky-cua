@@ -5,10 +5,11 @@ import subprocess
 import tarfile
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+import _opencode_config
 import standalone_release
 from standalone_release import (
     ARCHIVE_NAME,
@@ -38,6 +39,7 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
         "resources/codex-compat/openai-bundled/plugins/browser/skills/control-in-app-browser/SKILL.md",
         "resources/model-documentation/README.md",
         "scripts/_codex_app_server.py",
+        "scripts/_opencode_config.py",
         "install.py",
     ):
         _write(root / relative, "{}\n" if relative.endswith(".json") else "fixture\n")
@@ -348,3 +350,209 @@ def test_detected_hosts_receive_native_plugins_and_hash_free_openclaw_definition
         assert sorted(path.name for path in skill_root.iterdir()) == sorted(
             standalone_release.SKILL_NAMES
         )
+
+
+def _assemble_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    repo = tmp_path / "repo"
+    core, cua_node = _fixture_repo(repo)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", repo)
+    payload = tmp_path / "payload"
+    assemble_payload(payload, core_root=core, cua_node_root=cua_node)
+    return payload
+
+
+def _seed_opencode_config(home: Path, *, body: str) -> Path:
+    config_dir = home / ".config/opencode"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "opencode.jsonc"
+    config_path.write_text(body, encoding="utf-8")
+    config_path.chmod(0o600)
+    return config_path
+
+
+def test_install_rewrites_existing_opencode_config_to_flat_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+
+    home = tmp_path / "home"
+    legacy_body = (
+        "{\n"
+        '  "$schema": "https://opencode.ai/config.json",\n'
+        '  "model": "opencode-go/minimax-m3",\n'
+        '  "permission": {"*": "allow"},\n'
+        '  "agent": {"explore": {"permission": {"edit": "deny"}}},\n'
+        '  "mcp": {\n'
+        '    "sky_cua": {\n'
+        '      "type": "local",\n'
+        '      "command": ["/home/bex/.local/share/sky-cua/bin/sky-cua-client", "mcp"],\n'
+        '      "cwd": "/home/bex/.local/share/sky-cua",\n'
+        '      "environment": {\n'
+        '        "SKY_CUA_DOCUMENTATION_ROOT": "/home/bex/.local/share/sky-cua/components/documentation",\n'
+        '        "SKY_CUA_REPO_ROOT": "/home/bex/.local/share/sky-cua/components/core-linux-x64",\n'
+        '        "SKY_CUA_RELEASE_ROOT": "/home/bex/.local/share/sky-cua",\n'
+        '        "SKY_CUA_MCP_CALLER_PROVENANCE": "opencode",\n'
+        '        "SKY_CUA_CODEX_BROWSER_SOCKET_PATH": "/run/user/1000/sky-cua/codex-browser.sock"\n'
+        "      },\n"
+        '      "enabled": true,\n'
+        '      "timeout": 30000\n'
+        "    },\n"
+        '    "node_repl": {\n'
+        '      "type": "local",\n'
+        '      "command": ["/home/bex/.local/share/sky-cua/bin/node_repl"],\n'
+        '      "cwd": "/home/bex/.local/share/sky-cua",\n'
+        '      "environment": {\n'
+        '        "CODEX_NODE_REPL_PATH": "/home/bex/.local/share/sky-cua/bin/node_repl",\n'
+        '        "NODE_REPL_NODE_PATH": "/home/bex/.local/share/sky-cua/bin/node",\n'
+        '        "NODE_REPL_NODE_MODULE_DIRS": "/home/bex/.local/share/sky-cua/lib/node_modules",\n'
+        '        "PLAYWRIGHT_BROWSERS_PATH": "/home/bex/.local/share/sky-cua/components/cua-node-linux-x64-glibc/share/playwright",\n'
+        '        "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S": "41e1151f1e50f096c7561da32bb01123e74b6ecdd38f081e34da30091fc4f193,6d25aa7656feac858f3a3bdaea5bcbab0dbfd426c9de8e6931ce90c399ee8e4f",\n'
+        '        "SKY_CUA_DOCUMENTATION_ROOT": "/home/bex/.local/share/sky-cua/components/documentation",\n'
+        '        "SKY_CUA_REPO_ROOT": "/home/bex/.local/share/sky-cua/components/core-linux-x64",\n'
+        '        "SKY_CUA_RELEASE_ROOT": "/home/bex/.local/share/sky-cua/",\n'
+        '        "SKY_CUA_MCP_CALLER_PROVENANCE": "opencode",\n'
+        '        "SKY_CUA_CODEX_BROWSER_SOCKET_PATH": "/run/user/1000/sky-cua/codex-browser.sock"\n'
+        "      },\n"
+        '      "enabled": true,\n'
+        '      "timeout": 30000\n'
+        "    },\n"
+        '    "context7": {"type": "remote", "url": "https://mcp.context7.com/mcp"}\n'
+        "  }\n"
+        "}\n"
+    )
+    config_path = _seed_opencode_config(home, body=legacy_body)
+    env = {
+        "HOME": str(home),
+        "XDG_DATA_HOME": str(tmp_path / "xdg-data"),
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+    }
+
+    report = install_payload(payload, home=home, env=env, configure_hosts=False)
+    install_root = Path(str(report["install_root"]))
+
+    new_text = config_path.read_text(encoding="utf-8")
+    assert "components/core-linux-x64" not in new_text
+    assert "components/cua-node-linux-x64-glibc" not in new_text
+    assert "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S" not in new_text
+    assert "trusted_browser_client_sha256s" not in new_text
+
+    new_parsed = json.loads(new_text)
+    assert new_parsed["model"] == "opencode-go/minimax-m3"
+    assert new_parsed["agent"]["explore"]["permission"]["edit"] == "deny"
+    assert new_parsed["mcp"]["context7"]["url"] == "https://mcp.context7.com/mcp"
+
+    sky_cua = new_parsed["mcp"]["sky_cua"]
+    assert sky_cua["type"] == "local"
+    assert sky_cua["command"] == [str(install_root / "bin/sky-cua-client"), "mcp"]
+    assert sky_cua["cwd"] == str(install_root)
+    assert sky_cua["environment"]["SKY_CUA_REPO_ROOT"] == str(install_root)
+    assert sky_cua["environment"]["SKY_CUA_RELEASE_ROOT"] == str(install_root)
+    assert sky_cua["environment"]["SKY_CUA_DOCUMENTATION_ROOT"] == str(install_root / "docs")
+    assert (
+        sky_cua["environment"]["SKY_CUA_CODEX_BROWSER_SOCKET_PATH"]
+        == "/run/user/1000/sky-cua/codex-browser.sock"
+    )
+    assert sky_cua["environment"]["SKY_CUA_MCP_CALLER_PROVENANCE"] == "opencode"
+
+    node_repl = new_parsed["mcp"]["node_repl"]
+    assert node_repl["command"] == [str(install_root / "bin/node_repl")]
+    assert node_repl["environment"]["CODEX_NODE_REPL_PATH"] == str(install_root / "bin/node_repl")
+    assert node_repl["environment"]["NODE_REPL_NODE_PATH"] == str(install_root / "bin/node")
+    assert node_repl["environment"]["NODE_REPL_NODE_MODULE_DIRS"] == str(
+        install_root / "lib/node_modules"
+    )
+    assert node_repl["environment"]["PLAYWRIGHT_BROWSERS_PATH"] == str(
+        install_root / "share/playwright"
+    )
+    assert "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S" not in node_repl["environment"]
+    assert node_repl["environment"]["SKY_CUA_REPO_ROOT"] == str(install_root)
+
+    opencode = cast("dict[str, object]", report["opencode_config"])
+    assert opencode["status"] == "updated"
+    backup_path = Path(str(opencode["backup_path"]))
+    assert backup_path.parent == config_path.parent / _opencode_config.OPENCODE_BACKUP_DIR_NAME
+    assert backup_path.read_bytes() == legacy_body.encode("utf-8")
+
+    second_report = install_payload(payload, home=home, env=env, configure_hosts=False)
+    second_opencode = cast("dict[str, object]", second_report["opencode_config"])
+    assert second_opencode["status"] == "unchanged"
+
+
+def test_install_opencode_no_op_when_no_global_config_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+
+    home = tmp_path / "home"
+    env = {"HOME": str(home), "XDG_DATA_HOME": str(tmp_path / "xdg-data")}
+
+    report = install_payload(payload, home=home, env=env, configure_hosts=False)
+
+    opencode = cast("dict[str, object]", report["opencode_config"])
+    assert opencode["status"] == "no_global_config"
+    assert opencode["config_path"] is None
+    assert not (home / ".config/opencode/opencode.jsonc").exists()
+    assert not (home / ".config/opencode").exists()
+
+
+def test_install_opencode_refuses_when_opencode_config_env_override_is_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+
+    home = tmp_path / "home"
+    config_path = _seed_opencode_config(home, body='{"$schema": "x", "mcp": {}}\n')
+    env = {
+        "HOME": str(home),
+        "XDG_DATA_HOME": str(tmp_path / "xdg-data"),
+        "OPENCODE_CONFIG": "/some/other/opencode.json",
+    }
+    original_bytes = config_path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="OPENCODE_CONFIG"):
+        install_payload(payload, home=home, env=env, configure_hosts=False)
+
+    assert config_path.read_bytes() == original_bytes
+
+
+def test_install_opencode_drops_jsonc_comments_but_keeps_user_keys_on_first_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first install into a fresh ``opencode.jsonc`` drops ``//`` comments
+    and preserves the user's existing top-level keys while adding the managed
+    MCP block."""
+    payload = _assemble_payload(tmp_path, monkeypatch)
+
+    home = tmp_path / "home"
+    config_path = _seed_opencode_config(
+        home,
+        body=(
+            "{\n"
+            "  // top-level schema + model\n"
+            '  "$schema": "https://opencode.ai/config.json",\n'
+            '  "model": "opencode-go/minimax-m3",\n'
+            '  "permission": {"*": "allow"}\n'
+            "}\n"
+        ),
+    )
+    env = {"HOME": str(home), "XDG_DATA_HOME": str(tmp_path / "xdg-data")}
+
+    report = install_payload(payload, home=home, env=env, configure_hosts=False)
+    install_root = Path(str(report["install_root"]))
+
+    new_parsed = json.loads(config_path.read_text(encoding="utf-8"))
+    assert new_parsed["model"] == "opencode-go/minimax-m3"
+    assert new_parsed["permission"] == {"*": "allow"}
+    assert set(new_parsed["mcp"]) == set(_opencode_config.OPENCODE_MANAGED_SERVERS)
+
+    sky_cua = new_parsed["mcp"]["sky_cua"]
+    assert sky_cua["type"] == "local"
+    assert sky_cua["command"] == [str(install_root / "bin/sky-cua-client"), "mcp"]
+    assert sky_cua["enabled"] is True
+    assert sky_cua["timeout"] == 30_000
+    node_repl = new_parsed["mcp"]["node_repl"]
+    assert node_repl["type"] == "local"
+    assert node_repl["enabled"] is True
+    assert node_repl["timeout"] == 30_000
+    opencode = cast("dict[str, object]", report["opencode_config"])
+    assert opencode["status"] == "updated"

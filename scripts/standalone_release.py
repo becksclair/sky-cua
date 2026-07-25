@@ -14,6 +14,8 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import _opencode_config
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TARGET = "linux-x64-glibc"
 PRODUCT_VERSION = "0.1.1"
@@ -140,6 +142,7 @@ def assemble_payload(payload_root: Path, *, core_root: Path, cua_node_root: Path
     _copy_file(
         REPO_ROOT / "scripts/_codex_app_server.py", artifact_scripts / "_codex_app_server.py"
     )
+    _copy_file(REPO_ROOT / "scripts/_opencode_config.py", artifact_scripts / "_opencode_config.py")
     _write_release_manifest(payload_root)
     validate_payload(payload_root)
 
@@ -174,6 +177,7 @@ def validate_payload(payload_root: Path) -> None:
         "docs/inventories/routing-inventory.json",
         "install.py",
         "scripts/standalone_release.py",
+        "scripts/_opencode_config.py",
     )
     missing = [relative for relative in required if not (payload_root / relative).is_file()]
     if missing:
@@ -486,6 +490,9 @@ def install_payload(
         install_home, install_home / ".local/bin/sky-cua-chrome-host"
     )
     skills = _project_skills(install_root, install_home)
+    opencode_report = _opencode_config.install_opencode_config(
+        install_root, home=install_home, env=active_env
+    )
     plugins: tuple[str, ...] = ()
     openclaw = False
     if configure_hosts:
@@ -504,6 +511,7 @@ def install_payload(
         "skills": [str(path) for path in skills],
         "codex_plugins": list(plugins),
         "openclaw_node_repl": openclaw,
+        "opencode_config": opencode_report,
     }
 
 

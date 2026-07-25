@@ -52,9 +52,17 @@ const SUPPORTED_PROTOCOLS = [
   "2025-06-18",
   "2025-11-25",
 ] as const;
-const SUPPORTED_PROTOCOL_SET = new Set(SUPPORTED_PROTOCOLS);
-const SERVER_INSTRUCTIONS =
-  "Use `js` to run JavaScript in the persistent Node-backed kernel. When a skill or prompt says to use `node_repl`, call this server's `js` execution tool. Calls default to a 30000 ms (30 seconds) timeout when `timeout_ms` is omitted. The runtime exposes `nodeRepl.cwd`, `nodeRepl.homeDir`, `nodeRepl.tmpDir`, `nodeRepl.requestMeta`, `nodeRepl.setResponseMeta(...)`, and `await nodeRepl.emitImage(...)`. Top-level bindings persist across `js` calls until `js_reset`; do not redeclare existing `const` or `let` names. Reuse existing bindings, use top-level `var` for reusable state that may be assigned again, or choose a fresh descriptive name. Use `js_add_node_module_dir` before `js` when a skill provides an extra package directory, and use dynamic imports like `await import(\"playwright\")` rather than filesystem paths under `./node_modules`.";
+const SUPPORTED_PROTOCOL_SET = new Set<string>(SUPPORTED_PROTOCOLS);
+const SERVER_INSTRUCTIONS = [
+  "Use `js` to run JavaScript in the persistent Node-backed kernel.",
+  "When a skill or prompt says to use `node_repl`, call this server's `js` execution tool.",
+  "Calls default to a 30000 ms (30 seconds) timeout when `timeout_ms` is omitted.",
+  "The runtime exposes `nodeRepl.cwd`, `nodeRepl.homeDir`, `nodeRepl.tmpDir`, `nodeRepl.requestMeta`, `nodeRepl.setResponseMeta(...)`, `nodeRepl.write(value)`, and `await nodeRepl.emitImage(...)`.",
+  "Use `nodeRepl.write(value)` to surface text output without a trailing newline, or `console.log(...)` for debugging with newlines; the value of the last expression in your code is not returned — only explicit `nodeRepl.write(...)`, `console.log(...)`, and `nodeRepl.emitImage(...)` calls produce content in the tool result.",
+  "Top-level bindings persist across `js` calls until `js_reset`; do not redeclare existing `const` or `let` names.",
+  "Reuse existing bindings, use top-level `var` for reusable state that may be assigned again, or choose a fresh descriptive name.",
+  "Use `js_add_node_module_dir` before `js` when a skill provides an extra package directory, and use dynamic imports like `await import(\"playwright\")` rather than filesystem paths under `./node_modules`.",
+].join(" ");
 const TOOLS = toolsFixture.tools;
 
 export const MCP_SERVER_INFO = Object.freeze({ name: "node_repl", version: "0.1.0" });

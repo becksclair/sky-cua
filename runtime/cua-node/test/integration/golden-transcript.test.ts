@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "bun:test";
 import { strict as assert } from "node:assert";
-import contractFixture from "../../test/fixtures/upstream-5307/contract.json";
 import toolsFixture from "../../test/fixtures/upstream-5307/tools-list.json";
 import transcriptFixture from "../../test/fixtures/upstream-5307/mcp-transcripts.json";
 import { TEST_NODE_PATH } from "../test-node-path.ts";
@@ -74,9 +73,24 @@ test("built host reproduces the golden initialize, tools, and js transcript", as
     const { instructions: _instructions, ...actualInitializeResult } =
       initialize.result ?? {};
     assert.deepEqual(actualInitializeResult, expectedInitializeResult);
-    assert.equal(
-      initialize.result?.instructions,
-      contractFixture.mcp.initialize.instructions,
+    const instructions = String(
+      (initialize.result as Record<string, unknown> | undefined)?.instructions ?? "",
+    );
+    assert.ok(instructions.length > 0, "instructions must be present");
+    assert.ok(
+      instructions.startsWith(
+        "Use `js` to run JavaScript in the persistent Node-backed kernel.",
+      ),
+    );
+    assert.ok(
+      instructions.includes(
+        "the value of the last expression in your code is not returned",
+      ),
+      "instructions must state no implicit return",
+    );
+    assert.ok(
+      instructions.includes("nodeRepl.write(value)"),
+      "instructions must mention nodeRepl.write(value)",
     );
     const tools = await request(2, "tools/list", {});
     assert.deepEqual(tools.result, { tools: toolsFixture.tools });
