@@ -84,6 +84,7 @@
         "SKY_CUA_XKB_RULES",
         "SKY_CUA_XKB_VARIANT",
         "WAYLAND_DISPLAY",
+        "XAUTHORITY",
         "XDG_CURRENT_DESKTOP",
         "XDG_RUNTIME_DIR",
         "XDG_SESSION_TYPE",

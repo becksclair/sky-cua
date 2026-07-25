@@ -34,6 +34,7 @@ import _install_shared
 from _install_shared import (
     BROWSER_SELECTION_ENV,
     DEFAULT_LOCAL_INSTALL_DIR,
+    DESKTOP_SESSION_ENV_KEYS,
     MCP_HOST_CHOICES,
     atomic_sibling_path,
     ensure_parent,
@@ -83,6 +84,7 @@ INSTALLABLE_MCP_HOST_CHOICES = tuple(host for host in MCP_HOST_CHOICES if host !
 OPTIONAL_MCP_RUNTIME_ENV = (
     MCP_BROWSER_CONTROL_MODE_ENV,
     MCP_CODEX_BROWSER_SOCKET_PATH_ENV,
+    *DESKTOP_SESSION_ENV_KEYS,
 )
 MCP_LAUNCH_POLICY_STATE = "mcp-launch-policy.json"
 RECOGNIZED_MCP_LAUNCH_ENV = (
@@ -114,7 +116,11 @@ class McpLaunchPolicy:
 def optional_mcp_runtime_env(environ: dict[str, str] | None = None) -> dict[str, str]:
     """Return explicitly configured daemon env without inventing defaults."""
     env = os.environ if environ is None else environ
-    return {name: env[name] for name in OPTIONAL_MCP_RUNTIME_ENV if name in env}
+    return {
+        name: env[name].strip()
+        for name in OPTIONAL_MCP_RUNTIME_ENV
+        if name in env and env[name].strip()
+    }
 
 
 def current_platform() -> str:
@@ -440,6 +446,7 @@ def generate_mcp_config(
                     "SKY_CUA_XKB_RULES",
                     "SKY_CUA_XKB_VARIANT",
                     "WAYLAND_DISPLAY",
+                    "XAUTHORITY",
                     "XDG_CURRENT_DESKTOP",
                     "XDG_RUNTIME_DIR",
                     "XDG_SESSION_TYPE",

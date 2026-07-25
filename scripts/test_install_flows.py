@@ -841,6 +841,8 @@ def test_browser_control_runtime_env_is_optional_forwarded_and_idempotent(
 
     monkeypatch.setenv(control_mode, "hybrid")
     monkeypatch.setenv(socket_path, "/run/user/1000/sky cua/codex-browser.sock")
+    monkeypatch.setenv("WAYLAND_DISPLAY", " wayland-0 ")
+    monkeypatch.setenv("DISPLAY", "   ")
 
     direct = install_mcp_server.generate_mcp_config(client_path, target_dir)
     direct_env = direct["mcpServers"]["computer-use"]["env"]  # type: ignore[index]
@@ -852,6 +854,8 @@ def test_browser_control_runtime_env_is_optional_forwarded_and_idempotent(
     opencode_env = json.loads(first_opencode)["mcp"]["sky_cua"]["environment"]
     assert opencode_env[control_mode] == "hybrid"
     assert opencode_env[socket_path] == "/run/user/1000/sky cua/codex-browser.sock"
+    assert opencode_env["WAYLAND_DISPLAY"] == "wayland-0"
+    assert "DISPLAY" not in opencode_env
     install_mcp_server.install_opencode(target_dir, client_path)
     assert opencode_path.read_bytes() == first_opencode
 

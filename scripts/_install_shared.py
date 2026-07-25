@@ -27,6 +27,16 @@ LEGACY_BROWSER_SELECTION_ALIASES = {
 }
 DEFAULT_LOCAL_INSTALL_DIR = Path.home() / ".local" / "share" / "sky-cua"
 MCP_HOST_CHOICES = ("generic", "opencode", "claude-code", "claude-desktop", "pi", "openclaw")
+DESKTOP_SESSION_ENV_KEYS = (
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DESKTOP_SESSION",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_RUNTIME_DIR",
+    "XDG_SESSION_TYPE",
+    "XAUTHORITY",
+)
 GATEWAY_AUTH_ENV_KEYS = ("OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD")
 MODEL_SKILL_NAMES = ("browser-use", "computer-use", "phone-use")
 SKILL_PROJECTION_MARKER = "SKY_CUA_PROJECTION.json"

@@ -17,11 +17,19 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
+from _install_shared import DESKTOP_SESSION_ENV_KEYS
+
 OPENCODE_GLOBAL_CONFIG_NAMES = ("opencode.json", "opencode.jsonc")
 OPENCODE_MANAGED_SERVERS = ("sky_cua", "node_repl")
 OPENCODE_CALLER_PROVENANCE = "opencode"
 OPENCODE_MCP_TIMEOUT_MS = 30_000
 OPENCODE_BACKUP_DIR_NAME = ".sky-cua-backups"
+
+
+def _desktop_session_env(env: Mapping[str, str]) -> dict[str, str]:
+    return {
+        key: env[key].strip() for key in DESKTOP_SESSION_ENV_KEYS if key in env and env[key].strip()
+    }
 
 
 def _opencode_browser_socket_path(env: Mapping[str, str]) -> str:
@@ -83,15 +91,19 @@ def _build_opencode_servers(
     *,
     browser_socket_path: str,
     timeout_ms: int = OPENCODE_MCP_TIMEOUT_MS,
+    env: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     client = str(install_root / "bin/sky-cua-client")
     node_repl = str(install_root / "bin/node_repl")
+    active_env = os.environ if env is None else env
+    desktop_env = _desktop_session_env(active_env)
     shared_env = {
         "SKY_CUA_CODEX_BROWSER_SOCKET_PATH": browser_socket_path,
         "SKY_CUA_MCP_CALLER_PROVENANCE": OPENCODE_CALLER_PROVENANCE,
         "SKY_CUA_DOCUMENTATION_ROOT": str(install_root / "docs"),
         "SKY_CUA_RELEASE_ROOT": str(install_root),
         "SKY_CUA_REPO_ROOT": str(install_root),
+        **desktop_env,
     }
     return {
         "sky_cua": {
@@ -224,7 +236,10 @@ def install_opencode_config(
 
     browser_socket_path = _opencode_browser_socket_path(env)
     servers = _build_opencode_servers(
-        install_root, browser_socket_path=browser_socket_path, timeout_ms=timeout_ms
+        install_root,
+        browser_socket_path=browser_socket_path,
+        timeout_ms=timeout_ms,
+        env=env,
     )
     merged = _merge_opencode_servers(existing, servers)
     rendered = json.dumps(merged, indent=2, sort_keys=False) + "\n"

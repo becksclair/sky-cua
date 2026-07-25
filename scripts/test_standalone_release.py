@@ -425,6 +425,8 @@ def test_install_rewrites_existing_opencode_config_to_flat_root(
         "HOME": str(home),
         "XDG_DATA_HOME": str(tmp_path / "xdg-data"),
         "XDG_RUNTIME_DIR": "/run/user/1000",
+        "WAYLAND_DISPLAY": "wayland-0",
+        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
     }
 
     report = install_payload(payload, home=home, env=env, configure_hosts=False)
@@ -453,6 +455,9 @@ def test_install_rewrites_existing_opencode_config_to_flat_root(
         == "/run/user/1000/sky-cua/codex-browser.sock"
     )
     assert sky_cua["environment"]["SKY_CUA_MCP_CALLER_PROVENANCE"] == "opencode"
+    assert sky_cua["environment"]["XDG_RUNTIME_DIR"] == "/run/user/1000"
+    assert sky_cua["environment"]["WAYLAND_DISPLAY"] == "wayland-0"
+    assert sky_cua["environment"]["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/1000/bus"
 
     node_repl = new_parsed["mcp"]["node_repl"]
     assert node_repl["command"] == [str(install_root / "bin/node_repl")]
