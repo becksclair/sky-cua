@@ -129,6 +129,20 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
     return core, cua_node
 
 
+def test_computer_use_marketplace_metadata_includes_phone_capability() -> None:
+    manifest_path = (
+        standalone_release.REPO_ROOT
+        / "resources/codex-compat/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert {"android", "phone", "mobile-automation"} <= set(manifest["keywords"])
+    interface = manifest["interface"]
+    assert interface["shortDescription"] == "Control desktop apps and Android devices"
+    assert "connected Android devices" in interface["longDescription"]
+    assert any("Android phone" in prompt for prompt in interface["defaultPrompt"])
+
+
 def test_build_owns_generated_inputs_and_emits_one_fixed_archive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
