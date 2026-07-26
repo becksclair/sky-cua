@@ -24,7 +24,7 @@ from _standalone_release_command import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TARGET = "linux-x64-glibc"
-PRODUCT_VERSION = "0.1.1"
+PRODUCT_VERSION = "0.2.0"
 ARCHIVE_NAME = f"sky-cua-{TARGET}.tar.gz"
 PAYLOAD_DIR_NAME = f"sky-cua-{TARGET}"
 SKILL_NAMES = ("computer-use", "browser-use", "phone-use")
