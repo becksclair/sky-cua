@@ -27,6 +27,8 @@ const LOCKED_DEPENDENCIES: Record<string, string> = {
   "@img/sharp-linux-x64": "0.34.5",
   "@napi-rs/canvas": "0.1.91",
   "@napi-rs/canvas-linux-x64-gnu": "0.1.91",
+  acorn: "8.16.0",
+  "acorn-walk": "8.3.5",
   "pdfjs-dist": "5.4.624",
   pixelmatch: "7.1.0",
   playwright: "1.57.0",
@@ -154,6 +156,51 @@ export function validateSourceTruth(snapshot: SourceTruthSnapshot): string[] {
   const hostOutput = byField(outputs, "name", "node_repl-host-kernel");
   expectEqual(errors, "host output SHA-256", hostOutput.sha256, snapshot.distSha256);
   expectEqual(errors, "host output size", hostOutput.size_bytes, snapshot.distSizeBytes);
+
+  for (const expected of [
+    {
+      name: "acorn",
+      version: "8.16.0",
+      integrity:
+        "sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==",
+      sha256: "e0d357db62f8b138d2e575a2cb92f087fa5d7cdb2f95d7512b9868ff3ef81277",
+      sizeBytes: 558_610,
+    },
+    {
+      name: "acorn-walk",
+      version: "8.3.5",
+      integrity:
+        "sha512-HEHNfbars9v4pgpW6SO1KSPkfoS0xVOM/9UzkJltjlsHZmJasxg8aXkuZa7SMf8vKGIBhpUsPluQSqhJFCqebw==",
+      sha256: "cd968876dd2797441c7c6de59eaa867e2d804e490e4e6c6e5d9be3d247ea6b0f",
+      sizeBytes: 53_765,
+    },
+  ]) {
+    const runtimePackage = byField(runtimePackages, "name", expected.name);
+    const license = record(runtimePackage.license, `${expected.name} license`);
+    const packageLock = record(
+      lockPackages[`node_modules/${expected.name}`],
+      `package-lock ${expected.name}`,
+    );
+    expectEqual(errors, `${expected.name} version`, runtimePackage.version, expected.version);
+    expectEqual(errors, `${expected.name} integrity`, runtimePackage.integrity, expected.integrity);
+    expectEqual(errors, `${expected.name} tree SHA-256`, runtimePackage.sha256, expected.sha256);
+    expectEqual(errors, `${expected.name} tree size`, runtimePackage.size_bytes, expected.sizeBytes);
+    expectEqual(errors, `${expected.name} license`, license.expression, "MIT");
+    expectEqual(
+      errors,
+      `${expected.name} notice path`,
+      stringArray(license.notice_files),
+      [`lib/node_modules/${expected.name}/LICENSE`],
+    );
+    expectEqual(errors, `package-lock ${expected.name} version`, packageLock.version, expected.version);
+    expectEqual(errors, `package-lock ${expected.name} license`, packageLock.license, "MIT");
+    expectEqual(
+      errors,
+      `package-lock ${expected.name} integrity`,
+      packageLock.integrity,
+      expected.integrity,
+    );
+  }
 
   const pixelmatch = byField(runtimePackages, "name", "pixelmatch");
   const pixelmatchLicense = record(pixelmatch.license, "pixelmatch license");

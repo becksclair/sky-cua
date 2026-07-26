@@ -18,6 +18,8 @@ const expectedComponents = new Map<
   string,
   { version: string; disposition: Disposition }
 >([
+  ["acorn", { version: "8.16.0", disposition: "routine-notice-clearance" }],
+  ["acorn-walk", { version: "8.3.5", disposition: "routine-notice-clearance" }],
   ["node-runtime", { version: "24.14.0", disposition: "routine-notice-clearance" }],
   ["npm", { version: "11.9.0", disposition: "routine-notice-clearance" }],
   ["corepack", { version: "0.34.6", disposition: "routine-notice-clearance" }],
@@ -258,6 +260,20 @@ test("PDF data, Canvas package, and pixelmatch licenses match shipped bytes", as
   );
   const expected = new Map([
     [
+      "acorn",
+      {
+        license: "MIT",
+        sha256: "e0d357db62f8b138d2e575a2cb92f087fa5d7cdb2f95d7512b9868ff3ef81277",
+      },
+    ],
+    [
+      "acorn-walk",
+      {
+        license: "MIT",
+        sha256: "cd968876dd2797441c7c6de59eaa867e2d804e490e4e6c6e5d9be3d247ea6b0f",
+      },
+    ],
+    [
       "pdfjs-cmaps",
       {
         license: "BSD-3-Clause",
@@ -299,6 +315,14 @@ test("PDF data, Canvas package, and pixelmatch licenses match shipped bytes", as
   }
 
   const exactNotices = new Map([
+    [
+      "notices/acorn-8.16.0.LICENSE",
+      "76a876cf886ff9be2a8b5e2e86514fed06223c8c9f0c1e9ee9606e93841e00b7",
+    ],
+    [
+      "notices/acorn-walk-8.3.5.LICENSE",
+      "c2d8184ea9becd063aa40be243e8c6ec2c4f72828fdfe4b0752664ef73e96ed3",
+    ],
     [
       "notices/pdfjs-cmaps.LICENSE",
       "aa92ab5a472974865a96fd4a4e9c13bb41bf6fe1b309cb6b8da48bc9e19839a2",

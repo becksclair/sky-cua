@@ -340,6 +340,8 @@ function createUntrustedSurface() {
 
 function createConvenienceLoaders() {
   const specifiers = Object.freeze({
+    acorn: 'acorn',
+    acornWalk: 'acorn-walk',
     canvas: '@napi-rs/canvas',
     pdfjs: 'pdfjs-dist/legacy/build/pdf.mjs',
     pixelmatch: 'pixelmatch',

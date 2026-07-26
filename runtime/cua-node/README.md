@@ -24,6 +24,12 @@ module root, and trusted Browser hashes. Release, Node, module-root, and Browser
 client environment variables are optional diagnostic or development overrides,
 not normal startup requirements.
 
+Pinned lazy loaders are available through `nodeRepl.loaders` for `acorn`,
+`acornWalk`, `canvas`, `pdfjs`, `pixelmatch`, `playwright`, `sharp`, and
+`tesseract`. The Acorn pair is intended for structural inspection of generated
+or minified JavaScript; repository source should continue to use LSP or
+ast-grep where possible.
+
 Run the focused source gates from this directory:
 
     bun install --frozen-lockfile

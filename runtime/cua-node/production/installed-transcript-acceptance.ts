@@ -17,6 +17,10 @@ import { pathToFileURL } from "node:url";
 import contractFixture from "../test/fixtures/upstream-5307/contract.json";
 import toolsFixture from "../test/fixtures/upstream-5307/tools-list.json";
 import {
+  ACORN_LOADER_ACCEPTANCE_CODE,
+  ACORN_LOADER_ACCEPTANCE_RESULT,
+} from "../test/fixtures/acorn-loader-acceptance";
+import {
   startMcpSession,
   type McpSession,
 } from "./web-workbench-acceptance-helper";
@@ -179,12 +183,24 @@ async function initializeAndList(
     capabilities: {},
     clientInfo,
   });
-  assert.deepEqual(resultObject(initialize, "initialize"), {
+  const initialized = resultObject(initialize, "initialize");
+  const instructions = initialized.instructions;
+  assert.deepEqual({ ...initialized, instructions: undefined }, {
     protocolVersion: PROTOCOL_VERSION,
     capabilities: contractFixture.mcp.initialize.capabilities,
     serverInfo: contractFixture.mcp.server_info,
-    instructions: contractFixture.mcp.initialize.instructions,
+    instructions: undefined,
   });
+  assert.ok(typeof instructions === "string", "initialize instructions type");
+  assert.ok(
+    instructions.startsWith("Use `js` to run JavaScript in the persistent Node-backed kernel."),
+    "initialize instructions prefix",
+  );
+  assert.ok(instructions.includes("nodeRepl.write(value)"), "initialize write guidance");
+  assert.ok(
+    instructions.includes("the value of the last expression in your code is not returned"),
+    "initialize explicit-output guidance",
+  );
   session.notify("notifications/initialized", {});
   const listed = resultObject(await session.request("tools/list", {}), "tools/list");
   assert.deepEqual(listed, { tools: toolsFixture.tools });
@@ -392,6 +408,21 @@ async function verifyCodexTranscript(
       native_addon: true,
     });
 
+    const astEvidence = parseJsonText(
+      toolResult(
+        await session.request("tools/call", {
+          name: "js",
+          arguments: {
+            title: "Parse and walk installed JavaScript",
+            code: ACORN_LOADER_ACCEPTANCE_CODE,
+          },
+        }),
+        "installed Acorn parse and walk",
+      ),
+      "installed Acorn parse and walk",
+    );
+    assert.deepEqual(astEvidence, ACORN_LOADER_ACCEPTANCE_RESULT);
+
     const expectedSha = createHash("sha256").update(OUTPUT_BYTES).digest("hex");
     const localFile = toolResult(
       await session.request("tools/call", {
@@ -517,6 +548,7 @@ async function verifyCodexTranscript(
       cancellation_and_recovery: true,
       local_file_bytes: OUTPUT_BYTES.length,
       native_addon_loaded: true,
+      acorn_parse_and_walk: true,
       emitted_images: 1,
     };
   });

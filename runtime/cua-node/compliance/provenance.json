@@ -1,28 +1,299 @@
 {
-  "schema_version": 1,
-  "policy_id": "linux-cua-node-compliance",
-  "target": "linux-x64-glibc",
-  "status": "open",
-  "network_access": "not-used",
-  "records": [
-    {"component_id": "node-runtime", "source_uri": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz", "source_kind": "official-release", "expected_platform": "linux-x64-glibc", "status": "artifact-resolved", "resolved": true, "artifact_sha256": "41cd79bb7877c81605a9e68ec4c91547774f46a40c67a17e34d7179ef11729df", "sha256_scope": "exact-release-archive", "evidence": ["Exact official Node.js Linux x64 release archive SHA-256 recorded.", "Collect the Node.js release license and notice files from the exact archive."]},
-    {"component_id": "npm", "source_uri": "https://registry.npmjs.org/npm/-/npm-11.9.0.tgz", "source_kind": "npm", "expected_platform": "linux-x64-glibc", "status": "planned", "resolved": false, "artifact_sha256": null, "sha256_scope": "exact-package-tarball", "evidence": ["Collect npm's license and bundled dependency notices from the exact package context."]},
-    {"component_id": "corepack", "source_uri": "https://registry.npmjs.org/corepack/-/corepack-0.34.6.tgz", "source_kind": "npm", "expected_platform": "linux-x64-glibc", "status": "planned", "resolved": false, "artifact_sha256": null, "sha256_scope": "exact-package-tarball", "evidence": ["Collect Corepack's MIT license and package notices."]},
-    {"component_id": "playwright", "source_uri": "https://registry.npmjs.org/playwright/-/playwright-1.57.0.tgz", "source_kind": "npm", "expected_platform": "linux-x64-glibc", "status": "planned", "resolved": false, "artifact_sha256": null, "sha256_scope": "exact-package-tarball", "evidence": ["Collect Playwright's Apache-2.0 license and third-party notices."]},
-    {"component_id": "playwright-core", "source_uri": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.57.0.tgz", "source_kind": "npm", "expected_platform": "linux-x64-glibc", "status": "planned", "resolved": false, "artifact_sha256": null, "sha256_scope": "exact-package-tarball", "evidence": ["Collect Playwright Core's Apache-2.0 license and third-party notices."]},
-    {"component_id": "pdfjs-dist", "source_uri": "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-5.4.624.tgz", "source_kind": "npm", "expected_platform": "linux-x64-glibc", "status": "planned", "resolved": false, "artifact_sha256": null, "sha256_scope": "exact-package-tarball", "evidence": ["Collect PDF.js and component notices for 5.4.624."]},
-    {"component_id": "pdfjs-cmaps", "source_uri": "https://github.com/mozilla/pdf.js/tree/v5.4.624/web/cmaps", "source_kind": "official-release", "expected_platform": "linux-x64-glibc", "status": "cleared", "resolved": true, "artifact_sha256": "8e7e37a6ab3d1b0d7d24ed62ef49e7374c6f79378b8189dc23bf90a6955b6de6", "sha256_scope": "prepared-data-tree-manifest", "evidence": ["Exact shipped CMap tree is bound by native-assets.lock.json.", "BSD-3-Clause notice copied byte-for-byte from share/pdfjs/cmaps/LICENSE to notices/pdfjs-cmaps.LICENSE."]},
-    {"component_id": "pdfjs-standard-fonts", "source_uri": "https://github.com/mozilla/pdf.js/tree/v5.4.624/standard_fonts", "source_kind": "official-release", "expected_platform": "linux-x64-glibc", "status": "cleared", "resolved": true, "artifact_sha256": "c8b927c60a75d97c4f75deb1ffc04eaa700b598106db47c67422ecb7dbe974cf", "sha256_scope": "prepared-data-tree-manifest", "evidence": ["Exact shipped standard-font tree is bound by native-assets.lock.json.", "BSD-3-Clause Foxit and OFL-1.1 Liberation notices are copied byte-for-byte from the shipped tree."]},
-    {"component_id": "tesseract-js", "source_uri": "https://registry.npmjs.org/tesseract.js/-/tesseract.js-7.0.0.tgz", "source_kind": "npm", "expected_platform": "linux-x64-glibc", "status": "planned", "resolved": false, "artifact_sha256": null, "sha256_scope": "exact-package-tarball", "evidence": ["Collect Tesseract.js Apache-2.0 license text."]},
-    {"component_id": "tesseract-js-core", "source_uri": "https://registry.npmjs.org/tesseract.js-core/-/tesseract.js-core-7.0.0.tgz", "source_kind": "npm", "expected_platform": "linux-x64-glibc", "status": "planned", "resolved": false, "artifact_sha256": null, "sha256_scope": "exact-package-tarball", "evidence": ["Collect Tesseract.js core Apache-2.0 license text."]},
-    {"component_id": "tessdata-eng", "source_uri": "https://github.com/tesseract-ocr/tessdata/archive/4.1.0/tessdata-4.1.0.tar.gz", "source_kind": "official-release", "expected_platform": "linux-x64-glibc", "status": "artifact-resolved", "resolved": true, "artifact_sha256": "daa0c97d651c19fba3b25e81317cd697e9908c8208090c94c3905381c23fc047", "sha256_scope": "exact-traineddata-file", "evidence": ["Signed Arch package tesseract-data-eng 2:4.1.0-5 owns the installed file; pacman -Qkk reports 0 altered.", "Arch PKGBUILD pins upstream tessdata 4.1.0 archive SHA-256 990fffb9b7a9b52dc9a2d053a9ef6852ca2b72bd8dfb22988b0b990a700fd3c7.", "Exact file size is 23466654 bytes."]},
-    {"component_id": "tessdata-osd", "source_uri": "https://github.com/tesseract-ocr/tessdata/archive/4.1.0/tessdata-4.1.0.tar.gz", "source_kind": "official-release", "expected_platform": "linux-x64-glibc", "status": "artifact-resolved", "resolved": true, "artifact_sha256": "e19f2ae860792fdf372cf48d8ce70ae5da3c4052962fe22e9de1f680c374bb0e", "sha256_scope": "exact-traineddata-file", "evidence": ["Signed Arch package tesseract-data-osd 2:4.1.0-5 owns the installed file; pacman -Qkk reports 0 altered.", "Arch PKGBUILD pins upstream tessdata 4.1.0 archive SHA-256 990fffb9b7a9b52dc9a2d053a9ef6852ca2b72bd8dfb22988b0b990a700fd3c7.", "Exact file size is 10562874 bytes."]},
-    {"component_id": "sharp", "source_uri": "https://registry.npmjs.org/sharp/-/sharp-0.34.5.tgz", "source_kind": "npm", "expected_platform": "linux-x64-glibc", "status": "planned", "resolved": false, "artifact_sha256": null, "sha256_scope": "exact-package-tarball", "evidence": ["Collect sharp's Apache-2.0 license text."]},
-    {"component_id": "sharp-linux-x64-addon", "source_uri": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.34.5.tgz", "source_kind": "npm", "expected_platform": "linux-x64-glibc", "status": "planned", "resolved": false, "artifact_sha256": null, "sha256_scope": "exact-package-tarball-and-addon", "evidence": ["Collect the sharp addon notice and retain the separate libvips gate."]},
-    {"component_id": "sharp-libvips-linux-x64", "source_uri": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.2.4.tgz", "source_kind": "npm", "expected_platform": "linux-x64-glibc", "status": "cleared", "resolved": true, "artifact_sha256": "9a2a2cf2b53ec123b3ee293bf66c234f8306681a5edfb058815b6bf66b9df8e9", "artifact_sha512": "b49c6288bb261dcf40c756f3de868e6015114d718844338306a86f7951e89eb1c9f7ffa4f3da9b2e5d1b7099ecf9ee2de2bbda341c5a119b05b527c076ab8faf", "sha256_scope": "package/lib/libvips-cpp.so.8.17.3", "sha512_scope": "npm-dist-integrity-decoded", "slsa_source_commit": "20b5e899954907a3039d6e3d4c200aaa0ec52c4c", "source_offer_uri": "sharp-libvips-1.2.4-source-offer.json", "evidence_record_uri": "notices/sharp-libvips-1.2.4.NOTICE.md", "evidence": ["npm SLSA provenance binds package 1.2.4 to sharp-libvips commit 20b5e899954907a3039d6e3d4c200aaa0ec52c4c and workflow ci.yml.", "sharp-libvips-1.2.4-source-offer.json pins the Linux build scripts, platform toolchain, patches, libvips 8.17.3, and 29 corresponding-source entries.", "notices/sharp-libvips-1.2.4.NOTICE.md records LGPL/GPL and all component notices."]},
-    {"component_id": "canvas", "source_uri": "https://registry.npmjs.org/@napi-rs/canvas/-/canvas-0.1.91.tgz", "source_kind": "npm", "expected_platform": "linux-x64-glibc", "status": "cleared", "resolved": true, "artifact_sha256": "110b2f6fbf3234fea13a14fce94284f1383eba1aa958447bf4ba06e3e8d29be8", "sha256_scope": "prepared-package-tree-manifest", "evidence": ["The package declares MIT in package.json and ships the exact MIT text at lib/node_modules/@napi-rs/canvas/LICENSE.", "The prepared JavaScript package tree is bound by runtime-lock.json independently of the native addon evidence."]},
-    {"component_id": "canvas-linux-x64-gnu", "source_uri": "https://github.com/Brooooooklyn/canvas/tree/6661e25b9520bfc2df1e4c9820717fee5dd304fd", "source_kind": "authoritative-source-build", "expected_platform": "linux-x64-glibc", "status": "cleared", "resolved": true, "artifact_sha256": "edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d", "sha256_scope": "self-built-skia.linux-x64-gnu.node", "native_addon_sha256": "edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d", "native_addon_sha256_scope": "vendor/cua-node-cache/canvas-build/build-glibc228-final4/target/x86_64-unknown-linux-gnu/release/libcanvas.so", "slsa_source_commit": "6661e25b9520bfc2df1e4c9820717fee5dd304fd", "skia_submodule_commit": "ee20d565acb08dece4a32e3f209cdd41119015ca", "source_offer_uri": "canvas-0.1.91-source-offer.json", "evidence_record_uri": "canvas-0.1.91-evidence.json", "evidence": ["Accepted final4 addon bytes, GLIBC 2.28 ceiling, LLD link map, and byte-identical independent final5 build are recorded in canvas-0.1.91-build-record.json.", "Generated Cargo.lock, target-filtered cargo metadata, exact 84-crate inventory, and complete Rust notices are preserved.", "The accepted build links the ten original SHA-256-pinned skia-ee20d565 Linux x64 gnu archives plus locally built libaom/libavif/mimalloc inputs; no deduplicated archives are used.", "Bundled Node 24.14.0 one-package full-subsystem acceptance passed all nine production-topology checks recorded in canvas-0.1.91-smoke.json."]},
-    {"component_id": "pixelmatch", "source_uri": "https://registry.npmjs.org/pixelmatch/-/pixelmatch-7.1.0.tgz", "source_kind": "npm", "expected_platform": "linux-x64-glibc", "status": "cleared", "resolved": true, "artifact_sha256": "6407fbe0821c7b3635924870de1173714beb723161dc033e5421eacdad8c6137", "sha256_scope": "prepared-package-tree-manifest", "evidence": ["Exact pixelmatch 7.1.0 prepared package tree and registry integrity are bound by runtime-lock.json.", "ISC notice copied byte-for-byte from lib/node_modules/pixelmatch/LICENSE to notices/pixelmatch-7.1.0.LICENSE."]},
-    {"component_id": "sky-cua", "source_uri": "https://github.com/heliasar/sky-cua", "source_kind": "first-party", "expected_platform": "linux-x64-glibc", "status": "artifact-resolved", "resolved": true, "artifact_sha256": "fecb9426aa44de2abdaaf4bc081d9c1a0cba7a2021dfbdc8c9c0d8572f8c86c2", "sha256_scope": "vendor/cua-node-cache/@heliasar-sky-cua-0.1.0.tgz", "evidence": ["The repacked first-party 0.1.0 tarball is hash-locked for preparation and retains LicenseRef-Heliasar-Proprietary/UNLICENSED."]}
-  ]
+	"schema_version": 1,
+	"policy_id": "linux-cua-node-compliance",
+	"target": "linux-x64-glibc",
+	"status": "open",
+	"network_access": "not-used",
+	"records": [
+		{
+			"component_id": "acorn",
+			"source_uri": "https://registry.npmjs.org/acorn/-/acorn-8.16.0.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "cleared",
+			"resolved": true,
+			"artifact_sha256": "e0d357db62f8b138d2e575a2cb92f087fa5d7cdb2f95d7512b9868ff3ef81277",
+			"sha256_scope": "prepared-package-tree-manifest",
+			"evidence": [
+				"Exact Acorn 8.16.0 prepared package tree and registry integrity are bound by runtime-lock.json.",
+				"MIT license copied byte-for-byte from lib/node_modules/acorn/LICENSE to notices/acorn-8.16.0.LICENSE."
+			]
+		},
+		{
+			"component_id": "acorn-walk",
+			"source_uri": "https://registry.npmjs.org/acorn-walk/-/acorn-walk-8.3.5.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "cleared",
+			"resolved": true,
+			"artifact_sha256": "cd968876dd2797441c7c6de59eaa867e2d804e490e4e6c6e5d9be3d247ea6b0f",
+			"sha256_scope": "prepared-package-tree-manifest",
+			"evidence": [
+				"Exact Acorn Walk 8.3.5 prepared package tree and registry integrity are bound by runtime-lock.json.",
+				"MIT license copied byte-for-byte from lib/node_modules/acorn-walk/LICENSE to notices/acorn-walk-8.3.5.LICENSE."
+			]
+		},
+		{
+			"component_id": "node-runtime",
+			"source_uri": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz",
+			"source_kind": "official-release",
+			"expected_platform": "linux-x64-glibc",
+			"status": "artifact-resolved",
+			"resolved": true,
+			"artifact_sha256": "41cd79bb7877c81605a9e68ec4c91547774f46a40c67a17e34d7179ef11729df",
+			"sha256_scope": "exact-release-archive",
+			"evidence": [
+				"Exact official Node.js Linux x64 release archive SHA-256 recorded.",
+				"Collect the Node.js release license and notice files from the exact archive."
+			]
+		},
+		{
+			"component_id": "npm",
+			"source_uri": "https://registry.npmjs.org/npm/-/npm-11.9.0.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "planned",
+			"resolved": false,
+			"artifact_sha256": null,
+			"sha256_scope": "exact-package-tarball",
+			"evidence": [
+				"Collect npm's license and bundled dependency notices from the exact package context."
+			]
+		},
+		{
+			"component_id": "corepack",
+			"source_uri": "https://registry.npmjs.org/corepack/-/corepack-0.34.6.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "planned",
+			"resolved": false,
+			"artifact_sha256": null,
+			"sha256_scope": "exact-package-tarball",
+			"evidence": ["Collect Corepack's MIT license and package notices."]
+		},
+		{
+			"component_id": "playwright",
+			"source_uri": "https://registry.npmjs.org/playwright/-/playwright-1.57.0.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "planned",
+			"resolved": false,
+			"artifact_sha256": null,
+			"sha256_scope": "exact-package-tarball",
+			"evidence": [
+				"Collect Playwright's Apache-2.0 license and third-party notices."
+			]
+		},
+		{
+			"component_id": "playwright-core",
+			"source_uri": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.57.0.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "planned",
+			"resolved": false,
+			"artifact_sha256": null,
+			"sha256_scope": "exact-package-tarball",
+			"evidence": [
+				"Collect Playwright Core's Apache-2.0 license and third-party notices."
+			]
+		},
+		{
+			"component_id": "pdfjs-dist",
+			"source_uri": "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-5.4.624.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "planned",
+			"resolved": false,
+			"artifact_sha256": null,
+			"sha256_scope": "exact-package-tarball",
+			"evidence": ["Collect PDF.js and component notices for 5.4.624."]
+		},
+		{
+			"component_id": "pdfjs-cmaps",
+			"source_uri": "https://github.com/mozilla/pdf.js/tree/v5.4.624/web/cmaps",
+			"source_kind": "official-release",
+			"expected_platform": "linux-x64-glibc",
+			"status": "cleared",
+			"resolved": true,
+			"artifact_sha256": "8e7e37a6ab3d1b0d7d24ed62ef49e7374c6f79378b8189dc23bf90a6955b6de6",
+			"sha256_scope": "prepared-data-tree-manifest",
+			"evidence": [
+				"Exact shipped CMap tree is bound by native-assets.lock.json.",
+				"BSD-3-Clause notice copied byte-for-byte from share/pdfjs/cmaps/LICENSE to notices/pdfjs-cmaps.LICENSE."
+			]
+		},
+		{
+			"component_id": "pdfjs-standard-fonts",
+			"source_uri": "https://github.com/mozilla/pdf.js/tree/v5.4.624/standard_fonts",
+			"source_kind": "official-release",
+			"expected_platform": "linux-x64-glibc",
+			"status": "cleared",
+			"resolved": true,
+			"artifact_sha256": "c8b927c60a75d97c4f75deb1ffc04eaa700b598106db47c67422ecb7dbe974cf",
+			"sha256_scope": "prepared-data-tree-manifest",
+			"evidence": [
+				"Exact shipped standard-font tree is bound by native-assets.lock.json.",
+				"BSD-3-Clause Foxit and OFL-1.1 Liberation notices are copied byte-for-byte from the shipped tree."
+			]
+		},
+		{
+			"component_id": "tesseract-js",
+			"source_uri": "https://registry.npmjs.org/tesseract.js/-/tesseract.js-7.0.0.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "planned",
+			"resolved": false,
+			"artifact_sha256": null,
+			"sha256_scope": "exact-package-tarball",
+			"evidence": ["Collect Tesseract.js Apache-2.0 license text."]
+		},
+		{
+			"component_id": "tesseract-js-core",
+			"source_uri": "https://registry.npmjs.org/tesseract.js-core/-/tesseract.js-core-7.0.0.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "planned",
+			"resolved": false,
+			"artifact_sha256": null,
+			"sha256_scope": "exact-package-tarball",
+			"evidence": ["Collect Tesseract.js core Apache-2.0 license text."]
+		},
+		{
+			"component_id": "tessdata-eng",
+			"source_uri": "https://github.com/tesseract-ocr/tessdata/archive/4.1.0/tessdata-4.1.0.tar.gz",
+			"source_kind": "official-release",
+			"expected_platform": "linux-x64-glibc",
+			"status": "artifact-resolved",
+			"resolved": true,
+			"artifact_sha256": "daa0c97d651c19fba3b25e81317cd697e9908c8208090c94c3905381c23fc047",
+			"sha256_scope": "exact-traineddata-file",
+			"evidence": [
+				"Signed Arch package tesseract-data-eng 2:4.1.0-5 owns the installed file; pacman -Qkk reports 0 altered.",
+				"Arch PKGBUILD pins upstream tessdata 4.1.0 archive SHA-256 990fffb9b7a9b52dc9a2d053a9ef6852ca2b72bd8dfb22988b0b990a700fd3c7.",
+				"Exact file size is 23466654 bytes."
+			]
+		},
+		{
+			"component_id": "tessdata-osd",
+			"source_uri": "https://github.com/tesseract-ocr/tessdata/archive/4.1.0/tessdata-4.1.0.tar.gz",
+			"source_kind": "official-release",
+			"expected_platform": "linux-x64-glibc",
+			"status": "artifact-resolved",
+			"resolved": true,
+			"artifact_sha256": "e19f2ae860792fdf372cf48d8ce70ae5da3c4052962fe22e9de1f680c374bb0e",
+			"sha256_scope": "exact-traineddata-file",
+			"evidence": [
+				"Signed Arch package tesseract-data-osd 2:4.1.0-5 owns the installed file; pacman -Qkk reports 0 altered.",
+				"Arch PKGBUILD pins upstream tessdata 4.1.0 archive SHA-256 990fffb9b7a9b52dc9a2d053a9ef6852ca2b72bd8dfb22988b0b990a700fd3c7.",
+				"Exact file size is 10562874 bytes."
+			]
+		},
+		{
+			"component_id": "sharp",
+			"source_uri": "https://registry.npmjs.org/sharp/-/sharp-0.34.5.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "planned",
+			"resolved": false,
+			"artifact_sha256": null,
+			"sha256_scope": "exact-package-tarball",
+			"evidence": ["Collect sharp's Apache-2.0 license text."]
+		},
+		{
+			"component_id": "sharp-linux-x64-addon",
+			"source_uri": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.34.5.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "planned",
+			"resolved": false,
+			"artifact_sha256": null,
+			"sha256_scope": "exact-package-tarball-and-addon",
+			"evidence": [
+				"Collect the sharp addon notice and retain the separate libvips gate."
+			]
+		},
+		{
+			"component_id": "sharp-libvips-linux-x64",
+			"source_uri": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.2.4.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "cleared",
+			"resolved": true,
+			"artifact_sha256": "9a2a2cf2b53ec123b3ee293bf66c234f8306681a5edfb058815b6bf66b9df8e9",
+			"artifact_sha512": "b49c6288bb261dcf40c756f3de868e6015114d718844338306a86f7951e89eb1c9f7ffa4f3da9b2e5d1b7099ecf9ee2de2bbda341c5a119b05b527c076ab8faf",
+			"sha256_scope": "package/lib/libvips-cpp.so.8.17.3",
+			"sha512_scope": "npm-dist-integrity-decoded",
+			"slsa_source_commit": "20b5e899954907a3039d6e3d4c200aaa0ec52c4c",
+			"source_offer_uri": "sharp-libvips-1.2.4-source-offer.json",
+			"evidence_record_uri": "notices/sharp-libvips-1.2.4.NOTICE.md",
+			"evidence": [
+				"npm SLSA provenance binds package 1.2.4 to sharp-libvips commit 20b5e899954907a3039d6e3d4c200aaa0ec52c4c and workflow ci.yml.",
+				"sharp-libvips-1.2.4-source-offer.json pins the Linux build scripts, platform toolchain, patches, libvips 8.17.3, and 29 corresponding-source entries.",
+				"notices/sharp-libvips-1.2.4.NOTICE.md records LGPL/GPL and all component notices."
+			]
+		},
+		{
+			"component_id": "canvas",
+			"source_uri": "https://registry.npmjs.org/@napi-rs/canvas/-/canvas-0.1.91.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "cleared",
+			"resolved": true,
+			"artifact_sha256": "110b2f6fbf3234fea13a14fce94284f1383eba1aa958447bf4ba06e3e8d29be8",
+			"sha256_scope": "prepared-package-tree-manifest",
+			"evidence": [
+				"The package declares MIT in package.json and ships the exact MIT text at lib/node_modules/@napi-rs/canvas/LICENSE.",
+				"The prepared JavaScript package tree is bound by runtime-lock.json independently of the native addon evidence."
+			]
+		},
+		{
+			"component_id": "canvas-linux-x64-gnu",
+			"source_uri": "https://github.com/Brooooooklyn/canvas/tree/6661e25b9520bfc2df1e4c9820717fee5dd304fd",
+			"source_kind": "authoritative-source-build",
+			"expected_platform": "linux-x64-glibc",
+			"status": "cleared",
+			"resolved": true,
+			"artifact_sha256": "edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d",
+			"sha256_scope": "self-built-skia.linux-x64-gnu.node",
+			"native_addon_sha256": "edcbca8d43db993a9066974c97ca0e87fb179aaee61d5e56561a19ae171b643d",
+			"native_addon_sha256_scope": "vendor/cua-node-cache/canvas-build/build-glibc228-final4/target/x86_64-unknown-linux-gnu/release/libcanvas.so",
+			"slsa_source_commit": "6661e25b9520bfc2df1e4c9820717fee5dd304fd",
+			"skia_submodule_commit": "ee20d565acb08dece4a32e3f209cdd41119015ca",
+			"source_offer_uri": "canvas-0.1.91-source-offer.json",
+			"evidence_record_uri": "canvas-0.1.91-evidence.json",
+			"evidence": [
+				"Accepted final4 addon bytes, GLIBC 2.28 ceiling, LLD link map, and byte-identical independent final5 build are recorded in canvas-0.1.91-build-record.json.",
+				"Generated Cargo.lock, target-filtered cargo metadata, exact 84-crate inventory, and complete Rust notices are preserved.",
+				"The accepted build links the ten original SHA-256-pinned skia-ee20d565 Linux x64 gnu archives plus locally built libaom/libavif/mimalloc inputs; no deduplicated archives are used.",
+				"Bundled Node 24.14.0 one-package full-subsystem acceptance passed all nine production-topology checks recorded in canvas-0.1.91-smoke.json."
+			]
+		},
+		{
+			"component_id": "pixelmatch",
+			"source_uri": "https://registry.npmjs.org/pixelmatch/-/pixelmatch-7.1.0.tgz",
+			"source_kind": "npm",
+			"expected_platform": "linux-x64-glibc",
+			"status": "cleared",
+			"resolved": true,
+			"artifact_sha256": "6407fbe0821c7b3635924870de1173714beb723161dc033e5421eacdad8c6137",
+			"sha256_scope": "prepared-package-tree-manifest",
+			"evidence": [
+				"Exact pixelmatch 7.1.0 prepared package tree and registry integrity are bound by runtime-lock.json.",
+				"ISC notice copied byte-for-byte from lib/node_modules/pixelmatch/LICENSE to notices/pixelmatch-7.1.0.LICENSE."
+			]
+		},
+		{
+			"component_id": "sky-cua",
+			"source_uri": "https://github.com/heliasar/sky-cua",
+			"source_kind": "first-party",
+			"expected_platform": "linux-x64-glibc",
+			"status": "artifact-resolved",
+			"resolved": true,
+			"artifact_sha256": "fecb9426aa44de2abdaaf4bc081d9c1a0cba7a2021dfbdc8c9c0d8572f8c86c2",
+			"sha256_scope": "vendor/cua-node-cache/@heliasar-sky-cua-0.1.0.tgz",
+			"evidence": [
+				"The repacked first-party 0.1.0 tarball is hash-locked for preparation and retains LicenseRef-Heliasar-Proprietary/UNLICENSED."
+			]
+		}
+	]
 }

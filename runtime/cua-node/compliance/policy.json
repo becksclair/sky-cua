@@ -1,311 +1,486 @@
 {
-  "schema_version": 1,
-  "policy_id": "linux-cua-node-compliance",
-  "target": "linux-x64-glibc",
-  "release_status": "clear",
-  "determinism": {
-    "fixed_timestamp": "1970-01-01T00:00:00Z",
-    "component_sort_key": "id",
-    "network_access": "not-used"
-  },
-  "external_requirements": [
-    {
-      "id": "system-browser",
-      "kind": "runtime-dependency",
-      "platform": "linux",
-      "requirement": "A supported system-installed Chromium-family browser executable must be available to Playwright at runtime.",
-      "redistribution": "not-redistributed",
-      "sbom_distribution_component": false,
-      "notes": "The cua_node payload ships Playwright JavaScript packages only; browser installation, updates, licensing, and notices remain the host system's responsibility."
-    }
-  ],
-  "dispositions": [
-    {
-      "id": "routine-notice-clearance",
-      "summary": "Use the authoritative release/package source and collect the ordinary license and notice files before bundling.",
-      "release_blocking": false,
-      "required_evidence": ["authoritative-source", "version", "license-text", "component-notices"]
-    },
-    {
-      "id": "provenance-only-gate",
-      "summary": "The bytes may be usable after exact-origin, version, hash, and license provenance are recorded; no source-build reconstruction is required.",
-      "release_blocking": true,
-      "required_evidence": ["exact-origin", "exact-version-or-revision", "sha256", "license-and-notice-provenance"]
-    },
-    {
-      "id": "unresolved-evidence-gate",
-      "summary": "Release remains blocked until the named build, corresponding source, composition, and notice evidence is complete.",
-      "release_blocking": true,
-      "required_evidence": ["exact-artifact", "build-or-composition-evidence", "corresponding-source", "license-and-component-notices"]
-    }
-  ],
-  "components": [
-    {
-      "id": "node-runtime",
-      "name": "Node.js",
-      "version": "24.14.0",
-      "kind": "runtime",
-      "purl": "pkg:generic/node@24.14.0",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "LicenseRef-Node.js", "designation": "Node.js License"},
-      "source": {"uri": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz", "kind": "official-release", "provenance_status": "artifact-provenance-resolved"},
-      "notice_ids": ["node-license"],
-      "blocking_gate_ids": [],
-      "notes": "Exact Linux x64 glibc archive provenance is resolved; release license and notice clearance remains."
-    },
-    {
-      "id": "npm",
-      "name": "npm",
-      "version": "11.9.0",
-      "kind": "runtime-tool",
-      "purl": "pkg:npm/npm@11.9.0",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "Artistic-2.0", "designation": "Artistic-2.0"},
-      "source": {"uri": "https://registry.npmjs.org/npm/-/npm-11.9.0.tgz", "kind": "npm", "provenance_status": "planned-authoritative-source"},
-      "notice_ids": ["npm-license"],
-      "blocking_gate_ids": [],
-      "notes": "Clear the npm license and bundled dependency notices from the exact Node 24.14.0 distribution context."
-    },
-    {
-      "id": "corepack",
-      "name": "Corepack",
-      "version": "0.34.6",
-      "kind": "runtime-tool",
-      "purl": "pkg:npm/corepack@0.34.6",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "MIT", "designation": "MIT"},
-      "source": {"uri": "https://registry.npmjs.org/corepack/-/corepack-0.34.6.tgz", "kind": "npm", "provenance_status": "planned-authoritative-source"},
-      "notice_ids": ["corepack-license"],
-      "blocking_gate_ids": [],
-      "notes": "Routine notice clearance for the exact pinned Corepack package."
-    },
-    {
-      "id": "playwright",
-      "name": "Playwright",
-      "version": "1.57.0",
-      "kind": "npm-package",
-      "purl": "pkg:npm/playwright@1.57.0",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "Apache-2.0", "designation": "Apache-2.0 plus Playwright third-party notices"},
-      "source": {"uri": "https://registry.npmjs.org/playwright/-/playwright-1.57.0.tgz", "kind": "npm", "provenance_status": "planned-authoritative-source"},
-      "notice_ids": ["playwright-license", "playwright-third-party"],
-      "blocking_gate_ids": [],
-      "notes": "The shipped payload contains the Playwright JavaScript package only; Linux browser execution uses the external system-browser requirement."
-    },
-    {
-      "id": "playwright-core",
-      "name": "Playwright Core",
-      "version": "1.57.0",
-      "kind": "npm-package",
-      "purl": "pkg:npm/playwright-core@1.57.0",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "Apache-2.0", "designation": "Apache-2.0 plus Playwright third-party notices"},
-      "source": {"uri": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.57.0.tgz", "kind": "npm", "provenance_status": "planned-authoritative-source"},
-      "notice_ids": ["playwright-license", "playwright-third-party"],
-      "blocking_gate_ids": [],
-      "notes": "The shipped payload contains the Playwright Core JavaScript package only; no browser or video payload is redistributed."
-    },
-    {
-      "id": "pdfjs-dist",
-      "name": "PDF.js",
-      "version": "5.4.624",
-      "kind": "npm-package",
-      "purl": "pkg:npm/pdfjs-dist@5.4.624",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "Apache-2.0", "designation": "Apache-2.0 plus PDF.js component notices"},
-      "source": {"uri": "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-5.4.624.tgz", "kind": "npm", "provenance_status": "planned-authoritative-source"},
-      "notice_ids": ["pdfjs-license", "pdfjs-third-party"],
-      "blocking_gate_ids": [],
-      "notes": "Routine notice clearance includes the PDF.js distribution and its component notices."
-    },
-    {
-      "id": "pdfjs-cmaps",
-      "name": "PDF.js CMaps",
-      "version": "5.4.624",
-      "kind": "data",
-      "purl": "pkg:generic/pdfjs-cmaps@5.4.624",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "BSD-3-Clause", "designation": "BSD-3-Clause"},
-      "source": {"uri": "https://github.com/mozilla/pdf.js/tree/v5.4.624/web/cmaps", "kind": "official-release", "provenance_status": "artifact-provenance-resolved"},
-      "notice_ids": ["pdfjs-cmaps-notice"],
-      "blocking_gate_ids": [],
-      "notes": "The exact shipped CMap tree is BSD-3-Clause and carries share/pdfjs/cmaps/LICENSE."
-    },
-    {
-      "id": "pdfjs-standard-fonts",
-      "name": "PDF.js standard fonts",
-      "version": "5.4.624",
-      "kind": "data",
-      "purl": "pkg:generic/pdfjs-standard-fonts@5.4.624",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "BSD-3-Clause AND OFL-1.1", "designation": "BSD-3-Clause AND OFL-1.1"},
-      "source": {"uri": "https://github.com/mozilla/pdf.js/tree/v5.4.624/standard_fonts", "kind": "official-release", "provenance_status": "artifact-provenance-resolved"},
-      "notice_ids": ["pdfjs-fonts-liberation", "pdfjs-fonts-foxit"],
-      "blocking_gate_ids": [],
-      "notes": "The exact shipped standard-font tree carries the BSD-3-Clause Foxit notice and OFL-1.1 Liberation notice."
-    },
-    {
-      "id": "tesseract-js",
-      "name": "Tesseract.js",
-      "version": "7.0.0",
-      "kind": "npm-package",
-      "purl": "pkg:npm/tesseract.js@7.0.0",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "Apache-2.0", "designation": "Apache-2.0"},
-      "source": {"uri": "https://registry.npmjs.org/tesseract.js/-/tesseract.js-7.0.0.tgz", "kind": "npm", "provenance_status": "planned-authoritative-source"},
-      "notice_ids": ["tesseract-js-license"],
-      "blocking_gate_ids": [],
-      "notes": "Routine notice clearance for the exact Tesseract.js package."
-    },
-    {
-      "id": "tesseract-js-core",
-      "name": "Tesseract.js core",
-      "version": "7.0.0",
-      "kind": "npm-package",
-      "purl": "pkg:npm/tesseract.js-core@7.0.0",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "Apache-2.0", "designation": "Apache-2.0"},
-      "source": {"uri": "https://registry.npmjs.org/tesseract.js-core/-/tesseract.js-core-7.0.0.tgz", "kind": "npm", "provenance_status": "planned-authoritative-source"},
-      "notice_ids": ["tesseract-js-core-license"],
-      "blocking_gate_ids": [],
-      "notes": "Routine notice clearance for the exact Tesseract.js core package."
-    },
-    {
-      "id": "tessdata-eng",
-      "name": "Tesseract English traineddata",
-      "version": "eng",
-      "kind": "language-data",
-      "purl": "pkg:generic/tessdata-eng@eng",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "Apache-2.0", "designation": "Apache-2.0"},
-      "source": {"uri": "https://github.com/tesseract-ocr/tessdata/archive/4.1.0/tessdata-4.1.0.tar.gz", "kind": "official-release", "provenance_status": "artifact-provenance-resolved"},
-      "notice_ids": ["tessdata-license"],
-      "blocking_gate_ids": [],
-      "notes": "Resolved by signed Arch package tesseract-data-eng 2:4.1.0-5 (pacman -Qkk: 0 altered) from upstream tessdata 4.1.0 archive SHA-256 990fffb9b7a9b52dc9a2d053a9ef6852ca2b72bd8dfb22988b0b990a700fd3c7."
-    },
-    {
-      "id": "tessdata-osd",
-      "name": "Tesseract orientation and script detection traineddata",
-      "version": "osd",
-      "kind": "language-data",
-      "purl": "pkg:generic/tessdata-osd@osd",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "Apache-2.0", "designation": "Apache-2.0"},
-      "source": {"uri": "https://github.com/tesseract-ocr/tessdata/archive/4.1.0/tessdata-4.1.0.tar.gz", "kind": "official-release", "provenance_status": "artifact-provenance-resolved"},
-      "notice_ids": ["tessdata-license"],
-      "blocking_gate_ids": [],
-      "notes": "Resolved by signed Arch package tesseract-data-osd 2:4.1.0-5 (pacman -Qkk: 0 altered) from upstream tessdata 4.1.0 archive SHA-256 990fffb9b7a9b52dc9a2d053a9ef6852ca2b72bd8dfb22988b0b990a700fd3c7."
-    },
-    {
-      "id": "sharp",
-      "name": "sharp",
-      "version": "0.34.5",
-      "kind": "npm-package",
-      "purl": "pkg:npm/sharp@0.34.5",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "Apache-2.0", "designation": "Apache-2.0"},
-      "source": {"uri": "https://registry.npmjs.org/sharp/-/sharp-0.34.5.tgz", "kind": "npm", "provenance_status": "planned-authoritative-source"},
-      "notice_ids": ["sharp-license"],
-      "blocking_gate_ids": [],
-      "notes": "Routine notice clearance for the sharp JavaScript package; its native dependency remains separately gated."
-    },
-    {
-      "id": "sharp-linux-x64-addon",
-      "name": "sharp Linux x64 native addon",
-      "version": "0.34.5",
-      "kind": "native-addon",
-      "purl": "pkg:npm/@img/sharp-linux-x64@0.34.5",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "Apache-2.0", "designation": "Apache-2.0"},
-      "source": {"uri": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.34.5.tgz", "kind": "npm", "provenance_status": "planned-authoritative-source"},
-      "notice_ids": ["sharp-license", "sharp-addon-notice"],
-      "blocking_gate_ids": [],
-      "notes": "Routine notice clearance for the sharp native addon, conditional on the separately gated libvips dependency."
-    },
-    {
-      "id": "sharp-libvips-linux-x64",
-      "name": "sharp bundled libvips Linux x64",
-      "version": "1.2.4",
-      "kind": "native-library",
-      "purl": "pkg:npm/@img/sharp-libvips-linux-x64@1.2.4",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "LGPL-3.0-or-later", "designation": "LGPL-3.0-or-later plus codec component notices"},
-      "source": {"uri": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.2.4.tgz", "kind": "npm", "provenance_status": "artifact-provenance-resolved"},
-      "notice_ids": ["libvips-license", "libvips-component-notices"],
-      "blocking_gate_ids": [],
-      "notes": "npm SLSA binds package 1.2.4 to sharp-libvips commit 20b5e899954907a3039d6e3d4c200aaa0ec52c4c. The operational source-offer record pins the Linux build, libvips 8.17.3, all 29 notice components, patches, direct source URLs, and notices."
-    },
-    {
-      "id": "canvas",
-      "name": "@napi-rs/canvas",
-      "version": "0.1.91",
-      "kind": "npm-package",
-      "purl": "pkg:npm/@napi-rs/canvas@0.1.91",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "MIT", "designation": "MIT"},
-      "source": {"uri": "https://registry.npmjs.org/@napi-rs/canvas/-/canvas-0.1.91.tgz", "kind": "npm", "provenance_status": "artifact-provenance-resolved"},
-      "notice_ids": ["canvas-license"],
-      "blocking_gate_ids": [],
-      "notes": "The JavaScript package declares MIT and carries lib/node_modules/@napi-rs/canvas/LICENSE; the Linux native addon is independently self-built and cleared with native and Rust notices."
-    },
-    {
-      "id": "canvas-linux-x64-gnu",
-      "name": "@napi-rs/canvas Linux x64 gnu native addon",
-      "version": "0.1.91",
-      "kind": "native-addon",
-      "purl": "pkg:npm/@napi-rs/canvas-linux-x64-gnu@0.1.91",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "MIT", "designation": "MIT plus Skia/static component notices"},
-      "source": {"uri": "https://github.com/Brooooooklyn/canvas/tree/6661e25b9520bfc2df1e4c9820717fee5dd304fd", "kind": "authoritative-source-build", "provenance_status": "artifact-provenance-resolved"},
-      "notice_ids": ["canvas-license", "canvas-skia-notices"],
-      "blocking_gate_ids": [],
-      "notes": "Self-built GLIBC 2.28 release addon is byte-reproducible from the locked Rust graph and ten original digest-pinned Skia archives; LLD linker-map composition, exact notices, source offer, and bundled Node 24 raw/prepared-package evidence are recorded."
-    },
-    {
-      "id": "pixelmatch",
-      "name": "pixelmatch",
-      "version": "7.1.0",
-      "kind": "visual-diff",
-      "purl": "pkg:npm/pixelmatch@7.1.0",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "ISC", "designation": "ISC"},
-      "source": {"uri": "https://registry.npmjs.org/pixelmatch/-/pixelmatch-7.1.0.tgz", "kind": "npm", "provenance_status": "artifact-provenance-resolved"},
-      "notice_ids": ["pixelmatch-license"],
-      "blocking_gate_ids": [],
-      "notes": "The exact pixelmatch 7.1.0 prepared package tree and ISC license are pinned by runtime-lock.json."
-    },
-    {
-      "id": "sky-cua",
-      "name": "@heliasar/sky-cua",
-      "version": "0.1.0",
-      "kind": "first-party-package",
-      "purl": "pkg:npm/@heliasar/sky-cua@0.1.0",
-      "disposition": "routine-notice-clearance",
-      "release_effect": "notice-clearance-required",
-      "license": {"spdx_expression": "LicenseRef-Heliasar-Proprietary", "designation": "LicenseRef-Heliasar-Proprietary/UNLICENSED"},
-      "source": {"uri": "https://github.com/heliasar/sky-cua", "kind": "first-party", "provenance_status": "artifact-provenance-resolved"},
-      "notice_ids": ["sky-cua-license"],
-      "blocking_gate_ids": [],
-      "notes": "Resolved first-party tarball SHA-256 fecb9426aa44de2abdaaf4bc081d9c1a0cba7a2021dfbdc8c9c0d8572f8c86c2; preserve the explicit LicenseRef-Heliasar-Proprietary/UNLICENSED designation in all compliance outputs."
-    }
-  ],
-  "blocking_gates": []
+	"schema_version": 1,
+	"policy_id": "linux-cua-node-compliance",
+	"target": "linux-x64-glibc",
+	"release_status": "clear",
+	"determinism": {
+		"fixed_timestamp": "1970-01-01T00:00:00Z",
+		"component_sort_key": "id",
+		"network_access": "not-used"
+	},
+	"external_requirements": [
+		{
+			"id": "system-browser",
+			"kind": "runtime-dependency",
+			"platform": "linux",
+			"requirement": "A supported system-installed Chromium-family browser executable must be available to Playwright at runtime.",
+			"redistribution": "not-redistributed",
+			"sbom_distribution_component": false,
+			"notes": "The cua_node payload ships Playwright JavaScript packages only; browser installation, updates, licensing, and notices remain the host system's responsibility."
+		}
+	],
+	"dispositions": [
+		{
+			"id": "routine-notice-clearance",
+			"summary": "Use the authoritative release/package source and collect the ordinary license and notice files before bundling.",
+			"release_blocking": false,
+			"required_evidence": [
+				"authoritative-source",
+				"version",
+				"license-text",
+				"component-notices"
+			]
+		},
+		{
+			"id": "provenance-only-gate",
+			"summary": "The bytes may be usable after exact-origin, version, hash, and license provenance are recorded; no source-build reconstruction is required.",
+			"release_blocking": true,
+			"required_evidence": [
+				"exact-origin",
+				"exact-version-or-revision",
+				"sha256",
+				"license-and-notice-provenance"
+			]
+		},
+		{
+			"id": "unresolved-evidence-gate",
+			"summary": "Release remains blocked until the named build, corresponding source, composition, and notice evidence is complete.",
+			"release_blocking": true,
+			"required_evidence": [
+				"exact-artifact",
+				"build-or-composition-evidence",
+				"corresponding-source",
+				"license-and-component-notices"
+			]
+		}
+	],
+	"components": [
+		{
+			"id": "acorn",
+			"name": "Acorn",
+			"version": "8.16.0",
+			"kind": "npm-package",
+			"purl": "pkg:npm/acorn@8.16.0",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": { "spdx_expression": "MIT", "designation": "MIT" },
+			"source": {
+				"uri": "https://registry.npmjs.org/acorn/-/acorn-8.16.0.tgz",
+				"kind": "npm",
+				"provenance_status": "artifact-provenance-resolved"
+			},
+			"notice_ids": ["acorn-license"],
+			"blocking_gate_ids": [],
+			"notes": "The exact Acorn 8.16.0 prepared package tree, registry integrity, and MIT license are pinned by runtime-lock.json."
+		},
+		{
+			"id": "acorn-walk",
+			"name": "Acorn Walk",
+			"version": "8.3.5",
+			"kind": "npm-package",
+			"purl": "pkg:npm/acorn-walk@8.3.5",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": { "spdx_expression": "MIT", "designation": "MIT" },
+			"source": {
+				"uri": "https://registry.npmjs.org/acorn-walk/-/acorn-walk-8.3.5.tgz",
+				"kind": "npm",
+				"provenance_status": "artifact-provenance-resolved"
+			},
+			"notice_ids": ["acorn-walk-license"],
+			"blocking_gate_ids": [],
+			"notes": "The exact Acorn Walk 8.3.5 prepared package tree, registry integrity, and MIT license are pinned by runtime-lock.json."
+		},
+		{
+			"id": "node-runtime",
+			"name": "Node.js",
+			"version": "24.14.0",
+			"kind": "runtime",
+			"purl": "pkg:generic/node@24.14.0",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "LicenseRef-Node.js",
+				"designation": "Node.js License"
+			},
+			"source": {
+				"uri": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz",
+				"kind": "official-release",
+				"provenance_status": "artifact-provenance-resolved"
+			},
+			"notice_ids": ["node-license"],
+			"blocking_gate_ids": [],
+			"notes": "Exact Linux x64 glibc archive provenance is resolved; release license and notice clearance remains."
+		},
+		{
+			"id": "npm",
+			"name": "npm",
+			"version": "11.9.0",
+			"kind": "runtime-tool",
+			"purl": "pkg:npm/npm@11.9.0",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "Artistic-2.0",
+				"designation": "Artistic-2.0"
+			},
+			"source": {
+				"uri": "https://registry.npmjs.org/npm/-/npm-11.9.0.tgz",
+				"kind": "npm",
+				"provenance_status": "planned-authoritative-source"
+			},
+			"notice_ids": ["npm-license"],
+			"blocking_gate_ids": [],
+			"notes": "Clear the npm license and bundled dependency notices from the exact Node 24.14.0 distribution context."
+		},
+		{
+			"id": "corepack",
+			"name": "Corepack",
+			"version": "0.34.6",
+			"kind": "runtime-tool",
+			"purl": "pkg:npm/corepack@0.34.6",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": { "spdx_expression": "MIT", "designation": "MIT" },
+			"source": {
+				"uri": "https://registry.npmjs.org/corepack/-/corepack-0.34.6.tgz",
+				"kind": "npm",
+				"provenance_status": "planned-authoritative-source"
+			},
+			"notice_ids": ["corepack-license"],
+			"blocking_gate_ids": [],
+			"notes": "Routine notice clearance for the exact pinned Corepack package."
+		},
+		{
+			"id": "playwright",
+			"name": "Playwright",
+			"version": "1.57.0",
+			"kind": "npm-package",
+			"purl": "pkg:npm/playwright@1.57.0",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "Apache-2.0",
+				"designation": "Apache-2.0 plus Playwright third-party notices"
+			},
+			"source": {
+				"uri": "https://registry.npmjs.org/playwright/-/playwright-1.57.0.tgz",
+				"kind": "npm",
+				"provenance_status": "planned-authoritative-source"
+			},
+			"notice_ids": ["playwright-license", "playwright-third-party"],
+			"blocking_gate_ids": [],
+			"notes": "The shipped payload contains the Playwright JavaScript package only; Linux browser execution uses the external system-browser requirement."
+		},
+		{
+			"id": "playwright-core",
+			"name": "Playwright Core",
+			"version": "1.57.0",
+			"kind": "npm-package",
+			"purl": "pkg:npm/playwright-core@1.57.0",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "Apache-2.0",
+				"designation": "Apache-2.0 plus Playwright third-party notices"
+			},
+			"source": {
+				"uri": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.57.0.tgz",
+				"kind": "npm",
+				"provenance_status": "planned-authoritative-source"
+			},
+			"notice_ids": ["playwright-license", "playwright-third-party"],
+			"blocking_gate_ids": [],
+			"notes": "The shipped payload contains the Playwright Core JavaScript package only; no browser or video payload is redistributed."
+		},
+		{
+			"id": "pdfjs-dist",
+			"name": "PDF.js",
+			"version": "5.4.624",
+			"kind": "npm-package",
+			"purl": "pkg:npm/pdfjs-dist@5.4.624",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "Apache-2.0",
+				"designation": "Apache-2.0 plus PDF.js component notices"
+			},
+			"source": {
+				"uri": "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-5.4.624.tgz",
+				"kind": "npm",
+				"provenance_status": "planned-authoritative-source"
+			},
+			"notice_ids": ["pdfjs-license", "pdfjs-third-party"],
+			"blocking_gate_ids": [],
+			"notes": "Routine notice clearance includes the PDF.js distribution and its component notices."
+		},
+		{
+			"id": "pdfjs-cmaps",
+			"name": "PDF.js CMaps",
+			"version": "5.4.624",
+			"kind": "data",
+			"purl": "pkg:generic/pdfjs-cmaps@5.4.624",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "BSD-3-Clause",
+				"designation": "BSD-3-Clause"
+			},
+			"source": {
+				"uri": "https://github.com/mozilla/pdf.js/tree/v5.4.624/web/cmaps",
+				"kind": "official-release",
+				"provenance_status": "artifact-provenance-resolved"
+			},
+			"notice_ids": ["pdfjs-cmaps-notice"],
+			"blocking_gate_ids": [],
+			"notes": "The exact shipped CMap tree is BSD-3-Clause and carries share/pdfjs/cmaps/LICENSE."
+		},
+		{
+			"id": "pdfjs-standard-fonts",
+			"name": "PDF.js standard fonts",
+			"version": "5.4.624",
+			"kind": "data",
+			"purl": "pkg:generic/pdfjs-standard-fonts@5.4.624",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "BSD-3-Clause AND OFL-1.1",
+				"designation": "BSD-3-Clause AND OFL-1.1"
+			},
+			"source": {
+				"uri": "https://github.com/mozilla/pdf.js/tree/v5.4.624/standard_fonts",
+				"kind": "official-release",
+				"provenance_status": "artifact-provenance-resolved"
+			},
+			"notice_ids": ["pdfjs-fonts-liberation", "pdfjs-fonts-foxit"],
+			"blocking_gate_ids": [],
+			"notes": "The exact shipped standard-font tree carries the BSD-3-Clause Foxit notice and OFL-1.1 Liberation notice."
+		},
+		{
+			"id": "tesseract-js",
+			"name": "Tesseract.js",
+			"version": "7.0.0",
+			"kind": "npm-package",
+			"purl": "pkg:npm/tesseract.js@7.0.0",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "Apache-2.0",
+				"designation": "Apache-2.0"
+			},
+			"source": {
+				"uri": "https://registry.npmjs.org/tesseract.js/-/tesseract.js-7.0.0.tgz",
+				"kind": "npm",
+				"provenance_status": "planned-authoritative-source"
+			},
+			"notice_ids": ["tesseract-js-license"],
+			"blocking_gate_ids": [],
+			"notes": "Routine notice clearance for the exact Tesseract.js package."
+		},
+		{
+			"id": "tesseract-js-core",
+			"name": "Tesseract.js core",
+			"version": "7.0.0",
+			"kind": "npm-package",
+			"purl": "pkg:npm/tesseract.js-core@7.0.0",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "Apache-2.0",
+				"designation": "Apache-2.0"
+			},
+			"source": {
+				"uri": "https://registry.npmjs.org/tesseract.js-core/-/tesseract.js-core-7.0.0.tgz",
+				"kind": "npm",
+				"provenance_status": "planned-authoritative-source"
+			},
+			"notice_ids": ["tesseract-js-core-license"],
+			"blocking_gate_ids": [],
+			"notes": "Routine notice clearance for the exact Tesseract.js core package."
+		},
+		{
+			"id": "tessdata-eng",
+			"name": "Tesseract English traineddata",
+			"version": "eng",
+			"kind": "language-data",
+			"purl": "pkg:generic/tessdata-eng@eng",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "Apache-2.0",
+				"designation": "Apache-2.0"
+			},
+			"source": {
+				"uri": "https://github.com/tesseract-ocr/tessdata/archive/4.1.0/tessdata-4.1.0.tar.gz",
+				"kind": "official-release",
+				"provenance_status": "artifact-provenance-resolved"
+			},
+			"notice_ids": ["tessdata-license"],
+			"blocking_gate_ids": [],
+			"notes": "Resolved by signed Arch package tesseract-data-eng 2:4.1.0-5 (pacman -Qkk: 0 altered) from upstream tessdata 4.1.0 archive SHA-256 990fffb9b7a9b52dc9a2d053a9ef6852ca2b72bd8dfb22988b0b990a700fd3c7."
+		},
+		{
+			"id": "tessdata-osd",
+			"name": "Tesseract orientation and script detection traineddata",
+			"version": "osd",
+			"kind": "language-data",
+			"purl": "pkg:generic/tessdata-osd@osd",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "Apache-2.0",
+				"designation": "Apache-2.0"
+			},
+			"source": {
+				"uri": "https://github.com/tesseract-ocr/tessdata/archive/4.1.0/tessdata-4.1.0.tar.gz",
+				"kind": "official-release",
+				"provenance_status": "artifact-provenance-resolved"
+			},
+			"notice_ids": ["tessdata-license"],
+			"blocking_gate_ids": [],
+			"notes": "Resolved by signed Arch package tesseract-data-osd 2:4.1.0-5 (pacman -Qkk: 0 altered) from upstream tessdata 4.1.0 archive SHA-256 990fffb9b7a9b52dc9a2d053a9ef6852ca2b72bd8dfb22988b0b990a700fd3c7."
+		},
+		{
+			"id": "sharp",
+			"name": "sharp",
+			"version": "0.34.5",
+			"kind": "npm-package",
+			"purl": "pkg:npm/sharp@0.34.5",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "Apache-2.0",
+				"designation": "Apache-2.0"
+			},
+			"source": {
+				"uri": "https://registry.npmjs.org/sharp/-/sharp-0.34.5.tgz",
+				"kind": "npm",
+				"provenance_status": "planned-authoritative-source"
+			},
+			"notice_ids": ["sharp-license"],
+			"blocking_gate_ids": [],
+			"notes": "Routine notice clearance for the sharp JavaScript package; its native dependency remains separately gated."
+		},
+		{
+			"id": "sharp-linux-x64-addon",
+			"name": "sharp Linux x64 native addon",
+			"version": "0.34.5",
+			"kind": "native-addon",
+			"purl": "pkg:npm/@img/sharp-linux-x64@0.34.5",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "Apache-2.0",
+				"designation": "Apache-2.0"
+			},
+			"source": {
+				"uri": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.34.5.tgz",
+				"kind": "npm",
+				"provenance_status": "planned-authoritative-source"
+			},
+			"notice_ids": ["sharp-license", "sharp-addon-notice"],
+			"blocking_gate_ids": [],
+			"notes": "Routine notice clearance for the sharp native addon, conditional on the separately gated libvips dependency."
+		},
+		{
+			"id": "sharp-libvips-linux-x64",
+			"name": "sharp bundled libvips Linux x64",
+			"version": "1.2.4",
+			"kind": "native-library",
+			"purl": "pkg:npm/@img/sharp-libvips-linux-x64@1.2.4",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "LGPL-3.0-or-later",
+				"designation": "LGPL-3.0-or-later plus codec component notices"
+			},
+			"source": {
+				"uri": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.2.4.tgz",
+				"kind": "npm",
+				"provenance_status": "artifact-provenance-resolved"
+			},
+			"notice_ids": ["libvips-license", "libvips-component-notices"],
+			"blocking_gate_ids": [],
+			"notes": "npm SLSA binds package 1.2.4 to sharp-libvips commit 20b5e899954907a3039d6e3d4c200aaa0ec52c4c. The operational source-offer record pins the Linux build, libvips 8.17.3, all 29 notice components, patches, direct source URLs, and notices."
+		},
+		{
+			"id": "canvas",
+			"name": "@napi-rs/canvas",
+			"version": "0.1.91",
+			"kind": "npm-package",
+			"purl": "pkg:npm/@napi-rs/canvas@0.1.91",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": { "spdx_expression": "MIT", "designation": "MIT" },
+			"source": {
+				"uri": "https://registry.npmjs.org/@napi-rs/canvas/-/canvas-0.1.91.tgz",
+				"kind": "npm",
+				"provenance_status": "artifact-provenance-resolved"
+			},
+			"notice_ids": ["canvas-license"],
+			"blocking_gate_ids": [],
+			"notes": "The JavaScript package declares MIT and carries lib/node_modules/@napi-rs/canvas/LICENSE; the Linux native addon is independently self-built and cleared with native and Rust notices."
+		},
+		{
+			"id": "canvas-linux-x64-gnu",
+			"name": "@napi-rs/canvas Linux x64 gnu native addon",
+			"version": "0.1.91",
+			"kind": "native-addon",
+			"purl": "pkg:npm/@napi-rs/canvas-linux-x64-gnu@0.1.91",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "MIT",
+				"designation": "MIT plus Skia/static component notices"
+			},
+			"source": {
+				"uri": "https://github.com/Brooooooklyn/canvas/tree/6661e25b9520bfc2df1e4c9820717fee5dd304fd",
+				"kind": "authoritative-source-build",
+				"provenance_status": "artifact-provenance-resolved"
+			},
+			"notice_ids": ["canvas-license", "canvas-skia-notices"],
+			"blocking_gate_ids": [],
+			"notes": "Self-built GLIBC 2.28 release addon is byte-reproducible from the locked Rust graph and ten original digest-pinned Skia archives; LLD linker-map composition, exact notices, source offer, and bundled Node 24 raw/prepared-package evidence are recorded."
+		},
+		{
+			"id": "pixelmatch",
+			"name": "pixelmatch",
+			"version": "7.1.0",
+			"kind": "visual-diff",
+			"purl": "pkg:npm/pixelmatch@7.1.0",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": { "spdx_expression": "ISC", "designation": "ISC" },
+			"source": {
+				"uri": "https://registry.npmjs.org/pixelmatch/-/pixelmatch-7.1.0.tgz",
+				"kind": "npm",
+				"provenance_status": "artifact-provenance-resolved"
+			},
+			"notice_ids": ["pixelmatch-license"],
+			"blocking_gate_ids": [],
+			"notes": "The exact pixelmatch 7.1.0 prepared package tree and ISC license are pinned by runtime-lock.json."
+		},
+		{
+			"id": "sky-cua",
+			"name": "@heliasar/sky-cua",
+			"version": "0.1.0",
+			"kind": "first-party-package",
+			"purl": "pkg:npm/@heliasar/sky-cua@0.1.0",
+			"disposition": "routine-notice-clearance",
+			"release_effect": "notice-clearance-required",
+			"license": {
+				"spdx_expression": "LicenseRef-Heliasar-Proprietary",
+				"designation": "LicenseRef-Heliasar-Proprietary/UNLICENSED"
+			},
+			"source": {
+				"uri": "https://github.com/heliasar/sky-cua",
+				"kind": "first-party",
+				"provenance_status": "artifact-provenance-resolved"
+			},
+			"notice_ids": ["sky-cua-license"],
+			"blocking_gate_ids": [],
+			"notes": "Resolved first-party tarball SHA-256 fecb9426aa44de2abdaaf4bc081d9c1a0cba7a2021dfbdc8c9c0d8572f8c86c2; preserve the explicit LicenseRef-Heliasar-Proprietary/UNLICENSED designation in all compliance outputs."
+		}
+	],
+	"blocking_gates": []
 }

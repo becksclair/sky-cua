@@ -1,34 +1,36 @@
 {
-  "name": "@heliasar/cua-node-production",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Pinned production graph for the Linux cua_node runtime.",
-  "dependencies": {
-    "@heliasar/sky-cua": "file:../../../vendor/cua-node-cache/@heliasar-sky-cua-0.1.0.tgz",
-    "@img/sharp-libvips-linux-x64": "1.2.4",
-    "@img/sharp-linux-x64": "0.34.5",
-    "@napi-rs/canvas": "0.1.91",
-    "@napi-rs/canvas-linux-x64-gnu": "0.1.91",
-    "pdfjs-dist": "5.4.624",
-    "pixelmatch": "7.1.0",
-    "playwright": "1.57.0",
-    "playwright-core": "1.57.0",
-    "sharp": "0.34.5",
-    "tesseract.js": "7.0.0",
-    "tesseract.js-core": "7.0.0"
-  },
-  "engines": {
-    "node": "24.14.0"
-  },
-  "x-cua-node-pinned-versions": {
-    "node": "24.14.0",
-    "npm": "11.9.0",
-    "corepack": "0.34.6",
-    "playwright-browser": "system-chromium-family",
-    "tessdata": [
-      "eng",
-      "osd"
-    ],
-    "target": "linux-x64-glibc"
-  }
+	"name": "@heliasar/cua-node-production",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Pinned production graph for the Linux cua_node runtime.",
+	"dependencies": {
+		"@heliasar/sky-cua": "file:../../../vendor/cua-node-cache/@heliasar-sky-cua-0.1.0.tgz",
+		"@img/sharp-libvips-linux-x64": "1.2.4",
+		"@img/sharp-linux-x64": "0.34.5",
+		"@napi-rs/canvas": "0.1.91",
+		"@napi-rs/canvas-linux-x64-gnu": "0.1.91",
+		"acorn": "8.16.0",
+		"acorn-walk": "8.3.5",
+		"pdfjs-dist": "5.4.624",
+		"pixelmatch": "7.1.0",
+		"playwright": "1.57.0",
+		"playwright-core": "1.57.0",
+		"sharp": "0.34.5",
+		"tesseract.js": "7.0.0",
+		"tesseract.js-core": "7.0.0"
+	},
+	"engines": {
+		"node": "24.14.0"
+	},
+	"x-cua-node-pinned-versions": {
+		"node": "24.14.0",
+		"npm": "11.9.0",
+		"corepack": "0.34.6",
+		"playwright-browser": "system-chromium-family",
+		"tessdata": [
+			"eng",
+			"osd"
+		],
+		"target": "linux-x64-glibc"
+	}
 }

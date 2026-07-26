@@ -47,6 +47,7 @@ const EXPECTED_NODE_VERSION = "v24.14.0";
 const PHRASE = "OFFLINE CUA NODE";
 const CHECK_IDS = [
   "runtime",
+  "ast",
   "canvas-png",
   "canvas-webp",
   "sharp",
@@ -57,6 +58,8 @@ const CHECK_IDS = [
   "cleanup",
 ] as const;
 const PACKAGE_VERSIONS: ReadonlyArray<readonly [string, string]> = [
+  ["acorn", "8.16.0"],
+  ["acorn-walk", "8.3.5"],
   ["@napi-rs/canvas", "0.1.91"],
   ["sharp", "0.34.5"],
   ["pdfjs-dist", "5.4.624"],
@@ -316,6 +319,40 @@ async function executeChecks(options: CliOptions): Promise<AcceptanceReport> {
       });
   } else {
     installNetworkGuard();
+    await add("ast", async () => {
+      const acorn = (await importBundled(options.runtimeRoot, "acorn/dist/acorn.mjs")) as {
+        parse(source: string, options: Record<string, unknown>): {
+          sourceType: string;
+        };
+      };
+      const walk = (await importBundled(
+        options.runtimeRoot,
+        "acorn-walk/dist/walk.mjs",
+      )) as {
+        simple(
+          node: object,
+          visitors: Record<string, (node: { name: string }) => void>,
+        ): void;
+      };
+      const program = acorn.parse("const answer = () => 42", {
+        ecmaVersion: "latest",
+        sourceType: "module",
+      });
+      const identifiers: string[] = [];
+      walk.simple(program, {
+        VariablePattern(node) {
+          identifiers.push(node.name);
+        },
+      });
+      if (program.sourceType !== "module" || identifiers.join(",") !== "answer")
+        throw new Error("Acorn parse/walk evidence did not match the module fixture");
+      return {
+        acorn_version: "8.16.0",
+        acorn_walk_version: "8.3.5",
+        source_type: program.sourceType,
+        identifiers: identifiers.join(","),
+      };
+    });
     await add("canvas-png", async () => {
       canvasModule = requireBundled(
         options.runtimeRoot,

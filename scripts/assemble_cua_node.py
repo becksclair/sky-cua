@@ -16,6 +16,7 @@ import tarfile
 import tempfile
 import uuid
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, cast
 
@@ -53,6 +54,36 @@ ALLOWED_NATIVE_PACKAGES = {
     "@napi-rs/canvas",
     "@napi-rs/canvas-linux-x64-gnu",
 }
+
+
+@dataclass(frozen=True)
+class PreparedPackageImport:
+    name: str
+    version: str
+    license_expression: str
+    tree_sha256: str
+    size_bytes: int
+    integrity: str = ""
+
+
+PREPARED_PACKAGE_IMPORTS = (
+    PreparedPackageImport(
+        name="acorn",
+        version="8.16.0",
+        license_expression="MIT",
+        tree_sha256="4acbc403f8e4d593b943dd81163a23ec6e4d4c451e706c6922cc097d85db3241",
+        size_bytes=558_610,
+        integrity="sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==",
+    ),
+    PreparedPackageImport(
+        name="acorn-walk",
+        version="8.3.5",
+        license_expression="MIT",
+        tree_sha256="4b0f0f351e71172da86000269c356022c17b1583f7a7ee0f679a65ceb0c95be0",
+        size_bytes=53_765,
+        integrity="sha512-HEHNfbars9v4pgpW6SO1KSPkfoS0xVOM/9UzkJltjlsHZmJasxg8aXkuZa7SMf8vKGIBhpUsPluQSqhJFCqebw==",
+    ),
+)
 
 
 class AssemblyError(RuntimeError):
@@ -154,6 +185,54 @@ def _copy_tree(source: Path, destination: Path) -> None:
         raise AssemblyError(f"source is not a real directory: {source}")
     _files(source)
     shutil.copytree(source, destination, copy_function=shutil.copy2)
+
+
+def _import_prepared_packages(root: Path) -> None:
+    prepared_modules = REPO_ROOT / "runtime" / "cua-node" / "node_modules"
+    destination_modules = root / "lib" / "node_modules"
+    validated: list[tuple[PreparedPackageImport, Path]] = []
+    preparation_command = "bun install --frozen-lockfile --cwd=runtime/cua-node"
+    for package in PREPARED_PACKAGE_IMPORTS:
+        source = prepared_modules / package.name
+        if source.is_symlink() or not source.is_dir():
+            raise AssemblyError(
+                f"prepared package is missing: {source}; run `{preparation_command}` first"
+            )
+        package_files = _files(source)
+        package_json = source / "package.json"
+        if package_json.is_symlink() or package_json not in package_files:
+            raise AssemblyError(f"prepared package is missing a real package.json: {package.name}")
+        try:
+            identity = json.loads(package_json.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as error:
+            raise AssemblyError(
+                f"prepared package has invalid package.json: {package.name}"
+            ) from error
+        if not isinstance(identity, dict) or (
+            identity.get("name"),
+            identity.get("version"),
+            identity.get("license"),
+        ) != (package.name, package.version, package.license_expression):
+            raise AssemblyError(
+                "prepared package identity mismatch: "
+                f"expected {package.name}@{package.version} license {package.license_expression}"
+            )
+        if re.fullmatch(r"[0-9a-f]{64}", package.tree_sha256) is None or package.size_bytes < 0:
+            raise AssemblyError(
+                f"prepared package lock constants are not filled for {package.name}@{package.version}"
+            )
+        digest, size_bytes, _ = _tree_hash(source)
+        if digest != package.tree_sha256 or size_bytes != package.size_bytes:
+            raise AssemblyError(
+                f"prepared package tree mismatch for {package.name}@{package.version}: "
+                f"sha256={digest}, size_bytes={size_bytes}"
+            )
+        validated.append((package, source))
+
+    for package, source in validated:
+        destination = destination_modules / package.name
+        remove_path(destination)
+        _copy_tree(source, destination)
 
 
 def _rebuild_first_party_outputs() -> dict[str, object]:
@@ -1028,7 +1107,7 @@ def _portable_package_lock_record(
     name: str,
     version: str,
     license_expression: str,
-    seed_sha256: str,
+    source: dict[str, object],
 ) -> dict[str, Any]:
     destination = f"lib/node_modules/{name}"
     record = _browser_lock_record(root)
@@ -1040,12 +1119,7 @@ def _portable_package_lock_record(
         {
             "name": name,
             "version": version,
-            "source": {
-                "type": "local-cache",
-                "uri": f"sky-cua-cache://cua-node/seeds/{seed_sha256}/packages/{name}",
-                "provenance": "exact portable package tree imported from the verified migration seed",
-                "resolved": True,
-            },
+            "source": source,
             "sha256": digest,
             "size_bytes": size,
             "license": {
@@ -1064,6 +1138,54 @@ def _portable_package_lock_record(
             },
         }
     )
+    return record
+
+
+def _migration_seed_package_lock_record(
+    root: Path,
+    *,
+    name: str,
+    version: str,
+    license_expression: str,
+    seed_sha256: str,
+) -> dict[str, Any]:
+    return _portable_package_lock_record(
+        root,
+        name=name,
+        version=version,
+        license_expression=license_expression,
+        source={
+            "type": "local-cache",
+            "uri": f"sky-cua-cache://cua-node/seeds/{seed_sha256}/packages/{name}",
+            "provenance": "exact portable package tree imported from the verified migration seed",
+            "resolved": True,
+        },
+    )
+
+
+def _prepared_package_lock_record(root: Path, package: PreparedPackageImport) -> dict[str, Any]:
+    tarball_name = package.name.rsplit("/", 1)[-1]
+    record = _portable_package_lock_record(
+        root,
+        name=package.name,
+        version=package.version,
+        license_expression=package.license_expression,
+        source={
+            "type": "npm",
+            "uri": (
+                f"https://registry.npmjs.org/{package.name}/-/{tarball_name}-{package.version}.tgz"
+            ),
+            "provenance": (
+                "official npm registry package prepared by the frozen runtime/cua-node "
+                "Bun lockfile and copied from runtime/cua-node/node_modules"
+            ),
+            "resolved": True,
+        },
+    )
+    record["integrity"] = package.integrity
+    notice_files = [f"lib/node_modules/{package.name}/LICENSE"]
+    cast(dict[str, object], record["license"])["notice_files"] = notice_files
+    cast(dict[str, object], record["redistribution"])["notice_files"] = notice_files
     return record
 
 
@@ -1096,6 +1218,8 @@ def _generate_locks(root: Path, *, seed_sha256: str) -> tuple[bytes, bytes]:
     packages = cast(list[dict[str, Any]], runtime_lock["packages"])
     generated_package_names = {
         "@heliasar/browser-use",
+        "acorn",
+        "acorn-walk",
         "pixelmatch",
         "jpeg-js",
         "pngjs",
@@ -1112,7 +1236,7 @@ def _generate_locks(root: Path, *, seed_sha256: str) -> tuple[bytes, bytes]:
         ("bmp-js", "0.1.0", "MIT"),
     ):
         packages.append(
-            _portable_package_lock_record(
+            _migration_seed_package_lock_record(
                 root,
                 name=name,
                 version=version,
@@ -1120,6 +1244,9 @@ def _generate_locks(root: Path, *, seed_sha256: str) -> tuple[bytes, bytes]:
                 seed_sha256=seed_sha256,
             )
         )
+    packages.extend(
+        _prepared_package_lock_record(root, package) for package in PREPARED_PACKAGE_IMPORTS
+    )
     packages.sort(key=lambda item: cast(str, item["name"]))
     for item in packages:
         destination = cast(str, item["destination"])
@@ -1307,6 +1434,7 @@ def _compose(
         "size_bytes": (staging / "bin" / "node_repl").stat().st_size,
     }
     sky_hash, browser_hash = _install_first_party_packages(staging)
+    _import_prepared_packages(staging)
     _remove_wrong_platform_content(staging / "lib" / "node_modules")
     _normalize_checkout_text_paths(staging)
     _generate_compliance(
@@ -1396,6 +1524,7 @@ def _verify(root: Path, runtime_lock: Path, native_lock: Path) -> dict[str, Any]
             raise AssemblyError(
                 f"node_repl identity mismatch: expected {expected_identity}, got {identity}"
             )
+
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     lock = json.loads(runtime_lock.read_text(encoding="utf-8"))
     versions = {
@@ -1408,6 +1537,38 @@ def _verify(root: Path, runtime_lock: Path, native_lock: Path) -> dict[str, Any]
     if versions != {HOST_VERSION}:
         raise AssemblyError(f"node_repl version contract diverges: {sorted(versions)}")
     return cast(dict[str, Any], report)
+
+
+def _verify_installed_transcript(root: Path) -> None:
+    transcript_command = [
+        "bun",
+        str(
+            REPO_ROOT / "runtime" / "cua-node" / "production" / "installed-transcript-acceptance.ts"
+        ),
+        f"--runtime-root={root}",
+        "--json",
+    ]
+    transcript = subprocess.run(
+        transcript_command,
+        cwd=REPO_ROOT,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    try:
+        transcript_report = json.loads(transcript.stdout)
+    except json.JSONDecodeError as error:
+        raise AssemblyError(
+            "installed node_repl transcript acceptance returned invalid JSON:\n"
+            + transcript.stdout[-12000:]
+            + transcript.stderr[-12000:]
+        ) from error
+    if transcript.returncode != 0 or transcript_report.get("status") != "passed":
+        raise AssemblyError(
+            "installed node_repl transcript acceptance failed:\n"
+            + json.dumps(transcript_report, indent=2)[-12000:]
+            + transcript.stderr[-12000:]
+        )
 
 
 def _recover_publication(output: Path, journal: Path) -> None:
@@ -1490,6 +1651,7 @@ def assemble(
                 first_party_build=first_party_build,
             )
             report = _verify(staging, runtime_lock, native_lock)
+            _verify_installed_transcript(staging)
             tree_sha256, size_bytes, file_count = _tree_hash(staging)
             if check:
                 if not output.is_dir() or output.is_symlink():

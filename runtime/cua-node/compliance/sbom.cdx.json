@@ -49,6 +49,92 @@
   "components": [
     {
       "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/acorn",
+      "name": "Acorn",
+      "version": "8.16.0",
+      "scope": "required",
+      "purl": "pkg:npm/acorn@8.16.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e0d357db62f8b138d2e575a2cb92f087fa5d7cdb2f95d7512b9868ff3ef81277"
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "cleared"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "acorn-license"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bomRef": "pkg:generic/cua-node-component/acorn-walk",
+      "name": "Acorn Walk",
+      "version": "8.3.5",
+      "scope": "required",
+      "purl": "pkg:npm/acorn-walk@8.3.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cd968876dd2797441c7c6de59eaa867e2d804e490e4e6c6e5d9be3d247ea6b0f"
+        }
+      ],
+      "properties": [
+        {
+          "name": "compliance:disposition",
+          "value": "routine-notice-clearance"
+        },
+        {
+          "name": "compliance:release-effect",
+          "value": "notice-clearance-required"
+        },
+        {
+          "name": "compliance:provenance-status",
+          "value": "cleared"
+        },
+        {
+          "name": "compliance:notice-ids",
+          "value": "acorn-walk-license"
+        },
+        {
+          "name": "compliance:blocking-gate-ids",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bomRef": "pkg:generic/cua-node-component/canvas",
       "name": "@napi-rs/canvas",
       "version": "0.1.91",

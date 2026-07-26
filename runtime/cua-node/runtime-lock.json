@@ -1,799 +1,895 @@
 {
-  "schema_version": 1,
-  "lock_version": 1,
-  "target": "linux-x64-glibc",
-  "local_assembly_ready": true,
-  "release_ready": true,
-  "release_blockers": [],
-  "runtime": {
-    "name": "cua_node",
-    "version": "0.0.4-heliasar.1",
-    "source": {
-      "type": "first-party-build",
-      "uri": "runtime/cua-node/dist/cli.js",
-      "provenance": "canonical first-party host/kernel bundle built from sky-cua runtime/cua-node/src/cli.ts",
-      "resolved": true
-    },
-    "sha256": "485491b08d7da275ae155594d113a029d5fa076462a472d63037809f0082bf9b",
-    "sha256_scope": "artifact",
-    "size_bytes": 619395,
-    "license": {
-      "expression": "Apache-2.0",
-      "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-      "redistribution_status": "approved"
-    },
-    "platform": {
-      "os": "linux",
-      "arch": "x64",
-      "libc": "glibc",
-      "glibc_max_required": "2.28"
-    },
-    "native_dependency_audit": {
-      "status": "not-applicable",
-      "abi": {
-        "format": "none",
-        "class": null,
-        "machine": null
-      },
-      "files": [],
-      "needed": [],
-      "rpath": [],
-      "runpath": [],
-      "glibc_max_required": null,
-      "ldd": "not-applicable",
-      "notes": []
-    },
-    "redistribution": {
-      "status": "approved",
-      "allowed": true,
-      "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-      "source_offer_required": false,
-      "approval": "resolved production provenance"
-    }
-  },
-  "node": {
-    "name": "node",
-    "version": "24.14.0",
-    "source": {
-      "type": "official-release",
-      "uri": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz",
-      "provenance": "archive sha256 41cd79bb7877c81605a9e68ec4c91547774f46a40c67a17e34d7179ef11729df",
-      "resolved": true
-    },
-    "sha256": "e237a2839d0cbdc9a9a2adda1a184afc0f5b20306ffbe923af5686550472d8a8",
-    "sha256_scope": "artifact",
-    "size_bytes": 122466960,
-    "license": {
-      "expression": "Apache-2.0",
-      "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-      "redistribution_status": "approved"
-    },
-    "platform": {
-      "os": "linux",
-      "arch": "x64",
-      "libc": "glibc",
-      "glibc_max_required": "2.28"
-    },
-    "native_dependency_audit": {
-      "status": "not-applicable",
-      "abi": {
-        "format": "none",
-        "class": null,
-        "machine": null
-      },
-      "files": [],
-      "needed": [],
-      "rpath": [],
-      "runpath": [],
-      "glibc_max_required": null,
-      "ldd": "not-applicable",
-      "notes": []
-    },
-    "redistribution": {
-      "status": "approved",
-      "allowed": true,
-      "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-      "source_offer_required": false,
-      "approval": "resolved production provenance"
-    }
-  },
-  "npm": {
-    "name": "npm",
-    "version": "11.9.0",
-    "source": {
-      "type": "official-release",
-      "uri": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz#lib/node_modules/npm",
-      "provenance": "bundled in approved Node archive",
-      "resolved": true
-    },
-    "sha256": "e38e895e9658879cc4ee1a10ef561122425953d3031c0d75ef9292520a5e7a08",
-    "sha256_scope": "tree-manifest",
-    "size_bytes": 9769763,
-    "license": {
-      "expression": "Apache-2.0",
-      "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-      "redistribution_status": "approved"
-    },
-    "platform": {
-      "os": "linux",
-      "arch": "x64",
-      "libc": "glibc",
-      "glibc_max_required": "2.28"
-    },
-    "native_dependency_audit": {
-      "status": "not-applicable",
-      "abi": {
-        "format": "none",
-        "class": null,
-        "machine": null
-      },
-      "files": [],
-      "needed": [],
-      "rpath": [],
-      "runpath": [],
-      "glibc_max_required": null,
-      "ldd": "not-applicable",
-      "notes": []
-    },
-    "redistribution": {
-      "status": "approved",
-      "allowed": true,
-      "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-      "source_offer_required": false,
-      "approval": "resolved production provenance"
-    }
-  },
-  "corepack": {
-    "name": "corepack",
-    "version": "0.34.6",
-    "source": {
-      "type": "official-release",
-      "uri": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz#lib/node_modules/corepack",
-      "provenance": "bundled in approved Node archive",
-      "resolved": true
-    },
-    "sha256": "a55a70354aec0caa1c101e09bf9f9f90b9193d7624fe4924ea3ba1f9e11b9c10",
-    "sha256_scope": "tree-manifest",
-    "size_bytes": 1040115,
-    "license": {
-      "expression": "Apache-2.0",
-      "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-      "redistribution_status": "approved"
-    },
-    "platform": {
-      "os": "linux",
-      "arch": "x64",
-      "libc": "glibc",
-      "glibc_max_required": "2.28"
-    },
-    "native_dependency_audit": {
-      "status": "not-applicable",
-      "abi": {
-        "format": "none",
-        "class": null,
-        "machine": null
-      },
-      "files": [],
-      "needed": [],
-      "rpath": [],
-      "runpath": [],
-      "glibc_max_required": null,
-      "ldd": "not-applicable",
-      "notes": []
-    },
-    "redistribution": {
-      "status": "approved",
-      "allowed": true,
-      "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-      "source_offer_required": false,
-      "approval": "resolved production provenance"
-    }
-  },
-  "packages": [
-    {
-      "name": "playwright",
-      "version": "1.57.0",
-      "source": {
-        "type": "local-cache",
-        "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/playwright",
-        "provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
-        "resolved": true
-      },
-      "sha256": "9350ea7e5380371a0600027d0c673079d39d60eabb771fdea6fe9a30e897c7d4",
-      "sha256_scope": "tree-manifest",
-      "size_bytes": 3888386,
-      "license": {
-        "expression": "Apache-2.0",
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "redistribution_status": "approved"
-      },
-      "platform": {
-        "os": "linux",
-        "arch": "x64",
-        "libc": "glibc",
-        "glibc_max_required": "2.28"
-      },
-      "native_dependency_audit": {
-        "status": "not-applicable",
-        "abi": {
-          "format": "none",
-          "class": null,
-          "machine": null
-        },
-        "files": [],
-        "needed": [],
-        "rpath": [],
-        "runpath": [],
-        "glibc_max_required": null,
-        "ldd": "not-applicable",
-        "notes": []
-      },
-      "redistribution": {
-        "status": "approved",
-        "allowed": true,
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "source_offer_required": false,
-        "approval": "resolved production provenance"
-      },
-      "destination": "lib/node_modules/playwright",
-      "integrity": "sha512-ilYQj1s8sr2ppEJ2YVadYBN0Mb3mdo9J0wQ+UuDhzYqURwSoW4n1Xs5vs7ORwgDGmyEh33tRMeS8KhdkMoLXQw=="
-    },
-    {
-      "name": "playwright-core",
-      "version": "1.57.0",
-      "source": {
-        "type": "local-cache",
-        "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/playwright-core",
-        "provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
-        "resolved": true
-      },
-      "sha256": "2b6ac7c1f95ba11f1daca88f1bcc47fa30a7c7ec35ea1c3b6efa68efa6cd088c",
-      "sha256_scope": "tree-manifest",
-      "size_bytes": 8290562,
-      "license": {
-        "expression": "Apache-2.0",
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "redistribution_status": "approved"
-      },
-      "platform": {
-        "os": "linux",
-        "arch": "x64",
-        "libc": "glibc",
-        "glibc_max_required": "2.28"
-      },
-      "native_dependency_audit": {
-        "status": "not-applicable",
-        "abi": {
-          "format": "none",
-          "class": null,
-          "machine": null
-        },
-        "files": [],
-        "needed": [],
-        "rpath": [],
-        "runpath": [],
-        "glibc_max_required": null,
-        "ldd": "not-applicable",
-        "notes": []
-      },
-      "redistribution": {
-        "status": "approved",
-        "allowed": true,
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "source_offer_required": false,
-        "approval": "resolved production provenance"
-      },
-      "destination": "lib/node_modules/playwright-core",
-      "integrity": "sha512-agTcKlMw/mjBWOnD6kFZttAAGHgi/Nw0CZ2o6JqWSbMlI219lAFLZZCyqByTsvVAJq5XA5H8cA6PrvBRpBWEuQ=="
-    },
-    {
-      "name": "pdfjs-dist",
-      "version": "5.4.624",
-      "source": {
-        "type": "local-cache",
-        "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/pdfjs-dist",
-        "provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
-        "resolved": true
-      },
-      "sha256": "aef702ca391b975b86b5d1d513982c7c7cf6654a2038aebb64e7765ffc2f4ea4",
-      "sha256_scope": "tree-manifest",
-      "size_bytes": 37633076,
-      "license": {
-        "expression": "Apache-2.0",
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "redistribution_status": "approved"
-      },
-      "platform": {
-        "os": "linux",
-        "arch": "x64",
-        "libc": "glibc",
-        "glibc_max_required": "2.28"
-      },
-      "native_dependency_audit": {
-        "status": "not-applicable",
-        "abi": {
-          "format": "none",
-          "class": null,
-          "machine": null
-        },
-        "files": [],
-        "needed": [],
-        "rpath": [],
-        "runpath": [],
-        "glibc_max_required": null,
-        "ldd": "not-applicable",
-        "notes": []
-      },
-      "redistribution": {
-        "status": "approved",
-        "allowed": true,
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "source_offer_required": false,
-        "approval": "resolved production provenance"
-      },
-      "destination": "lib/node_modules/pdfjs-dist",
-      "integrity": "sha512-sm6TxKTtWv1Oh6n3C6J6a8odejb5uO4A4zo/2dgkHuC0iu8ZMAXOezEODkVaoVp8nX1Xzr+0WxFJJmUr45hQzg=="
-    },
-    {
-      "name": "tesseract.js",
-      "version": "7.0.0",
-      "source": {
-        "type": "local-cache",
-        "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/tesseract.js",
-        "provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
-        "resolved": true
-      },
-      "sha256": "ac2f543ce88a5f572e046bf5408db99003df817dbe102088a2ed1c89c726832c",
-      "sha256_scope": "tree-manifest",
-      "size_bytes": 1412077,
-      "license": {
-        "expression": "Apache-2.0",
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "redistribution_status": "approved"
-      },
-      "platform": {
-        "os": "linux",
-        "arch": "x64",
-        "libc": "glibc",
-        "glibc_max_required": "2.28"
-      },
-      "native_dependency_audit": {
-        "status": "not-applicable",
-        "abi": {
-          "format": "none",
-          "class": null,
-          "machine": null
-        },
-        "files": [],
-        "needed": [],
-        "rpath": [],
-        "runpath": [],
-        "glibc_max_required": null,
-        "ldd": "not-applicable",
-        "notes": []
-      },
-      "redistribution": {
-        "status": "approved",
-        "allowed": true,
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "source_offer_required": false,
-        "approval": "resolved production provenance"
-      },
-      "destination": "lib/node_modules/tesseract.js",
-      "integrity": "sha512-exPBkd+z+wM1BuMkx/Bjv43OeLBxhL5kKWsz/9JY+DXcXdiBjiAch0V49QR3oAJqCaL5qURE0vx9Eo+G5YE7mA=="
-    },
-    {
-      "name": "tesseract.js-core",
-      "version": "7.0.0",
-      "source": {
-        "type": "local-cache",
-        "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/tesseract.js-core",
-        "provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
-        "resolved": true
-      },
-      "sha256": "11c11896ef57ddd3cf697c88d7660c69eeb178acf68e79526cecb8b0a9575bb3",
-      "sha256_scope": "tree-manifest",
-      "size_bytes": 45262431,
-      "license": {
-        "expression": "Apache-2.0",
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "redistribution_status": "approved"
-      },
-      "platform": {
-        "os": "linux",
-        "arch": "x64",
-        "libc": "glibc",
-        "glibc_max_required": "2.28"
-      },
-      "native_dependency_audit": {
-        "status": "not-applicable",
-        "abi": {
-          "format": "none",
-          "class": null,
-          "machine": null
-        },
-        "files": [],
-        "needed": [],
-        "rpath": [],
-        "runpath": [],
-        "glibc_max_required": null,
-        "ldd": "not-applicable",
-        "notes": []
-      },
-      "redistribution": {
-        "status": "approved",
-        "allowed": true,
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "source_offer_required": false,
-        "approval": "resolved production provenance"
-      },
-      "destination": "lib/node_modules/tesseract.js-core",
-      "integrity": "sha512-WnNH518NzmbSq9zgTPeoF8c+xmilS8rFIl1YKbk/ptuuc7p6cLNELNuPAzcmsYw450ca6bLa8j3t0VAtq435Vw=="
-    },
-    {
-      "name": "sharp",
-      "version": "0.34.5",
-      "source": {
-        "type": "local-cache",
-        "uri": "opencode-cache/true-mem@latest/node_modules/sharp",
-        "provenance": "exact local x64 package tree",
-        "resolved": true
-      },
-      "sha256": "b8516cba2ee6093b7ce40e67a1b385d2033486fc0e06e03cbf38c6ce45944915",
-      "sha256_scope": "tree-manifest",
-      "size_bytes": 533571,
-      "license": {
-        "expression": "Apache-2.0",
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "redistribution_status": "approved"
-      },
-      "platform": {
-        "os": "linux",
-        "arch": "x64",
-        "libc": "glibc",
-        "glibc_max_required": "2.28"
-      },
-      "native_dependency_audit": {
-        "status": "not-applicable",
-        "abi": {
-          "format": "none",
-          "class": null,
-          "machine": null
-        },
-        "files": [],
-        "needed": [],
-        "rpath": [],
-        "runpath": [],
-        "glibc_max_required": null,
-        "ldd": "not-applicable",
-        "notes": []
-      },
-      "redistribution": {
-        "status": "approved",
-        "allowed": true,
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "source_offer_required": false,
-        "approval": "resolved production provenance"
-      },
-      "destination": "lib/node_modules/sharp",
-      "integrity": "sha512-Ou9I5Ft9WNcCbXrU9cMgPBcCK8LiwLqcbywW3t4oDV37n1pzpuNLsYiAV8eODnjbtQlSDwZ2cUEeQz4E54Hltg=="
-    },
-    {
-      "name": "@napi-rs/canvas",
-      "version": "0.1.91",
-      "source": {
-        "type": "local-cache",
-        "uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/@napi-rs/canvas",
-        "provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
-        "resolved": true
-      },
-      "sha256": "110b2f6fbf3234fea13a14fce94284f1383eba1aa958447bf4ba06e3e8d29be8",
-      "sha256_scope": "tree-manifest",
-      "size_bytes": 103743,
-      "license": {
-        "expression": "MIT",
-        "notice_files": [
-          "lib/node_modules/@napi-rs/canvas/LICENSE",
-          "licenses/notices/canvas-0.1.91.NOTICE.md"
-        ],
-        "redistribution_status": "approved"
-      },
-      "platform": {
-        "os": "linux",
-        "arch": "x64",
-        "libc": "glibc",
-        "glibc_max_required": "2.28"
-      },
-      "native_dependency_audit": {
-        "status": "not-applicable",
-        "abi": {
-          "format": "none",
-          "class": null,
-          "machine": null
-        },
-        "files": [],
-        "needed": [],
-        "rpath": [],
-        "runpath": [],
-        "glibc_max_required": null,
-        "ldd": "not-applicable",
-        "notes": []
-      },
-      "redistribution": {
-        "status": "approved",
-        "allowed": true,
-        "notice_files": [
-          "lib/node_modules/@napi-rs/canvas/LICENSE",
-          "licenses/notices/canvas-0.1.91.NOTICE.md"
-        ],
-        "source_offer_required": false,
-        "approval": "resolved production provenance"
-      },
-      "destination": "lib/node_modules/@napi-rs/canvas",
-      "integrity": "sha512-eeIe1GoB74P1B0Nkw6pV8BCQ3hfCfvyYr4BntzlCsnFXzVJiPMDnLeIx3gVB0xQMblHYnjK/0nCLvirEhOjr5g=="
-    },
-    {
-      "name": "pixelmatch",
-      "version": "7.1.0",
-      "source": {
-        "type": "official-release",
-        "uri": "https://registry.npmjs.org/pixelmatch/-/pixelmatch-7.1.0.tgz",
-        "provenance": "npm registry package pinned by production/package-lock.json; exact prepared package tree",
-        "resolved": true
-      },
-      "sha256": "6407fbe0821c7b3635924870de1173714beb723161dc033e5421eacdad8c6137",
-      "sha256_scope": "tree-manifest",
-      "size_bytes": 19428,
-      "license": {
-        "expression": "ISC",
-        "notice_files": ["lib/node_modules/pixelmatch/LICENSE"],
-        "redistribution_status": "approved"
-      },
-      "platform": {
-        "os": "linux",
-        "arch": "x64",
-        "libc": "glibc",
-        "glibc_max_required": "2.28"
-      },
-      "native_dependency_audit": {
-        "status": "not-applicable",
-        "abi": {
-          "format": "none",
-          "class": null,
-          "machine": null
-        },
-        "files": [],
-        "needed": [],
-        "rpath": [],
-        "runpath": [],
-        "glibc_max_required": null,
-        "ldd": "not-applicable",
-        "notes": []
-      },
-      "redistribution": {
-        "status": "approved",
-        "allowed": true,
-        "notice_files": ["lib/node_modules/pixelmatch/LICENSE"],
-        "source_offer_required": false,
-        "approval": "resolved production provenance"
-      },
-      "destination": "lib/node_modules/pixelmatch",
-      "integrity": "sha512-1wrVzJ2STrpmONHKBy228LM1b84msXDUoAzVEl0R8Mz4Ce6EPr+IVtxm8+yvrqLYMHswREkjYFaMxnyGnaY3Ng=="
-    },
-    {
-      "name": "@heliasar/sky-cua",
-      "version": "0.1.0",
-      "source": {
-        "type": "first-party-build",
-        "uri": "sky-cua/packages/sky-cua-js/out/sky-cua-0.1.0.tgz",
-        "provenance": "deterministic tarball sha256 fecb9426aa44de2abdaaf4bc081d9c1a0cba7a2021dfbdc8c9c0d8572f8c86c2",
-        "resolved": true
-      },
-      "sha256": "ed9ce8f7b44454fadea470ba6a9b4bfbaad2a7101a865fe170e3913f2eacca91",
-      "sha256_scope": "tree-manifest",
-      "size_bytes": 102290,
-      "license": {
-        "expression": "LicenseRef-Heliasar-Proprietary",
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "redistribution_status": "approved"
-      },
-      "platform": {
-        "os": "linux",
-        "arch": "x64",
-        "libc": "glibc",
-        "glibc_max_required": "2.28"
-      },
-      "native_dependency_audit": {
-        "status": "not-applicable",
-        "abi": {
-          "format": "none",
-          "class": null,
-          "machine": null
-        },
-        "files": [],
-        "needed": [],
-        "rpath": [],
-        "runpath": [],
-        "glibc_max_required": null,
-        "ldd": "not-applicable",
-        "notes": []
-      },
-      "redistribution": {
-        "status": "approved",
-        "allowed": true,
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "source_offer_required": false,
-        "approval": "resolved production provenance"
-      },
-      "destination": "lib/node_modules/@heliasar/sky-cua",
-      "integrity": "sha512-nqcS+x/O2K++iIdN1mPqnH7olHCMixNwBvlKCNm/FPuIyJabdGBa06h4WimmzJC+LBBPUv960Ikod2gv2UA0fQ=="
-    }
-  ],
-  "outputs": [
-    {
-      "name": "node_repl",
-      "version": "20260713.2-heliasar.1",
-      "source": {
-        "type": "first-party-build",
-        "uri": "runtime/cua-node/native/node_repl.c",
-        "provenance": "reproducible freestanding ELF64 launcher",
-        "resolved": true
-      },
-      "sha256": "3b443ca7ac8bda6c324b60614cebb6aafcf91efa2d710b01429265c72caf7fd5",
-      "sha256_scope": "artifact",
-      "size_bytes": 9448,
-      "license": {
-        "expression": "Apache-2.0",
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "redistribution_status": "approved"
-      },
-      "platform": {
-        "os": "linux",
-        "arch": "x64",
-        "libc": "glibc",
-        "glibc_max_required": "2.28"
-      },
-      "native_dependency_audit": {
-        "status": "not-applicable",
-        "abi": {
-          "format": "none",
-          "class": null,
-          "machine": null
-        },
-        "files": [],
-        "needed": [],
-        "rpath": [],
-        "runpath": [],
-        "glibc_max_required": null,
-        "ldd": "not-applicable",
-        "notes": []
-      },
-      "redistribution": {
-        "status": "approved",
-        "allowed": true,
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "source_offer_required": false,
-        "approval": "resolved production provenance"
-      },
-      "destination": "bin/node_repl"
-    },
-    {
-      "name": "node_repl-host-kernel",
-      "version": "20260713.2-heliasar.1",
-      "source": {
-        "type": "first-party-build",
-        "uri": "runtime/cua-node/dist/cli.js",
-        "provenance": "canonical sky-cua bundle sha256 485491b08d7da275ae155594d113a029d5fa076462a472d63037809f0082bf9b",
-        "resolved": true
-      },
-      "sha256": "485491b08d7da275ae155594d113a029d5fa076462a472d63037809f0082bf9b",
-      "sha256_scope": "artifact",
-      "size_bytes": 619395,
-      "license": {
-        "expression": "Apache-2.0",
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "redistribution_status": "approved"
-      },
-      "platform": {
-        "os": "linux",
-        "arch": "x64",
-        "libc": "glibc",
-        "glibc_max_required": "2.28"
-      },
-      "native_dependency_audit": {
-        "status": "not-applicable",
-        "abi": {
-          "format": "none",
-          "class": null,
-          "machine": null
-        },
-        "files": [],
-        "needed": [],
-        "rpath": [],
-        "runpath": [],
-        "glibc_max_required": null,
-        "ldd": "not-applicable",
-        "notes": []
-      },
-      "redistribution": {
-        "status": "approved",
-        "allowed": true,
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "source_offer_required": false,
-        "approval": "resolved production provenance"
-      },
-      "destination": "lib/node_repl/cli.js"
-    },
-    {
-      "name": "node_repl-esm-package-marker",
-      "version": "20260713.2-heliasar.1",
-      "source": {
-        "type": "first-party-build",
-        "uri": "scripts/prepare-cua-node-source.ts",
-        "provenance": "deterministic Node ESM package boundary for the private host bundle",
-        "resolved": true
-      },
-      "sha256": "743503b7bcfd83a7410ce6a254bd6428e33eb3fa473417ca7bde1eefb57d3276",
-      "sha256_scope": "artifact",
-      "size_bytes": 86,
-      "license": {
-        "expression": "Apache-2.0",
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "redistribution_status": "approved"
-      },
-      "platform": {
-        "os": "linux",
-        "arch": "x64",
-        "libc": "glibc",
-        "glibc_max_required": "2.28"
-      },
-      "native_dependency_audit": {
-        "status": "not-applicable",
-        "abi": {
-          "format": "none",
-          "class": null,
-          "machine": null
-        },
-        "files": [],
-        "needed": [],
-        "rpath": [],
-        "runpath": [],
-        "glibc_max_required": null,
-        "ldd": "not-applicable",
-        "notes": []
-      },
-      "redistribution": {
-        "status": "approved",
-        "allowed": true,
-        "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-        "source_offer_required": false,
-        "approval": "resolved production provenance"
-      },
-      "destination": "lib/node_repl/package.json"
-    }
-  ],
-  "native_dependency_audit": {
-    "status": "not-applicable",
-    "abi": {
-      "format": "none",
-      "class": null,
-      "machine": null
-    },
-    "files": [],
-    "needed": [],
-    "rpath": [],
-    "runpath": [],
-    "glibc_max_required": null,
-    "ldd": "not-applicable",
-    "notes": [
-      "Native files are independently audited by scripts/verify-cua-node.ts."
-    ]
-  },
-  "redistribution": {
-    "status": "approved",
-    "allowed": true,
-    "notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
-    "source_offer_required": false,
-    "approval": "resolved production provenance"
-  }
+	"schema_version": 1,
+	"lock_version": 1,
+	"target": "linux-x64-glibc",
+	"local_assembly_ready": true,
+	"release_ready": true,
+	"release_blockers": [],
+	"runtime": {
+		"name": "cua_node",
+		"version": "0.0.4-heliasar.1",
+		"source": {
+			"type": "first-party-build",
+			"uri": "runtime/cua-node/dist/cli.js",
+			"provenance": "canonical first-party host/kernel bundle built from sky-cua runtime/cua-node/src/cli.ts",
+			"resolved": true
+		},
+		"sha256": "946af5d3988f46634974cbdba8c1812ecce1e190de77fac85e865da56f61c8a9",
+		"sha256_scope": "artifact",
+		"size_bytes": 619950,
+		"license": {
+			"expression": "Apache-2.0",
+			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"redistribution_status": "approved"
+		},
+		"platform": {
+			"os": "linux",
+			"arch": "x64",
+			"libc": "glibc",
+			"glibc_max_required": "2.28"
+		},
+		"native_dependency_audit": {
+			"status": "not-applicable",
+			"abi": {
+				"format": "none",
+				"class": null,
+				"machine": null
+			},
+			"files": [],
+			"needed": [],
+			"rpath": [],
+			"runpath": [],
+			"glibc_max_required": null,
+			"ldd": "not-applicable",
+			"notes": []
+		},
+		"redistribution": {
+			"status": "approved",
+			"allowed": true,
+			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"source_offer_required": false,
+			"approval": "resolved production provenance"
+		}
+	},
+	"node": {
+		"name": "node",
+		"version": "24.14.0",
+		"source": {
+			"type": "official-release",
+			"uri": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz",
+			"provenance": "archive sha256 41cd79bb7877c81605a9e68ec4c91547774f46a40c67a17e34d7179ef11729df",
+			"resolved": true
+		},
+		"sha256": "e237a2839d0cbdc9a9a2adda1a184afc0f5b20306ffbe923af5686550472d8a8",
+		"sha256_scope": "artifact",
+		"size_bytes": 122466960,
+		"license": {
+			"expression": "Apache-2.0",
+			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"redistribution_status": "approved"
+		},
+		"platform": {
+			"os": "linux",
+			"arch": "x64",
+			"libc": "glibc",
+			"glibc_max_required": "2.28"
+		},
+		"native_dependency_audit": {
+			"status": "not-applicable",
+			"abi": {
+				"format": "none",
+				"class": null,
+				"machine": null
+			},
+			"files": [],
+			"needed": [],
+			"rpath": [],
+			"runpath": [],
+			"glibc_max_required": null,
+			"ldd": "not-applicable",
+			"notes": []
+		},
+		"redistribution": {
+			"status": "approved",
+			"allowed": true,
+			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"source_offer_required": false,
+			"approval": "resolved production provenance"
+		}
+	},
+	"npm": {
+		"name": "npm",
+		"version": "11.9.0",
+		"source": {
+			"type": "official-release",
+			"uri": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz#lib/node_modules/npm",
+			"provenance": "bundled in approved Node archive",
+			"resolved": true
+		},
+		"sha256": "e38e895e9658879cc4ee1a10ef561122425953d3031c0d75ef9292520a5e7a08",
+		"sha256_scope": "tree-manifest",
+		"size_bytes": 9769763,
+		"license": {
+			"expression": "Apache-2.0",
+			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"redistribution_status": "approved"
+		},
+		"platform": {
+			"os": "linux",
+			"arch": "x64",
+			"libc": "glibc",
+			"glibc_max_required": "2.28"
+		},
+		"native_dependency_audit": {
+			"status": "not-applicable",
+			"abi": {
+				"format": "none",
+				"class": null,
+				"machine": null
+			},
+			"files": [],
+			"needed": [],
+			"rpath": [],
+			"runpath": [],
+			"glibc_max_required": null,
+			"ldd": "not-applicable",
+			"notes": []
+		},
+		"redistribution": {
+			"status": "approved",
+			"allowed": true,
+			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"source_offer_required": false,
+			"approval": "resolved production provenance"
+		}
+	},
+	"corepack": {
+		"name": "corepack",
+		"version": "0.34.6",
+		"source": {
+			"type": "official-release",
+			"uri": "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.xz#lib/node_modules/corepack",
+			"provenance": "bundled in approved Node archive",
+			"resolved": true
+		},
+		"sha256": "a55a70354aec0caa1c101e09bf9f9f90b9193d7624fe4924ea3ba1f9e11b9c10",
+		"sha256_scope": "tree-manifest",
+		"size_bytes": 1040115,
+		"license": {
+			"expression": "Apache-2.0",
+			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"redistribution_status": "approved"
+		},
+		"platform": {
+			"os": "linux",
+			"arch": "x64",
+			"libc": "glibc",
+			"glibc_max_required": "2.28"
+		},
+		"native_dependency_audit": {
+			"status": "not-applicable",
+			"abi": {
+				"format": "none",
+				"class": null,
+				"machine": null
+			},
+			"files": [],
+			"needed": [],
+			"rpath": [],
+			"runpath": [],
+			"glibc_max_required": null,
+			"ldd": "not-applicable",
+			"notes": []
+		},
+		"redistribution": {
+			"status": "approved",
+			"allowed": true,
+			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"source_offer_required": false,
+			"approval": "resolved production provenance"
+		}
+	},
+	"packages": [
+		{
+			"name": "playwright",
+			"version": "1.57.0",
+			"source": {
+				"type": "local-cache",
+				"uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/playwright",
+				"provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
+				"resolved": true
+			},
+			"sha256": "9350ea7e5380371a0600027d0c673079d39d60eabb771fdea6fe9a30e897c7d4",
+			"sha256_scope": "tree-manifest",
+			"size_bytes": 3888386,
+			"license": {
+				"expression": "Apache-2.0",
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_modules/playwright",
+			"integrity": "sha512-ilYQj1s8sr2ppEJ2YVadYBN0Mb3mdo9J0wQ+UuDhzYqURwSoW4n1Xs5vs7ORwgDGmyEh33tRMeS8KhdkMoLXQw=="
+		},
+		{
+			"name": "playwright-core",
+			"version": "1.57.0",
+			"source": {
+				"type": "local-cache",
+				"uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/playwright-core",
+				"provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
+				"resolved": true
+			},
+			"sha256": "2b6ac7c1f95ba11f1daca88f1bcc47fa30a7c7ec35ea1c3b6efa68efa6cd088c",
+			"sha256_scope": "tree-manifest",
+			"size_bytes": 8290562,
+			"license": {
+				"expression": "Apache-2.0",
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_modules/playwright-core",
+			"integrity": "sha512-agTcKlMw/mjBWOnD6kFZttAAGHgi/Nw0CZ2o6JqWSbMlI219lAFLZZCyqByTsvVAJq5XA5H8cA6PrvBRpBWEuQ=="
+		},
+		{
+			"name": "pdfjs-dist",
+			"version": "5.4.624",
+			"source": {
+				"type": "local-cache",
+				"uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/pdfjs-dist",
+				"provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
+				"resolved": true
+			},
+			"sha256": "aef702ca391b975b86b5d1d513982c7c7cf6654a2038aebb64e7765ffc2f4ea4",
+			"sha256_scope": "tree-manifest",
+			"size_bytes": 37633076,
+			"license": {
+				"expression": "Apache-2.0",
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_modules/pdfjs-dist",
+			"integrity": "sha512-sm6TxKTtWv1Oh6n3C6J6a8odejb5uO4A4zo/2dgkHuC0iu8ZMAXOezEODkVaoVp8nX1Xzr+0WxFJJmUr45hQzg=="
+		},
+		{
+			"name": "tesseract.js",
+			"version": "7.0.0",
+			"source": {
+				"type": "local-cache",
+				"uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/tesseract.js",
+				"provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
+				"resolved": true
+			},
+			"sha256": "ac2f543ce88a5f572e046bf5408db99003df817dbe102088a2ed1c89c726832c",
+			"sha256_scope": "tree-manifest",
+			"size_bytes": 1412077,
+			"license": {
+				"expression": "Apache-2.0",
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_modules/tesseract.js",
+			"integrity": "sha512-exPBkd+z+wM1BuMkx/Bjv43OeLBxhL5kKWsz/9JY+DXcXdiBjiAch0V49QR3oAJqCaL5qURE0vx9Eo+G5YE7mA=="
+		},
+		{
+			"name": "tesseract.js-core",
+			"version": "7.0.0",
+			"source": {
+				"type": "local-cache",
+				"uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/tesseract.js-core",
+				"provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
+				"resolved": true
+			},
+			"sha256": "11c11896ef57ddd3cf697c88d7660c69eeb178acf68e79526cecb8b0a9575bb3",
+			"sha256_scope": "tree-manifest",
+			"size_bytes": 45262431,
+			"license": {
+				"expression": "Apache-2.0",
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_modules/tesseract.js-core",
+			"integrity": "sha512-WnNH518NzmbSq9zgTPeoF8c+xmilS8rFIl1YKbk/ptuuc7p6cLNELNuPAzcmsYw450ca6bLa8j3t0VAtq435Vw=="
+		},
+		{
+			"name": "sharp",
+			"version": "0.34.5",
+			"source": {
+				"type": "local-cache",
+				"uri": "opencode-cache/true-mem@latest/node_modules/sharp",
+				"provenance": "exact local x64 package tree",
+				"resolved": true
+			},
+			"sha256": "b8516cba2ee6093b7ce40e67a1b385d2033486fc0e06e03cbf38c6ce45944915",
+			"sha256_scope": "tree-manifest",
+			"size_bytes": 533571,
+			"license": {
+				"expression": "Apache-2.0",
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_modules/sharp",
+			"integrity": "sha512-Ou9I5Ft9WNcCbXrU9cMgPBcCK8LiwLqcbywW3t4oDV37n1pzpuNLsYiAV8eODnjbtQlSDwZ2cUEeQz4E54Hltg=="
+		},
+		{
+			"name": "@napi-rs/canvas",
+			"version": "0.1.91",
+			"source": {
+				"type": "local-cache",
+				"uri": "research/upstream-cua-node/26.707.72221-darwin-arm64/cua_node/lib/node_modules/@napi-rs/canvas",
+				"provenance": "exact upstream 26.707.72221 JavaScript package tree; target-specific binaries replaced",
+				"resolved": true
+			},
+			"sha256": "110b2f6fbf3234fea13a14fce94284f1383eba1aa958447bf4ba06e3e8d29be8",
+			"sha256_scope": "tree-manifest",
+			"size_bytes": 103743,
+			"license": {
+				"expression": "MIT",
+				"notice_files": [
+					"lib/node_modules/@napi-rs/canvas/LICENSE",
+					"licenses/notices/canvas-0.1.91.NOTICE.md"
+				],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": [
+					"lib/node_modules/@napi-rs/canvas/LICENSE",
+					"licenses/notices/canvas-0.1.91.NOTICE.md"
+				],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_modules/@napi-rs/canvas",
+			"integrity": "sha512-eeIe1GoB74P1B0Nkw6pV8BCQ3hfCfvyYr4BntzlCsnFXzVJiPMDnLeIx3gVB0xQMblHYnjK/0nCLvirEhOjr5g=="
+		},
+		{
+			"name": "acorn",
+			"version": "8.16.0",
+			"source": {
+				"type": "npm",
+				"uri": "https://registry.npmjs.org/acorn/-/acorn-8.16.0.tgz",
+				"provenance": "official npm registry package prepared by the frozen runtime/cua-node Bun lockfile",
+				"resolved": true
+			},
+			"sha256": "e0d357db62f8b138d2e575a2cb92f087fa5d7cdb2f95d7512b9868ff3ef81277",
+			"sha256_scope": "tree-manifest",
+			"size_bytes": 558610,
+			"license": {
+				"expression": "MIT",
+				"notice_files": ["lib/node_modules/acorn/LICENSE"],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": ["lib/node_modules/acorn/LICENSE"],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_modules/acorn",
+			"integrity": "sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw=="
+		},
+		{
+			"name": "acorn-walk",
+			"version": "8.3.5",
+			"source": {
+				"type": "npm",
+				"uri": "https://registry.npmjs.org/acorn-walk/-/acorn-walk-8.3.5.tgz",
+				"provenance": "official npm registry package prepared by the frozen runtime/cua-node Bun lockfile",
+				"resolved": true
+			},
+			"sha256": "cd968876dd2797441c7c6de59eaa867e2d804e490e4e6c6e5d9be3d247ea6b0f",
+			"sha256_scope": "tree-manifest",
+			"size_bytes": 53765,
+			"license": {
+				"expression": "MIT",
+				"notice_files": ["lib/node_modules/acorn-walk/LICENSE"],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": ["lib/node_modules/acorn-walk/LICENSE"],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_modules/acorn-walk",
+			"integrity": "sha512-HEHNfbars9v4pgpW6SO1KSPkfoS0xVOM/9UzkJltjlsHZmJasxg8aXkuZa7SMf8vKGIBhpUsPluQSqhJFCqebw=="
+		},
+		{
+			"name": "pixelmatch",
+			"version": "7.1.0",
+			"source": {
+				"type": "official-release",
+				"uri": "https://registry.npmjs.org/pixelmatch/-/pixelmatch-7.1.0.tgz",
+				"provenance": "npm registry package pinned by production/package-lock.json; exact prepared package tree",
+				"resolved": true
+			},
+			"sha256": "6407fbe0821c7b3635924870de1173714beb723161dc033e5421eacdad8c6137",
+			"sha256_scope": "tree-manifest",
+			"size_bytes": 19428,
+			"license": {
+				"expression": "ISC",
+				"notice_files": ["lib/node_modules/pixelmatch/LICENSE"],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": ["lib/node_modules/pixelmatch/LICENSE"],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_modules/pixelmatch",
+			"integrity": "sha512-1wrVzJ2STrpmONHKBy228LM1b84msXDUoAzVEl0R8Mz4Ce6EPr+IVtxm8+yvrqLYMHswREkjYFaMxnyGnaY3Ng=="
+		},
+		{
+			"name": "@heliasar/sky-cua",
+			"version": "0.1.0",
+			"source": {
+				"type": "first-party-build",
+				"uri": "sky-cua/packages/sky-cua-js/out/sky-cua-0.1.0.tgz",
+				"provenance": "deterministic tarball sha256 fecb9426aa44de2abdaaf4bc081d9c1a0cba7a2021dfbdc8c9c0d8572f8c86c2",
+				"resolved": true
+			},
+			"sha256": "ed9ce8f7b44454fadea470ba6a9b4bfbaad2a7101a865fe170e3913f2eacca91",
+			"sha256_scope": "tree-manifest",
+			"size_bytes": 102290,
+			"license": {
+				"expression": "LicenseRef-Heliasar-Proprietary",
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_modules/@heliasar/sky-cua",
+			"integrity": "sha512-nqcS+x/O2K++iIdN1mPqnH7olHCMixNwBvlKCNm/FPuIyJabdGBa06h4WimmzJC+LBBPUv960Ikod2gv2UA0fQ=="
+		}
+	],
+	"outputs": [
+		{
+			"name": "node_repl",
+			"version": "20260713.2-heliasar.1",
+			"source": {
+				"type": "first-party-build",
+				"uri": "runtime/cua-node/native/node_repl.c",
+				"provenance": "reproducible freestanding ELF64 launcher",
+				"resolved": true
+			},
+			"sha256": "3b443ca7ac8bda6c324b60614cebb6aafcf91efa2d710b01429265c72caf7fd5",
+			"sha256_scope": "artifact",
+			"size_bytes": 9448,
+			"license": {
+				"expression": "Apache-2.0",
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "bin/node_repl"
+		},
+		{
+			"name": "node_repl-host-kernel",
+			"version": "20260713.2-heliasar.1",
+			"source": {
+				"type": "first-party-build",
+				"uri": "runtime/cua-node/dist/cli.js",
+				"provenance": "canonical sky-cua bundle sha256 946af5d3988f46634974cbdba8c1812ecce1e190de77fac85e865da56f61c8a9",
+				"resolved": true
+			},
+			"sha256": "946af5d3988f46634974cbdba8c1812ecce1e190de77fac85e865da56f61c8a9",
+			"sha256_scope": "artifact",
+			"size_bytes": 619950,
+			"license": {
+				"expression": "Apache-2.0",
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_repl/cli.js"
+		},
+		{
+			"name": "node_repl-esm-package-marker",
+			"version": "20260713.2-heliasar.1",
+			"source": {
+				"type": "first-party-build",
+				"uri": "scripts/prepare-cua-node-source.ts",
+				"provenance": "deterministic Node ESM package boundary for the private host bundle",
+				"resolved": true
+			},
+			"sha256": "743503b7bcfd83a7410ce6a254bd6428e33eb3fa473417ca7bde1eefb57d3276",
+			"sha256_scope": "artifact",
+			"size_bytes": 86,
+			"license": {
+				"expression": "Apache-2.0",
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_repl/package.json"
+		}
+	],
+	"native_dependency_audit": {
+		"status": "not-applicable",
+		"abi": {
+			"format": "none",
+			"class": null,
+			"machine": null
+		},
+		"files": [],
+		"needed": [],
+		"rpath": [],
+		"runpath": [],
+		"glibc_max_required": null,
+		"ldd": "not-applicable",
+		"notes": [
+			"Native files are independently audited by scripts/verify-cua-node.ts."
+		]
+	},
+	"redistribution": {
+		"status": "approved",
+		"allowed": true,
+		"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+		"source_offer_required": false,
+		"approval": "resolved production provenance"
+	}
 }

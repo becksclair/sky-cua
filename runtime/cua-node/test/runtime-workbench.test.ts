@@ -3,6 +3,10 @@ import { resolve } from "node:path";
 import { strict as assert } from "node:assert";
 import { test } from "bun:test";
 import { RuntimeManager } from "../src/host/runtime-manager.ts";
+import {
+  ACORN_LOADER_ACCEPTANCE_CODE,
+  ACORN_LOADER_ACCEPTANCE_RESULT,
+} from "./fixtures/acorn-loader-acceptance";
 
 const candidates = [
   process.env.SKY_CUA_RELEASE_ROOT,
@@ -36,7 +40,9 @@ test.skipIf(runtimeRoot === undefined)(
       const runtimeEvidence = JSON.parse(runtime.output) as Record<string, unknown>;
       assert.equal(runtimeEvidence.version, "24.14.0");
       assert.equal(runtimeEvidence.frozen, true);
-      assert.deepEqual(runtimeEvidence.loaders, [
+       assert.deepEqual(runtimeEvidence.loaders, [
+        "acorn",
+        "acornWalk",
         "canvas",
         "pdfjs",
         "pixelmatch",
@@ -45,10 +51,20 @@ test.skipIf(runtimeRoot === undefined)(
         "tesseract",
       ]);
 
+      const ast = await manager.execute(
+        ACORN_LOADER_ACCEPTANCE_CODE,
+        {
+          requestId: 2,
+          requestMeta: { session_id: "workbench", turn_id: "ast" },
+        },
+      );
+      assert.equal(ast.ok, true, ast.error ?? "Acorn workbench failed");
+      assert.deepEqual(JSON.parse(ast.output), ACORN_LOADER_ACCEPTANCE_RESULT);
+
       const pdf = await manager.execute(
         "var pdfjsWorkbench=await nodeRepl.loaders.pdfjs(); nodeRepl.write(JSON.stringify({version:pdfjsWorkbench.version,domMatrix:typeof DOMMatrix,path2d:typeof Path2D,navigator:typeof navigator}))",
         {
-          requestId: 2,
+          requestId: 3,
           requestMeta: { session_id: "workbench", turn_id: "pdf" },
         },
       );
@@ -63,7 +79,7 @@ test.skipIf(runtimeRoot === undefined)(
       const identity = await manager.execute(
         'var canvasLoader=await nodeRepl.loaders.canvas(); var canvasImport=await import("@napi-rs/canvas"); nodeRepl.write(JSON.stringify({namespace:canvasLoader===canvasImport,constructor:canvasImport.DOMMatrix===DOMMatrix}))',
         {
-          requestId: 3,
+          requestId: 4,
           requestMeta: { session_id: "workbench", turn_id: "identity" },
         },
       );

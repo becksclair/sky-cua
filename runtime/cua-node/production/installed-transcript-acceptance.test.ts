@@ -11,11 +11,8 @@ import { join, resolve } from "node:path";
 import { test } from "bun:test";
 import contractFixture from "../test/fixtures/upstream-5307/contract.json";
 import toolsFixture from "../test/fixtures/upstream-5307/tools-list.json";
-import {
-  parseArgs,
-  runAcceptance,
-  validateInstalledRuntime,
-} from "./installed-transcript-acceptance";
+import { ACORN_LOADER_ACCEPTANCE_RESULT } from "../test/fixtures/acorn-loader-acceptance";
+import { parseArgs, runAcceptance, validateInstalledRuntime } from "./installed-transcript-acceptance";
 
 const script = resolve(__dirname, "installed-transcript-acceptance.ts");
 
@@ -38,7 +35,7 @@ const initializeResult = ${JSON.stringify({
     protocolVersion: "2025-11-25",
     capabilities: contractFixture.mcp.initialize.capabilities,
     serverInfo: contractFixture.mcp.server_info,
-    instructions: contractFixture.mcp.initialize.instructions,
+    instructions: `${contractFixture.mcp.initialize.instructions} Use \`nodeRepl.write(value)\` for output; the value of the last expression in your code is not returned.`,
   })};
 const provenance = process.env.SKY_CUA_MCP_CALLER_PROVENANCE;
 const sessionId = "fixture-" + provenance + "-" + process.pid;
@@ -119,6 +116,10 @@ reader.on("line", (line) => {
       file_url:pathToFileURL(join(moduleDir, "installed-transcript-fixture", "index.mjs")).href,
       native_addon:true,
     }));
+    return;
+  }
+  if (title === "Parse and walk installed JavaScript") {
+    success(id, ${JSON.stringify(JSON.stringify(ACORN_LOADER_ACCEPTANCE_RESULT))});
     return;
   }
   if (title === "Exercise installed file values") {
@@ -248,6 +249,7 @@ test("deterministic installed fixture passes the complete transcript matrix", as
       cancellation_and_recovery: true,
       local_file_bytes: 32,
       native_addon_loaded: true,
+      acorn_parse_and_walk: true,
       emitted_images: 1,
     });
   } finally {

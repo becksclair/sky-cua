@@ -32,6 +32,58 @@
       ]
     },
     {
+      "SPDXID": "SPDXRef-acorn",
+      "name": "Acorn",
+      "versionInfo": "8.16.0",
+      "downloadLocation": "https://registry.npmjs.org/acorn/-/acorn-8.16.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "packageComment": "routine-notice-clearance; The exact Acorn 8.16.0 prepared package tree, registry integrity, and MIT license are pinned by runtime-lock.json.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/acorn@8.16.0"
+        }
+      ],
+      "attributionTexts": [
+        "acorn-license"
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "e0d357db62f8b138d2e575a2cb92f087fa5d7cdb2f95d7512b9868ff3ef81277"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-acorn-walk",
+      "name": "Acorn Walk",
+      "versionInfo": "8.3.5",
+      "downloadLocation": "https://registry.npmjs.org/acorn-walk/-/acorn-walk-8.3.5.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "packageComment": "routine-notice-clearance; The exact Acorn Walk 8.3.5 prepared package tree, registry integrity, and MIT license are pinned by runtime-lock.json.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/acorn-walk@8.3.5"
+        }
+      ],
+      "attributionTexts": [
+        "acorn-walk-license"
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "cd968876dd2797441c7c6de59eaa867e2d804e490e4e6c6e5d9be3d247ea6b0f"
+        }
+      ]
+    },
+    {
       "SPDXID": "SPDXRef-canvas",
       "name": "@napi-rs/canvas",
       "versionInfo": "0.1.91",
@@ -509,6 +561,16 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-cua-node"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-acorn"
+    },
+    {
+      "spdxElementId": "SPDXRef-cua-node",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-acorn-walk"
     },
     {
       "spdxElementId": "SPDXRef-cua-node",

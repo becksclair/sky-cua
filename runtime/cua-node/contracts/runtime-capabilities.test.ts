@@ -114,7 +114,16 @@ test("runtime capability contract has no process or loader escape hatch", () => 
   assert.equal(contract.loader_promotion.general_package_loader, false);
   assert.deepEqual(
     sorted(contract.loader_promotion.fixed_names),
-    sorted(["canvas", "pdfjs", "pixelmatch", "playwright", "sharp", "tesseract"]),
+    sorted([
+      "acorn",
+      "acornWalk",
+      "canvas",
+      "pdfjs",
+      "pixelmatch",
+      "playwright",
+      "sharp",
+      "tesseract",
+    ]),
   );
   assert.equal(
     contract.loader_promotion.required_properties.includes("no-eager-native-load"),

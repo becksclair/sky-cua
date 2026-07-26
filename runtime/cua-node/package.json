@@ -1,29 +1,30 @@
 {
-  "name": "@heliasar/cua-node-runtime",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "build": "bun build src/cli.ts --target=node --outdir=dist",
-    "test": "bun test contracts test production compliance",
-    "typecheck": "tsc --noEmit",
-    "verify": "bun run build && bun run typecheck && bun run test",
-    "verify:source-locks": "bun test test/source-lock-truth.test.ts compliance/compliance.test.ts",
-    "verify:runtime": "bun tools/verify-cua-node.ts",
-    "acceptance:repl": "bun production/repl-subsystem-acceptance.ts",
-    "acceptance:installed-transcript": "bun production/installed-transcript-acceptance.ts",
-    "acceptance:full": "bun production/full-subsystem-acceptance.ts",
-    "acceptance:browser-live": "bun production/browser-live-acceptance.ts",
-    "acceptance:web": "bun production/web-workbench-acceptance.ts",
-    "benchmark": "bun production/benchmark.ts"
-  },
-  "dependencies": {
-    "acorn": "8.16.0",
-    "ajv": "8.17.1",
-    "smol-toml": "1.6.1"
-  },
-  "devDependencies": {
-    "bun-types": "1.3.13",
-    "typescript": "6.0.3"
-  }
+	"name": "@heliasar/cua-node-runtime",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "bun build src/cli.ts --target=node --outdir=dist",
+		"test": "bun test contracts test production compliance",
+		"typecheck": "tsc --noEmit",
+		"verify": "bun run build && bun run typecheck && bun run test",
+		"verify:source-locks": "bun test test/source-lock-truth.test.ts compliance/compliance.test.ts",
+		"verify:runtime": "bun tools/verify-cua-node.ts",
+		"acceptance:repl": "bun production/repl-subsystem-acceptance.ts",
+		"acceptance:installed-transcript": "bun production/installed-transcript-acceptance.ts",
+		"acceptance:full": "bun production/full-subsystem-acceptance.ts",
+		"acceptance:browser-live": "bun production/browser-live-acceptance.ts",
+		"acceptance:web": "bun production/web-workbench-acceptance.ts",
+		"benchmark": "bun production/benchmark.ts"
+	},
+	"dependencies": {
+		"acorn": "8.16.0",
+		"acorn-walk": "8.3.5",
+		"ajv": "8.17.1",
+		"smol-toml": "1.6.1"
+	},
+	"devDependencies": {
+		"bun-types": "1.3.13",
+		"typescript": "6.0.3"
+	}
 }

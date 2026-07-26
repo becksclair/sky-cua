@@ -516,6 +516,8 @@ test("nodeRepl exposes deeply frozen runtime metadata and fixed loaders", async 
       frozen: true,
       mutated: false,
       loaders: [
+        "acorn",
+        "acornWalk",
         "canvas",
         "pdfjs",
         "pixelmatch",

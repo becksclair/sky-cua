@@ -32,6 +32,9 @@ ${XDG_DATA_HOME:-~/.local/share}/sky-cua
 `sky_cua` is the direct native MCP server. `node_repl` preserves `js`,
 `js_reset`, and `js_add_node_module_dir` with a persistent Node 24 VM. Installed
 JavaScript exposes the Browser, Computer, and Phone APIs from the same payload.
+Its fixed lazy-loader surface also provides Acorn 8.16.0 and Acorn Walk 8.3.5
+for structural inspection of generated or minified JavaScript without
+repository-specific module registration.
 
 The standalone artifact contains one `browser/extension` tree selected from the
 latest bundled Chrome extension source version. Browser code trust derives from
@@ -53,6 +56,12 @@ The build owns all inputs and writes reusable outputs under `dist/` and
 stable launchers, native-host manifests, skills, and detected consumer
 registrations. Reinstall is convergent and removes stale files from an older
 payload rather than retaining prior generations.
+
+The Acorn packages are prepared by the frozen runtime Bun lock, validated
+against exact package identity and tree hashes, and copied into the assembled
+module root without network access or mutation of the immutable migration
+seed. `nodeRepl.loaders.acorn()` and `nodeRepl.loaders.acornWalk()` share module
+identity with ordinary package imports in each runtime generation.
 
 ## Source paths
 
@@ -77,6 +86,9 @@ convergence in isolated homes. The proof must establish:
 - checkout and extracted installs converge on the fixed root;
 - a replacement install removes old-only files;
 - no generated consumer configuration contains a Browser trust hash.
+- Acorn parses module syntax, Acorn Walk visits the expected nodes, and both
+  convenience loaders preserve ordinary-import namespace identity from the
+  installed fixed-root runtime.
 
 Codex Desktop and OpenClaw perform their own repository-owned acceptance against
 the producer artifact. Those changes are not made from the sky-cua repository.

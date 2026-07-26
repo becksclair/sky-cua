@@ -136,6 +136,7 @@ test.skipIf(!assembledRuntimeExists || chromiumExecutable === undefined)(
       result.report.checks.map((check) => check.id),
       [
         "runtime",
+        "ast",
         "canvas-png",
         "canvas-webp",
         "sharp",

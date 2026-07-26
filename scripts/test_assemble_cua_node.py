@@ -13,12 +13,15 @@ import pytest
 from assemble_cua_node import (
     TARGET,
     AssemblyError,
+    PreparedPackageImport,
     _compose,
     _extract_package,
     _files,
     _generate_compliance,
+    _import_prepared_packages,
     _import_seed,
     _normalize_checkout_text_paths,
+    _prepared_package_lock_record,
     _producer_commit,
     _recover_publication,
     _remove_wrong_platform_content,
@@ -129,6 +132,139 @@ def test_platform_cleanup_preserves_portable_win32_module_file(tmp_path: Path) -
     assert sanitized["files"] == ["win32.js"]
     assert sanitized["optionalDependencies"] == {"@img/sharp-linux-x64": "0.34.5"}
     assert sanitized["scripts"] == {"verify": "node win32.js"}
+
+
+def _write_prepared_package(
+    repository: Path,
+    *,
+    name: str = "example",
+    version: str = "1.2.3",
+    license_expression: str = "MIT",
+) -> Path:
+    package = repository / "runtime" / "cua-node" / "node_modules" / name
+    package.mkdir(parents=True)
+    (package / "package.json").write_text(
+        json.dumps({"name": name, "version": version, "license": license_expression}),
+        encoding="utf-8",
+    )
+    (package / "index.js").write_text("export const prepared = true;\n", encoding="utf-8")
+    return package
+
+
+def _lock_prepared_package(package: Path, *, name: str = "example") -> PreparedPackageImport:
+    digest, size_bytes, _ = _tree_hash(package)
+    return PreparedPackageImport(name, "1.2.3", "MIT", digest, size_bytes)
+
+
+def test_import_prepared_packages_copies_exact_allowlisted_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repo"
+    package = _write_prepared_package(repository)
+    locked = _lock_prepared_package(package)
+    monkeypatch.setattr("assemble_cua_node.REPO_ROOT", repository)
+    monkeypatch.setattr("assemble_cua_node.PREPARED_PACKAGE_IMPORTS", (locked,))
+    staging = tmp_path / "staging"
+
+    _import_prepared_packages(staging)
+
+    destination = staging / "lib" / "node_modules" / "example"
+    assert _tree_hash(destination) == _tree_hash(package)
+    assert not (staging / "lib" / "node_modules" / "not-allowlisted").exists()
+
+
+def test_import_prepared_packages_reports_frozen_install_for_missing_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("assemble_cua_node.REPO_ROOT", tmp_path / "repo")
+    monkeypatch.setattr(
+        "assemble_cua_node.PREPARED_PACKAGE_IMPORTS",
+        (PreparedPackageImport("missing", "1.0.0", "MIT", "0" * 64, 0),),
+    )
+
+    with pytest.raises(
+        AssemblyError,
+        match=r"bun install --frozen-lockfile --cwd=runtime/cua-node",
+    ):
+        _import_prepared_packages(tmp_path / "staging")
+
+
+@pytest.mark.parametrize(
+    ("name", "version"),
+    [("wrong-name", "1.2.3"), ("example", "9.9.9")],
+)
+def test_import_prepared_packages_rejects_wrong_identity_or_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    version: str,
+) -> None:
+    repository = tmp_path / "repo"
+    package = _write_prepared_package(repository)
+    locked = _lock_prepared_package(package)
+    (package / "package.json").write_text(
+        json.dumps({"name": name, "version": version, "license": "MIT"}), encoding="utf-8"
+    )
+    monkeypatch.setattr("assemble_cua_node.REPO_ROOT", repository)
+    monkeypatch.setattr("assemble_cua_node.PREPARED_PACKAGE_IMPORTS", (locked,))
+
+    with pytest.raises(AssemblyError, match="prepared package identity mismatch"):
+        _import_prepared_packages(tmp_path / "staging")
+
+
+def test_import_prepared_packages_rejects_altered_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repo"
+    package = _write_prepared_package(repository)
+    locked = _lock_prepared_package(package)
+    (package / "index.js").write_text("altered\n", encoding="utf-8")
+    monkeypatch.setattr("assemble_cua_node.REPO_ROOT", repository)
+    monkeypatch.setattr("assemble_cua_node.PREPARED_PACKAGE_IMPORTS", (locked,))
+
+    with pytest.raises(AssemblyError, match="prepared package tree mismatch"):
+        _import_prepared_packages(tmp_path / "staging")
+
+
+def test_import_prepared_packages_rejects_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repo"
+    package = _write_prepared_package(repository)
+    locked = _lock_prepared_package(package)
+    (package / "link").symlink_to(package / "index.js")
+    monkeypatch.setattr("assemble_cua_node.REPO_ROOT", repository)
+    monkeypatch.setattr("assemble_cua_node.PREPARED_PACKAGE_IMPORTS", (locked,))
+
+    with pytest.raises(AssemblyError, match="tree contains symlink"):
+        _import_prepared_packages(tmp_path / "staging")
+
+
+def test_prepared_package_lock_record_uses_official_npm_registry_source(tmp_path: Path) -> None:
+    package = tmp_path / "lib" / "node_modules" / "acorn-walk"
+    package.mkdir(parents=True)
+    (package / "package.json").write_text(
+        json.dumps({"name": "acorn-walk", "version": "8.3.5", "license": "MIT"}),
+        encoding="utf-8",
+    )
+    locked = PreparedPackageImport(
+        "acorn-walk", "8.3.5", "MIT", "0" * 64, 0, "sha512-registry-integrity"
+    )
+
+    record = _prepared_package_lock_record(tmp_path, locked)
+
+    assert record["source"] == {
+        "type": "npm",
+        "uri": "https://registry.npmjs.org/acorn-walk/-/acorn-walk-8.3.5.tgz",
+        "provenance": (
+            "official npm registry package prepared by the frozen runtime/cua-node "
+            "Bun lockfile and copied from runtime/cua-node/node_modules"
+        ),
+        "resolved": True,
+    }
+    assert "migration" not in record["source"]["provenance"]
+    assert record["integrity"] == "sha512-registry-integrity"
+    assert record["license"]["notice_files"] == ["lib/node_modules/acorn-walk/LICENSE"]
 
 
 def test_resolve_seed_rejects_missing_cache(tmp_path: Path) -> None:
@@ -630,6 +766,7 @@ def _install_fast_assembly_fakes(
 
     monkeypatch.setattr("assemble_cua_node._compose", compose)
     monkeypatch.setattr("assemble_cua_node._verify", lambda *_a: {"status": "passed"})
+    monkeypatch.setattr("assemble_cua_node._verify_installed_transcript", lambda _root: None)
 
 
 def _write_fast_output(output: Path, payload: bytes = b"candidate") -> None:
@@ -684,6 +821,30 @@ def test_check_verifies_installed_modes_before_tree_comparison(
         )
 
 
+@pytest.mark.parametrize("check", [False, True])
+def test_assembly_runs_installed_transcript_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, check: bool
+) -> None:
+    output = tmp_path / "component"
+    if check:
+        _write_fast_output(output)
+    _install_fast_assembly_fakes(monkeypatch)
+    transcript_roots: list[Path] = []
+    monkeypatch.setattr("assemble_cua_node._verify_installed_transcript", transcript_roots.append)
+
+    assemble(
+        cache=tmp_path / "cache",
+        seed_argument=None,
+        output=output,
+        producer_commit="d" * 40,
+        check=check,
+        allow_development_dirty=True,
+    )
+
+    assert len(transcript_roots) == 1
+    assert transcript_roots[0] != output
+
+
 @pytest.mark.parametrize("release_eligible", [False, True])
 def test_compose_writes_first_party_build_attestation(
     tmp_path: Path,
@@ -716,6 +877,7 @@ def test_compose_writes_first_party_build_attestation(
     monkeypatch.setattr(
         "assemble_cua_node._install_first_party_packages", lambda _root: ("3" * 64, "4" * 64)
     )
+    monkeypatch.setattr("assemble_cua_node._import_prepared_packages", lambda _root: None)
     monkeypatch.setattr("assemble_cua_node._remove_wrong_platform_content", lambda _root: None)
     monkeypatch.setattr("assemble_cua_node._generate_compliance", lambda *_a, **_kw: None)
     source_inventory = [{"path": "runtime/source.ts", "sha256": "5" * 64, "size_bytes": 7}]
