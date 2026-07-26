@@ -44,7 +44,10 @@ REQUIRED_MEMBERS = (
     "browser/native-host/sky-cua-chrome-host",
     "codex/openai-bundled/.agents/plugins/marketplace.json",
     "codex/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json",
+    "codex/openai-bundled/plugins/computer-use/assets/app-icon.png",
     "codex/openai-bundled/plugins/browser/.codex-plugin/plugin.json",
+    "codex/openai-bundled/plugins/browser/assets/browser.png",
+    "codex/openai-bundled/plugins/browser/assets/composer-icon.png",
     "skills/computer-use/SKILL.md",
     "skills/browser-use/SKILL.md",
 )

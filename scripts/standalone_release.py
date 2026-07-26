@@ -164,8 +164,11 @@ def validate_payload(payload_root: Path) -> None:
         "browser/native-host/sky-cua-chrome-host",
         "codex/openai-bundled/.agents/plugins/marketplace.json",
         "codex/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json",
+        "codex/openai-bundled/plugins/computer-use/assets/app-icon.png",
         "codex/openai-bundled/plugins/computer-use/.mcp.json",
         "codex/openai-bundled/plugins/browser/.codex-plugin/plugin.json",
+        "codex/openai-bundled/plugins/browser/assets/browser.png",
+        "codex/openai-bundled/plugins/browser/assets/composer-icon.png",
         "codex/openai-bundled/plugins/browser/.mcp.json",
         "codex/openai-bundled/plugins/browser/scripts/browser-client.mjs",
         "codex/openai-bundled/plugins/browser/skills/control-in-app-browser/SKILL.md",
@@ -195,6 +198,8 @@ def validate_payload(payload_root: Path) -> None:
     ] != list(PLUGIN_NAMES):
         raise ValueError(f"standalone Codex marketplace must expose exactly {list(PLUGIN_NAMES)}")
     for plugin_name, plugin in zip(PLUGIN_NAMES, plugins, strict=True):
+        if not isinstance(plugin, dict):
+            raise ValueError(f"standalone Codex plugin {plugin_name} metadata must be an object")
         expected_path = f"./plugins/{plugin_name}"
         source = plugin.get("source")
         if not isinstance(source, dict) or source != {
@@ -208,6 +213,17 @@ def validate_payload(payload_root: Path) -> None:
         )
         if plugin_manifest.get("name") != plugin_name:
             raise ValueError(f"standalone Codex plugin manifest name does not match {plugin_name}")
+        if plugin_name == "computer-use":
+            interface = plugin_manifest.get("interface")
+            if not isinstance(interface, dict) or interface.get("logo") != "./assets/app-icon.png":
+                raise ValueError("standalone Computer Use plugin must reference its packaged icon")
+        if plugin_name == "browser":
+            interface = plugin_manifest.get("interface")
+            if not isinstance(interface, dict) or (
+                interface.get("composerIcon") != "./assets/composer-icon.png"
+                or interface.get("logo") != "./assets/browser.png"
+            ):
+                raise ValueError("standalone Browser plugin must reference its packaged icons")
     plugin_dirs = sorted(
         path.name
         for path in (marketplace_root / "plugins").iterdir()

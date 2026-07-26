@@ -34,8 +34,11 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
         "resources/codex-compat/openai-bundled/.agents/plugins/marketplace.json",
         "resources/codex-compat/openai-bundled/plugins/computer-use/.mcp.json",
         "resources/codex-compat/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json",
+        "resources/codex-compat/openai-bundled/plugins/computer-use/assets/app-icon.png",
         "resources/codex-compat/openai-bundled/plugins/browser/.mcp.json",
         "resources/codex-compat/openai-bundled/plugins/browser/.codex-plugin/plugin.json",
+        "resources/codex-compat/openai-bundled/plugins/browser/assets/browser.png",
+        "resources/codex-compat/openai-bundled/plugins/browser/assets/composer-icon.png",
         "resources/codex-compat/openai-bundled/plugins/browser/scripts/browser-client.mjs",
         "resources/codex-compat/openai-bundled/plugins/browser/skills/control-in-app-browser/SKILL.md",
         "resources/model-documentation/README.md",
@@ -66,11 +69,26 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
     _write(
         root
         / "resources/codex-compat/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json",
-        json.dumps({"name": "computer-use", "version": "test"}),
+        json.dumps(
+            {
+                "name": "computer-use",
+                "version": "test",
+                "interface": {"logo": "./assets/app-icon.png"},
+            }
+        ),
     )
     _write(
         root / "resources/codex-compat/openai-bundled/plugins/browser/.codex-plugin/plugin.json",
-        json.dumps({"name": "browser", "version": "test"}),
+        json.dumps(
+            {
+                "name": "browser",
+                "version": "test",
+                "interface": {
+                    "composerIcon": "./assets/composer-icon.png",
+                    "logo": "./assets/browser.png",
+                },
+            }
+        ),
     )
     _write(
         root
@@ -157,10 +175,17 @@ def test_build_owns_generated_inputs_and_emits_one_fixed_archive(
         names = set(bundle.getnames())
     assert f"{PAYLOAD_DIR_NAME}/bin/node_repl" in names
     assert f"{PAYLOAD_DIR_NAME}/codex/openai-bundled/plugins/computer-use/.mcp.json" in names
+    assert (
+        f"{PAYLOAD_DIR_NAME}/codex/openai-bundled/plugins/computer-use/assets/app-icon.png" in names
+    )
     assert f"{PAYLOAD_DIR_NAME}/codex/openai-bundled/plugins/browser/.mcp.json" in names
     assert (
         f"{PAYLOAD_DIR_NAME}/codex/openai-bundled/plugins/browser/scripts/browser-client.mjs"
         in names
+    )
+    assert f"{PAYLOAD_DIR_NAME}/codex/openai-bundled/plugins/browser/assets/browser.png" in names
+    assert (
+        f"{PAYLOAD_DIR_NAME}/codex/openai-bundled/plugins/browser/assets/composer-icon.png" in names
     )
     assert not any(
         name.startswith(f"{PAYLOAD_DIR_NAME}/codex/openai-bundled/plugins/browser-use/")
@@ -175,11 +200,19 @@ def test_build_owns_generated_inputs_and_emits_one_fixed_archive(
         "computer-use",
         "browser",
     ]
+    computer_use_plugin = payload / "codex/openai-bundled/plugins/computer-use"
+    computer_use_manifest = json.loads(
+        (computer_use_plugin / ".codex-plugin/plugin.json").read_text(encoding="utf-8")
+    )
+    assert computer_use_manifest["interface"]["logo"] == "./assets/app-icon.png"
+    assert (computer_use_plugin / "assets/app-icon.png").read_text(encoding="utf-8") == "fixture\n"
     browser_plugin = payload / "codex/openai-bundled/plugins/browser"
     plugin_manifest = json.loads(
         (browser_plugin / ".codex-plugin/plugin.json").read_text(encoding="utf-8")
     )
     assert plugin_manifest["name"] == "browser"
+    assert plugin_manifest["interface"]["composerIcon"] == "./assets/composer-icon.png"
+    assert plugin_manifest["interface"]["logo"] == "./assets/browser.png"
     skill = (browser_plugin / "skills/control-in-app-browser/SKILL.md").read_text(encoding="utf-8")
     assert "setupBrowserRuntime" in skill
     assert 'entry.type === "iab"' in skill
