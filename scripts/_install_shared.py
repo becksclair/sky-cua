@@ -26,7 +26,15 @@ LEGACY_BROWSER_SELECTION_ALIASES = {
     "chromium-origin": "chromium",
 }
 DEFAULT_LOCAL_INSTALL_DIR = Path.home() / ".local" / "share" / "sky-cua"
-MCP_HOST_CHOICES = ("generic", "opencode", "claude-code", "claude-desktop", "pi", "openclaw")
+MCP_HOST_CHOICES = (
+    "generic",
+    "opencode",
+    "claude-code",
+    "claude-desktop",
+    "pi",
+    "hermes",
+    "openclaw",
+)
 DESKTOP_SESSION_ENV_KEYS = (
     "DBUS_SESSION_BUS_ADDRESS",
     "DESKTOP_SESSION",

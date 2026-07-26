@@ -93,6 +93,9 @@ Open boxes link to the active ExecPlan that owns the work.
   - [x] Pinned Acorn and Acorn Walk `node_repl` loaders for generated/minified
         JavaScript inspection, with offline package-tree and installed-runtime
         acceptance
+  - [x] Hermes Agent deploy target with transactional two-server config
+        projection and real model-turn MCP acceptance —
+        [`docs/features/hermes-agent-integration.md`](docs/features/hermes-agent-integration.md)
 - [x] Codex Desktop compatibility (one active `computer-use` server, Browser Use companion, native-host preflight) — [`docs/features/codex-desktop-compat.md`](docs/features/codex-desktop-compat.md)
 - [x] OpenCode/Pi MCP host smoke parity
 - [x] Claude Code host support (plugin manifest + marketplace, `--host claude-code` installer, `~/.claude/skills` sync, `~/.claude/settings.json` deny-built-in-computer-use + auto-approve sky-cua) — [`docs/features/claude-code-host.md`](docs/features/claude-code-host.md)

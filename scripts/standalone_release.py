@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import _hermes_config
 import _opencode_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -143,6 +144,7 @@ def assemble_payload(payload_root: Path, *, core_root: Path, cua_node_root: Path
         REPO_ROOT / "scripts/_codex_app_server.py", artifact_scripts / "_codex_app_server.py"
     )
     _copy_file(REPO_ROOT / "scripts/_opencode_config.py", artifact_scripts / "_opencode_config.py")
+    _copy_file(REPO_ROOT / "scripts/_hermes_config.py", artifact_scripts / "_hermes_config.py")
     _write_release_manifest(payload_root)
     validate_payload(payload_root)
 
@@ -178,6 +180,7 @@ def validate_payload(payload_root: Path) -> None:
         "install.py",
         "scripts/standalone_release.py",
         "scripts/_opencode_config.py",
+        "scripts/_hermes_config.py",
     )
     missing = [relative for relative in required if not (payload_root / relative).is_file()]
     if missing:
@@ -493,9 +496,26 @@ def install_payload(
     opencode_report = _opencode_config.install_opencode_config(
         install_root, home=install_home, env=active_env
     )
+    hermes_report: dict[str, object] = {
+        "status": "skipped",
+        "config_path": None,
+        "backup_path": None,
+        "servers": [],
+    }
     plugins: tuple[str, ...] = ()
     openclaw = False
     if configure_hosts:
+        hermes_config = _hermes_config.install_hermes_config(
+            install_root,
+            home=install_home,
+            env=active_env,
+        )
+        hermes_report = hermes_config.report()
+        if hermes_config.config_path is not None:
+            hermes_report["agents"] = _hermes_config.install_hermes_agents(
+                home=install_home,
+                env=active_env,
+            ).report()
         plugins = _install_codex_plugins(install_root, env=active_env, which=which)
         openclaw = _install_openclaw_node_repl(
             install_root,
@@ -512,6 +532,7 @@ def install_payload(
         "codex_plugins": list(plugins),
         "openclaw_node_repl": openclaw,
         "opencode_config": opencode_report,
+        "hermes_config": hermes_report,
     }
 
 

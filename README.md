@@ -194,6 +194,7 @@ Install the runtime as a plain MCP server for non-Codex hosts:
 cargo build --release
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host generic
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host hermes
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host openclaw
 ```
 
@@ -210,11 +211,17 @@ the user AT-SPI accessibility bus before stopping any already-running installed
 ```bash
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode --bin-dir ~/.local/bin --restart-runtime
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host pi --bin-dir ~/.local/bin --restart-runtime
+python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host hermes --bin-dir ~/.local/bin --restart-runtime
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host openclaw --bin-dir ~/.local/bin --restart-runtime
 ```
 
 If the host does not reconnect automatically after the runtime is stopped,
 restart or reload the host session. For Pi, run `/reload` or restart Pi.
+Hermes Agent receives both `sky_cua` and `node_repl` in
+`${HERMES_HOME:-~/.hermes}/config.yaml`; start a fresh session or run
+`/reload-mcp`, then validate with `python3 scripts/live_hermes_mcp_smoke.py`.
+The installer also merges Hermes-adapted Node REPL guidance into
+`${HERMES_HOME:-~/.hermes}/AGENTS.md` without replacing unrelated instructions.
 OpenClaw installs through `openclaw mcp set sky_cua <config>`; it no longer
 copies skills into `~/.openclaw/workspace/skills` (retired 2026-07-03).
 

@@ -527,12 +527,16 @@ def test_generic_mcp_next_steps_document_restart_runtime(
     install_mcp_server.print_next_steps(
         "openclaw", target_dir, client_path, target_dir / "openclaw_mcp.json"
     )
+    install_mcp_server.print_next_steps(
+        "hermes", target_dir, client_path, Path("/tmp/hermes/config.yaml")
+    )
 
     output = capsys.readouterr().out
     assert "--restart-runtime" in output
     assert "Restart or reload the OpenCode session" in output
     assert "Restart Pi or run /reload" in output
     assert "live_openclaw_mcp_smoke.py" in output
+    assert "hermes mcp test sky_cua" in output
     assert "~/.openclaw/workspace/skills" not in output
 
 
@@ -550,6 +554,56 @@ def test_opencode_install_configures_browser_tools_without_enable_flag(
     env = config["mcp"]["sky_cua"]["environment"]
     assert env["SKY_CUA_REPO_ROOT"] == str(_install_shared.REPO_ROOT)
     assert _install_shared.BROWSER_SELECTION_ENV not in env
+
+
+def test_hermes_install_manages_both_servers_and_skills_idempotently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target_dir = tmp_path / "installed"
+    client_path = target_dir / "bin/sky-cua-client"
+    node_repl = target_dir / "bin/node_repl"
+    client_path.parent.mkdir(parents=True)
+    client_path.write_text("client", encoding="utf-8")
+    node_repl.write_text("node_repl", encoding="utf-8")
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir()
+    (hermes_home / "config.yaml").write_text(
+        "mcp_servers:\n  unrelated:\n    command: keep-me\n", encoding="utf-8"
+    )
+    installed_skills: list[Path] = []
+    monkeypatch.setattr(install_mcp_server, "install_sky_cua_skills", installed_skills.append)
+
+    config_path = install_mcp_server.install_hermes(
+        target_dir,
+        client_path,
+        hermes_home=hermes_home,
+        launch_policy=install_mcp_server.McpLaunchPolicy(browser_eval="on"),
+    )
+    first = config_path.read_bytes()
+    install_mcp_server.install_hermes(
+        target_dir,
+        client_path,
+        hermes_home=hermes_home,
+        launch_policy=install_mcp_server.McpLaunchPolicy(browser_eval="on"),
+    )
+
+    text = first.decode()
+    sky_line = next(line for line in text.splitlines() if line.startswith("  sky_cua: "))
+    node_line = next(line for line in text.splitlines() if line.startswith("  node_repl: "))
+    sky_cua = json.loads(sky_line.removeprefix("  sky_cua: "))
+    node = json.loads(node_line.removeprefix("  node_repl: "))
+    assert "  unrelated:\n    command: keep-me\n" in text
+    assert sky_cua["command"] == str(client_path)
+    assert sky_cua["args"] == ["mcp"]
+    assert sky_cua["env"][install_mcp_server.MCP_CALLER_PROVENANCE_ENV] == "hermes"
+    assert sky_cua["env"][install_mcp_server.MCP_BROWSER_EVAL_ENV] == "on"
+    assert node["command"] == str(node_repl)
+    assert node["args"] == []
+    assert config_path.read_bytes() == first
+    assert installed_skills == [hermes_home / "skills", hermes_home / "skills"]
+    assert (hermes_home / "AGENTS.md").is_file()
+    assert "mcp__node_repl__js" in (hermes_home / "AGENTS.md").read_text(encoding="utf-8")
+    assert "hermes" in _install_shared.MCP_HOST_CHOICES
 
 
 def test_bundle_mode_opencode_pins_bundle_resource_root(

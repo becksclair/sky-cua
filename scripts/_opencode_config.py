@@ -17,13 +17,21 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
-from _install_shared import DESKTOP_SESSION_ENV_KEYS
-
 OPENCODE_GLOBAL_CONFIG_NAMES = ("opencode.json", "opencode.jsonc")
 OPENCODE_MANAGED_SERVERS = ("sky_cua", "node_repl")
 OPENCODE_CALLER_PROVENANCE = "opencode"
 OPENCODE_MCP_TIMEOUT_MS = 30_000
 OPENCODE_BACKUP_DIR_NAME = ".sky-cua-backups"
+DESKTOP_SESSION_ENV_KEYS = (
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DESKTOP_SESSION",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_RUNTIME_DIR",
+    "XDG_SESSION_TYPE",
+    "XAUTHORITY",
+)
 
 
 def _desktop_session_env(env: Mapping[str, str]) -> dict[str, str]:

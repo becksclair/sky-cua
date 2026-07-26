@@ -9,6 +9,7 @@ Supported host targets:
   - claude-code     Claude Code via `claude mcp add-json` and ~/.claude/skills
   - claude-desktop  Claude Desktop via claude_desktop_config.json
   - pi              Pi via mcp.json
+  - hermes          Hermes Agent via $HERMES_HOME/config.yaml
   - generic         Raw .mcp.json for manual wiring (default)
 
 Usage:
@@ -30,6 +31,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import _hermes_config
 import _install_shared
 from _install_shared import (
     BROWSER_SELECTION_ENV,
@@ -78,6 +80,7 @@ MCP_CALLER_PROVENANCE_ENV = "SKY_CUA_MCP_CALLER_PROVENANCE"
 DIRECT_MCP_CALLER_PROVENANCE = "direct_mcp"
 OPENCODE_CALLER_PROVENANCE = "opencode"
 PI_CALLER_PROVENANCE = "pi"
+HERMES_CALLER_PROVENANCE = "hermes"
 MCP_BROWSER_CONTROL_MODE_ENV = "SKY_CUA_BROWSER_CONTROL_MODE"
 MCP_CODEX_BROWSER_SOCKET_PATH_ENV = "SKY_CUA_CODEX_BROWSER_SOCKET_PATH"
 INSTALLABLE_MCP_HOST_CHOICES = tuple(host for host in MCP_HOST_CHOICES if host != "openclaw")
@@ -789,6 +792,44 @@ def install_pi_skills(skills_dir: Path) -> None:
     install_sky_cua_skills(skills_dir)
 
 
+def install_hermes(
+    target_dir: Path,
+    client_path: Path,
+    hermes_home: Path | None = None,
+    resource_root: Path | None = None,
+    launch_policy: McpLaunchPolicy | None = None,
+) -> Path:
+    """Install both Sky CUA MCP servers into Hermes Agent's global config."""
+    root = runtime_resource_root(resource_root)
+    policy = launch_policy or McpLaunchPolicy()
+    active_env = dict(os.environ)
+    home = Path.home()
+    if hermes_home is not None:
+        active_env["HERMES_HOME"] = str(hermes_home.expanduser())
+    sky_cua_env = {
+        "SKY_CUA_REPO_ROOT": str(root),
+        **policy.env(),
+        **optional_mcp_runtime_env(active_env),
+        MCP_CALLER_PROVENANCE_ENV: HERMES_CALLER_PROVENANCE,
+    }
+    result = _hermes_config.install_hermes_config(
+        target_dir,
+        home=home,
+        env=active_env,
+        sky_cua_env=sky_cua_env,
+        create=True,
+    )
+    if result.config_path is None:
+        raise RuntimeError("Hermes config installation did not produce a config path")
+    agents_result = _hermes_config.install_hermes_agents(home=home, env=active_env)
+    install_sky_cua_skills(result.config_path.parent / "skills")
+    if result.backup_path is not None:
+        print(f"Backed up Hermes config to {result.backup_path}")
+    if agents_result.backup_path is not None:
+        print(f"Backed up Hermes instructions to {agents_result.backup_path}")
+    return result.config_path
+
+
 def link_current_platform_binaries(target_dir: Path, bin_dir: Path) -> None:
     platform_id = current_platform()
     bin_dir.mkdir(parents=True, exist_ok=True)
@@ -970,6 +1011,7 @@ def install_local_mcp_server(
     restart_runtime: bool = False,
     bundle_root: Path | None = None,
     claude_config_dir: Path | None = None,
+    hermes_home: Path | None = None,
     refresh_accessibility: bool = False,
     install_input_helper: bool = False,
     input_helper_group: str | None = None,
@@ -1018,6 +1060,14 @@ def install_local_mcp_server(
     elif host == "pi":
         config_path = install_pi(
             target_dir, client_path, resource_root=resource_root, launch_policy=launch_policy
+        )
+    elif host == "hermes":
+        config_path = install_hermes(
+            target_dir,
+            client_path,
+            hermes_home,
+            resource_root,
+            launch_policy,
         )
     elif host == "openclaw":
         raise ValueError(
@@ -1096,6 +1146,12 @@ def print_next_steps(host: str, target_dir: Path, client_path: Path, config_path
         print("     and sky-cua skills were copied into ~/.pi/agent/skills")
         print("  3. Ensure pi-mcp-adapter is installed: npm install -g pi-mcp-adapter")
         print("  4. Restart Pi or run /reload after --restart-runtime stops the old MCP process")
+    elif host == "hermes":
+        print("\nNext steps for Hermes Agent:")
+        print(f"  1. Both sky_cua and node_repl were merged into {config_path}")
+        print(f"  2. Node REPL guidance was merged into {config_path.parent / 'AGENTS.md'}")
+        print("  3. Verify discovery: hermes mcp test sky_cua && hermes mcp test node_repl")
+        print("  4. Start a fresh Hermes session or run /reload-mcp in an existing session")
     elif host == "openclaw":
         print("\nNext steps for OpenClaw:")
         print(f"  1. Snippet written for inspection: {config_path}")
@@ -1135,6 +1191,12 @@ def main() -> int:
         type=Path,
         default=None,
         help="Claude Code config directory for --host claude-code (default: ~/.claude).",
+    )
+    parser.add_argument(
+        "--hermes-home",
+        type=Path,
+        default=None,
+        help="Hermes Agent state directory for --host hermes (default: $HERMES_HOME or ~/.hermes).",
     )
     parser.add_argument(
         "--browser-eval",
@@ -1219,6 +1281,9 @@ def main() -> int:
             args.claude_config_dir.expanduser().resolve()
             if args.claude_config_dir is not None
             else None
+        ),
+        hermes_home=(
+            args.hermes_home.expanduser().resolve() if args.hermes_home is not None else None
         ),
         install_input_helper=args.input_helper,
         input_helper_group=args.input_helper_group,

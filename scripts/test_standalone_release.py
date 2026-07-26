@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tarfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -39,6 +40,7 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
         "resources/codex-compat/openai-bundled/plugins/browser/skills/control-in-app-browser/SKILL.md",
         "resources/model-documentation/README.md",
         "scripts/_codex_app_server.py",
+        "scripts/_hermes_config.py",
         "scripts/_opencode_config.py",
         "install.py",
     ):
@@ -254,6 +256,86 @@ def test_install_preserves_unresolvable_user_node_symlink(
 
     assert legacy_node.is_symlink()
     assert legacy_node.readlink() == Path("node")
+
+
+def test_install_projects_both_mcp_servers_into_existing_hermes_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    core, cua_node = _fixture_repo(repo)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", repo)
+    payload = tmp_path / "payload"
+    assemble_payload(payload, core_root=core, cua_node_root=cua_node)
+    home = tmp_path / "home"
+    hermes_config = home / ".hermes/config.yaml"
+    hermes_config.parent.mkdir(parents=True)
+    hermes_config.write_text("mcp_servers:\n  unrelated:\n    command: keep-me\n", encoding="utf-8")
+    env = {"HOME": str(home), "XDG_DATA_HOME": str(tmp_path / "xdg-data")}
+
+    report = install_payload(
+        payload,
+        home=home,
+        env=env,
+        which=lambda _name: None,
+    )
+
+    install_root = Path(str(report["install_root"]))
+    hermes_report = cast(dict[str, object], report["hermes_config"])
+    assert hermes_report["status"] == "updated"
+    assert hermes_report["servers"] == ["sky_cua", "node_repl"]
+    agents_report = cast(dict[str, object], hermes_report["agents"])
+    assert agents_report["status"] == "updated"
+    assert "mcp__node_repl__js" in (home / ".hermes/AGENTS.md").read_text(encoding="utf-8")
+    text = hermes_config.read_text(encoding="utf-8")
+    assert "  unrelated:\n    command: keep-me\n" in text
+    sky_line = next(line for line in text.splitlines() if line.startswith("  sky_cua: "))
+    node_line = next(line for line in text.splitlines() if line.startswith("  node_repl: "))
+    sky_cua = json.loads(sky_line.removeprefix("  sky_cua: "))
+    node_repl = json.loads(node_line.removeprefix("  node_repl: "))
+    assert sky_cua["command"] == str(install_root / "bin/sky-cua-client")
+    assert sky_cua["args"] == ["mcp"]
+    assert sky_cua["env"]["SKY_CUA_MCP_CALLER_PROVENANCE"] == "hermes"
+    assert node_repl["command"] == str(install_root / "bin/node_repl")
+
+
+def test_extracted_payload_install_imports_hermes_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    core, cua_node = _fixture_repo(repo)
+    real_root = Path(__file__).resolve().parents[1]
+    for relative in (
+        "install.py",
+        "scripts/_codex_app_server.py",
+        "scripts/_hermes_config.py",
+        "scripts/_opencode_config.py",
+    ):
+        source = real_root / relative
+        destination = repo / relative
+        destination.write_bytes(source.read_bytes())
+        destination.chmod(source.stat().st_mode)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", repo)
+    payload = tmp_path / "payload"
+    assemble_payload(payload, core_root=core, cua_node_root=cua_node)
+    home = tmp_path / "home"
+    env = {
+        "HOME": str(home),
+        "PATH": "",
+        "XDG_DATA_HOME": str(tmp_path / "xdg-data"),
+    }
+
+    result = subprocess.run(
+        [sys.executable, "install.py", "install"],
+        cwd=payload,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["hermes_config"]["status"] == "no_global_config"
 
 
 def test_payload_rejects_legacy_browser_use_plugin_alias(

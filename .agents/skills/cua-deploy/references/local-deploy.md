@@ -27,9 +27,15 @@ Expected projections include:
 - Chrome, Chromium, and Brave native messaging manifests;
 - the two-plugin `openai-bundled` Codex marketplace in the fixed tree;
 - detected host configuration, including global OpenClaw `node_repl` using the
-  private bundled Node runtime without replacing the user's global `node`.
+  private bundled Node runtime without replacing the user's global `node`, and
+  both fixed-root MCP servers in an existing Hermes Agent configuration.
 
 OpenClaw owns per-agent Codex plugin installation before thread start. A live
 OpenClaw acceptance should show `computer-use.doctor`/`observe` and
 `node_repl.js`, the requested model with no fallback, and Browser Use as
 `extension_native_host` with `isIab=false`.
+
+A live Hermes acceptance requires both `hermes mcp test` probes plus
+`scripts/live_hermes_mcp_smoke.py`, whose model turn must invoke
+`mcp__sky_cua__status` and `mcp__node_repl__js` and produce nonce-bound Node
+REPL evidence.
