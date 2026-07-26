@@ -6,6 +6,7 @@ and one release pipeline; there is no marketplace publish step:
 - `python3 scripts/deploy_plugin.py` — fast local development deploy.
 - `python3 install.py build` and `python3 install.py install` — standalone
   distribution and fixed-root machine install.
+- `python3 install.py release` — guarded standalone version commit and tag push.
 - Gitea `release standalone` — verify, publish the archive as a Gitea Release,
   read it back, and dispatch the published identity to Saga.
 
@@ -128,10 +129,28 @@ or modify a consumer repository as part of producer validation.
 
 ## Publish through Gitea
 
-Push a new version-matching `standalone-v*` tag to trigger
-`.gitea/workflows/release-standalone.yml`. The workflow can also be dispatched
-manually with an existing tag to retry publication or deployment without
-creating different bytes.
+From a clean `main` checkout synchronized with its configured upstream, run:
+
+```bash
+python3 install.py release                 # default: next minor
+python3 install.py release --patch
+python3 install.py release --minor
+python3 install.py release --major
+python3 install.py release --version 2.3.4
+```
+
+The command accepts stable `X.Y.Z` versions only and requires the explicit
+version to increase. It updates only `scripts/standalone_release.py`, runs
+`just verify`, creates a scoped version commit and annotated
+`standalone-vX.Y.Z` tag, then atomically pushes exactly `main` and that tag. It
+requires exactly one configured push destination and does not publish or deploy
+locally. Do not use it with unrelated staged, unstaged, or untracked files.
+
+The pushed tag triggers `.gitea/workflows/release-standalone.yml`. Successful
+command output proves only that remote refs match; monitor Gitea for publication
+and the subsequently dispatched Saga deployment. The workflow can also be
+dispatched manually with an existing tag to retry publication or deployment
+without creating different bytes.
 
 The release job runs on `asgard-build-1`, executes the Rust and Python
 verification gates, builds and isolated-installs the standalone archive, and
@@ -172,7 +191,7 @@ For standalone producer changes:
 uv run ruff format --check scripts
 uv run ruff check scripts
 uv run basedpyright
-uv run pytest scripts/test_standalone_release.py
+uv run pytest scripts/test_standalone_release.py scripts/test_standalone_release_command.py
 python3 install.py build
 tar tzf dist/sky-cua-linux-x64-glibc.tar.gz
 ```

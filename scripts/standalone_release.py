@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and install the standalone fixed-root sky-cua distribution."""
+"""Build, install, or release the standalone fixed-root sky-cua distribution."""
 
 from __future__ import annotations
 
@@ -16,6 +16,11 @@ from typing import Any
 
 import _hermes_config
 import _opencode_config
+import _standalone_release_command
+from _standalone_release_command import (
+    ReleaseError,
+    parse_stable_version,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TARGET = "linux-x64-glibc"
@@ -141,6 +146,10 @@ def assemble_payload(payload_root: Path, *, core_root: Path, cua_node_root: Path
     _copy_file(REPO_ROOT / "install.py", payload_root / "install.py", executable=True)
     _copy_file(Path(__file__), artifact_scripts / "standalone_release.py", executable=True)
     _copy_file(
+        REPO_ROOT / "scripts/_standalone_release_command.py",
+        artifact_scripts / "_standalone_release_command.py",
+    )
+    _copy_file(
         REPO_ROOT / "scripts/_codex_app_server.py", artifact_scripts / "_codex_app_server.py"
     )
     _copy_file(REPO_ROOT / "scripts/_opencode_config.py", artifact_scripts / "_opencode_config.py")
@@ -182,6 +191,7 @@ def validate_payload(payload_root: Path) -> None:
         "docs/inventories/routing-inventory.json",
         "install.py",
         "scripts/standalone_release.py",
+        "scripts/_standalone_release_command.py",
         "scripts/_opencode_config.py",
         "scripts/_hermes_config.py",
     )
@@ -556,6 +566,31 @@ def _is_checkout(root: Path) -> bool:
     return (root / ".git").exists() and (root / "scripts/build_plugin.py").is_file()
 
 
+def _argparse_stable_version(value: str) -> str:
+    try:
+        parse_stable_version(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return value
+
+
+def release_command(
+    *,
+    bump: str = "minor",
+    explicit_version: str | None = None,
+    runner: Runner = subprocess.run,
+    repo_root: Path | None = None,
+) -> int:
+    """Create and atomically push a guarded standalone release commit and tag."""
+    return _standalone_release_command.release_command(
+        product_version=PRODUCT_VERSION,
+        repo_root=REPO_ROOT if repo_root is None else repo_root,
+        bump=bump,
+        explicit_version=explicit_version,
+        runner=runner,
+    )
+
+
 def build_command() -> int:
     payload, archive = build_payload(REPO_ROOT / "dist", create_archive=True)
     assert archive is not None
@@ -578,11 +613,58 @@ def install_command() -> int:
     return 0
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("build", "install"))
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("build", help="build the standalone archive")
+    subparsers.add_parser("install", help="build or install the standalone payload")
+    release = subparsers.add_parser(
+        "release",
+        help="commit, tag, and push a guarded release",
+        description=(
+            "Verify a clean synchronized main checkout, bump the standalone version, "
+            "commit it, and atomically push main plus its annotated release tag."
+        ),
+    )
+    versions = release.add_mutually_exclusive_group()
+    versions.add_argument(
+        "--version",
+        type=_argparse_stable_version,
+        help="use an explicit increasing stable X.Y.Z version",
+    )
+    versions.add_argument(
+        "--patch", action="store_const", const="patch", dest="bump", help="increment patch"
+    )
+    versions.add_argument(
+        "--minor",
+        action="store_const",
+        const="minor",
+        dest="bump",
+        help="increment minor and reset patch (default)",
+    )
+    versions.add_argument(
+        "--major",
+        action="store_const",
+        const="major",
+        dest="bump",
+        help="increment major and reset minor and patch",
+    )
+    release.set_defaults(bump="minor", version=None)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _argument_parser()
     args = parser.parse_args(argv)
-    return build_command() if args.command == "build" else install_command()
+    if args.command == "build":
+        return build_command()
+    if args.command == "install":
+        return install_command()
+    try:
+        return release_command(bump=args.bump, explicit_version=args.version)
+    except ReleaseError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

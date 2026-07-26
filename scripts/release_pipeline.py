@@ -34,6 +34,7 @@ REQUIRED_MEMBERS = (
     "RELEASE.json",
     "install.py",
     "scripts/standalone_release.py",
+    "scripts/_standalone_release_command.py",
     "bin/sky-cua-client",
     "bin/sky-cua-service",
     "bin/sky-cua-overlay-host",

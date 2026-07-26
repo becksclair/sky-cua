@@ -238,6 +238,8 @@ python3 scripts/deploy_plugin.py          # compatibility-only local dev deploy
 python3 install.py build                  # standalone tree + archive
 # From the checkout or extracted standalone artifact:
 python3 install.py install
+# From a clean, synchronized main checkout (defaults to a minor bump):
+python3 install.py release
 ```
 
 `deploy_plugin.py` is the fast local lane: it installs the built bundle into
@@ -253,7 +255,11 @@ the local payload and vice versa.
 
 `python3 install.py build` emits one complete standalone payload and
 `dist/sky-cua-linux-x64-glibc.tar.gz`. `python3 install.py install` replaces
-the fixed install root and is idempotent when repeated. See
+the fixed install root and is idempotent when repeated. `release` accepts
+`--patch`, `--minor`, `--major`, or an explicit stable `--version X.Y.Z`; it
+runs `just verify`, commits only the standalone version, creates an annotated
+`standalone-vX.Y.Z` tag, and atomically pushes `main` plus the tag to trigger
+Gitea publication and automatic Saga deployment. See
 [`docs/features/release-package.md`](docs/features/release-package.md).
 
 If the local Codex config gets stale, the durable reset procedure is documented

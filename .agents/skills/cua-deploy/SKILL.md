@@ -10,7 +10,7 @@ description: >-
 
 # cua-deploy
 
-Use the smallest requested operational lane. The supported distribution has one
+Use the smallest requested operational lane. The deployment surface has one
 mutable install tree and two canonical commands:
 
 ```bash
@@ -22,6 +22,10 @@ python3 install.py install
 `dist/sky-cua-linux-x64-glibc.tar.gz`. `install` from a checkout builds or
 refreshes those outputs and then installs them. The same `install.py` inside an
 extracted archive installs that artifact without a checkout build.
+
+`python3 install.py release` is a separate checkout-only Git publication
+operation, not a deploy lane. It requires explicit release wording and triggers
+the Gitea-to-Saga pipeline after pushing its commit and tag.
 
 ## Hard boundaries
 

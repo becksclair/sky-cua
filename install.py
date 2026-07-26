@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build or install the standalone fixed-root sky-cua distribution."""
+"""Build, install, or release the standalone fixed-root sky-cua distribution."""
 
 from __future__ import annotations
 

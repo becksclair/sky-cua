@@ -49,6 +49,20 @@ ${XDG_DATA_HOME:-~/.local/share}/sky-cua
 
 There are no install-root, generation, rollback, or hash arguments.
 
+Initiate a release from a clean, synchronized `main` checkout:
+
+```bash
+python3 install.py release                 # next minor, patch reset to zero
+python3 install.py release --patch         # next patch
+python3 install.py release --minor         # next minor, patch reset to zero
+python3 install.py release --major         # next major, minor and patch reset
+python3 install.py release --version 2.3.4 # explicit increasing stable version
+```
+
+The selectors are mutually exclusive and `--version` accepts only canonical
+stable `X.Y.Z` values. Release updates only the standalone `PRODUCT_VERSION`;
+crate, Python, plugin, and Node package versions remain independent.
+
 ## Behavior
 
 The builder refreshes the durable CUA Node component and core plugin, flattens
@@ -67,24 +81,41 @@ removes files that existed only in the previous installed payload.
 The artifact's `RELEASE.json` describes semantic paths and target identity. It
 does not expose per-component trust hashes or select an installed generation.
 
+Release requires a clean `main` worktree whose configured remote `main` is
+identical to local `HEAD`, requires exactly one push destination, and rejects
+existing local or remote target tags. It
+rewrites only `PRODUCT_VERSION`, runs `just verify`, commits only that file,
+creates an annotated `standalone-vX.Y.Z` tag, and atomically pushes the branch
+and tag without force. Successful local completion means the refs were pushed;
+Gitea publication and Saga deployment remain asynchronous. Failures preserve
+the visible local modification, commit, or tag for inspection and never reset,
+clean, delete, or force-push state.
+
 ## Source paths
 
-- `install.py` — two-command public entrypoint.
+- `install.py` — build, install, and checkout-only release entrypoint.
 - `scripts/standalone_release.py` — durable build, payload assembly, archive,
-  fixed-root install, and consumer projection.
+  fixed-root install, consumer projection, and release CLI dispatch.
+- `scripts/_standalone_release_command.py` — guarded version and Git release
+  transaction.
 - `scripts/assemble_cua_node.py` — durable CUA Node component assembly.
 - `scripts/build_plugin.py` — durable core plugin staging.
 - `scripts/test_standalone_release.py` — payload and install convergence tests.
+- `scripts/test_standalone_release_command.py` — focused release-command tests.
 
 ## Verification
 
 Focused producer validation:
 
 ```bash
-uv run pytest scripts/test_standalone_release.py
+uv run pytest scripts/test_standalone_release.py scripts/test_standalone_release_command.py
 python3 install.py build
 tar tzf dist/sky-cua-linux-x64-glibc.tar.gz
 ```
+
+Release tests use isolated temporary repositories and bare remotes. Producer
+verification must not invoke `python3 install.py release` against the real
+checkout because that command intentionally commits, tags, and pushes.
 
 Install validation must use an isolated `HOME`/`XDG_DATA_HOME`; it must not
 overwrite the live user's install during producer tests. Verify first install,

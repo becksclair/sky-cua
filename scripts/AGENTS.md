@@ -16,7 +16,8 @@ pytest.
 - Build/deploy/distribution entrypoints: `build_plugin.py`,
   `install_plugin.py`, `install_mcp_server.py`, `deploy_plugin.py` (fast local
   dev deploy as `sky-cua@local`), `standalone_release.py` through root
-  `install.py` (`build` and `install` only), and `install_kwin_effect.py`.
+  `install.py` (`build`, `install`, and guarded checkout-only `release`), and
+  `install_kwin_effect.py`.
 - Live operator smokes are `live_*_smoke.py` and must fail honestly when app
   state is blocked. JSON schemas for final agent messages:
   `scripts/schemas/*.json`.

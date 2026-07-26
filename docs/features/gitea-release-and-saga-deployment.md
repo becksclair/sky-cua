@@ -20,6 +20,12 @@ Release tags have the form:
 standalone-v<VERSION>
 ```
 
+The normal producer entrypoint is `python3 install.py release`, optionally with
+`--patch`, `--minor`, `--major`, or `--version X.Y.Z`. It creates an annotated
+tag and atomically pushes that tag with its single-file standalone version
+commit. Local success reports pushed refs only; workflow completion owns the
+published and deployed result.
+
 Each Gitea Release exposes exactly:
 
 ```text
@@ -54,6 +60,11 @@ its paths and links, and installs it under a disposable home. It then creates
 or reuses the release without overwriting different bytes, downloads both
 attachments, verifies the archive digest, and dispatches Saga deployment.
 
+Before that handoff, the local release command requires a clean synchronized
+`main`, rejects reused tags and non-increasing or unstable versions, runs
+`just verify`, and pushes without force. The atomic branch/tag push prevents a
+remote tag from being created without its release commit.
+
 Saga downloads, hashes, validates, and extracts the archive before stopping
 services. It stops `openclaw-gateway.service` before `brave-origin.service`,
 runs the extracted fixed-root installer as `ubuntu`, starts Brave and waits for
@@ -71,6 +82,8 @@ rollback controller.
 ## Source paths
 
 - `.gitea/workflows/verify.yml` — main and pull-request verification.
+- `scripts/_standalone_release_command.py` — guarded version selection, commit,
+  annotated tag, and atomic push.
 - `.gitea/workflows/release-standalone.yml` — tag/manual release publication.
 - `.gitea/workflows/deploy-saga.yml` — published-identity deployment dispatch.
 - `scripts/release_pipeline.py` — archive safety, isolated install, immutable

@@ -45,6 +45,7 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
         "scripts/_codex_app_server.py",
         "scripts/_hermes_config.py",
         "scripts/_opencode_config.py",
+        "scripts/_standalone_release_command.py",
         "install.py",
     ):
         _write(root / relative, "{}\n" if relative.endswith(".json") else "fixture\n")
@@ -179,6 +180,7 @@ def test_build_owns_generated_inputs_and_emits_one_fixed_archive(
         "build_plugin.py",
     ]
     assert (payload / "browser/browser-client.mjs").is_file()
+    assert (payload / "scripts/_standalone_release_command.py").is_file()
     assert (payload / "docs/inventories/routing-inventory.json").is_file()
     assert not (payload / "resources/release").exists()
     assert not (payload / "resources/model-documentation").exists()
@@ -356,6 +358,7 @@ def test_extracted_payload_install_imports_hermes_adapter(
         "scripts/_codex_app_server.py",
         "scripts/_hermes_config.py",
         "scripts/_opencode_config.py",
+        "scripts/_standalone_release_command.py",
     ):
         source = real_root / relative
         destination = repo / relative
@@ -383,6 +386,18 @@ def test_extracted_payload_install_imports_hermes_adapter(
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
     assert report["hermes_config"]["status"] == "no_global_config"
+
+    release_result = subprocess.run(
+        [sys.executable, "install.py", "release"],
+        cwd=payload,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert release_result.returncode == 1
+    assert release_result.stderr.strip() == "error: release requires a source checkout"
 
 
 def test_payload_rejects_legacy_browser_use_plugin_alias(
