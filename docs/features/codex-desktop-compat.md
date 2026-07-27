@@ -80,6 +80,10 @@ Build-time (`scripts/build_plugin.py`):
   `SKY_CUA_OPENAI_BUNDLED_RESOURCE_ROOT`, or the sibling
   `codex-desktop-linux` resource path.
 - Removes macOS sidecars from copied bundles.
+- Builds the self-contained canonical sky-cua Browser client and projects the
+  same bytes into both bundled plugin entrypoints. Upstream `scripts/node_modules`
+  trees are removed, so Chrome initialization cannot depend on unshipped native
+  addons such as `classic-level`.
 - Ensures marketplace entries for `chrome`, `browser-use`, and
   `computer-use` (the last as a disabled compatibility entry).
 - Embeds `sky-cua-chrome-host` under
@@ -157,7 +161,11 @@ uv run ruff check resources/chrome_preflight.py scripts/test_plugin_bundle.py
 uv run basedpyright resources/chrome_preflight.py scripts/test_plugin_bundle.py
 uv run pytest scripts/test_plugin_bundle.py -k 'browser_preflight or update_codex_config'
 cargo nextest run -p sky-cua-chrome-host
+cd packages/browser-use && bun test test/build.test.ts
 ```
+
+The Browser build regression imports and initializes the canonical projection
+with Linux Node 24 ABI 137 without requiring a live Chrome session.
 
 Live host smoke:
 

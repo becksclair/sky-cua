@@ -153,7 +153,8 @@ Open boxes link to the active ExecPlan that owns the work.
       implementation)
   - [x] sky-cua side: stable wrapper-friendly plugin assets (`.mcp.json`
         server definitions, the Browser `scripts/browser-client.mjs` adapter,
-        IAB routing skill, assets/docs)
+        IAB routing skill, assets/docs) and native-addon-free canonical client
+        projection into staged `browser-use` and `chrome` entrypoints
   - [x] sky-cua side: MCP server runs from a copied/symlinked packaged
         location, not only the dev checkout (symlink-safe `bin/` launchers,
         exe-sibling service resolution, exe-ancestor app-instructions root)

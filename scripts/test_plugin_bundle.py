@@ -53,6 +53,20 @@ def load_chrome_preflight() -> ModuleType:
     return module
 
 
+def project_browser_client_fixture(client: Path, projection_root: Path) -> None:
+    for plugin_name in ("browser-use", "chrome"):
+        destination = (
+            projection_root
+            / "openai-bundled"
+            / "plugins"
+            / plugin_name
+            / "scripts"
+            / "browser-client.mjs"
+        )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(client, destination)
+
+
 def test_codex_config_helpers_update_existing_sections() -> None:
     config = "\n".join(
         [
@@ -774,7 +788,16 @@ def test_browser_use_node_repl_is_staged_from_upstream_resources(
         (plugin / "scripts" / "browser-client.mjs").write_text("client", encoding="utf-8")
     shutil.copy2(true_binary, source_root.parents[1] / "node_repl")
 
+    canonical_client = tmp_path / "canonical-browser-client.mjs"
+    canonical_client.write_text(
+        "export async function setupBrowserRuntime() {}\n", encoding="utf-8"
+    )
+
     monkeypatch.setattr(build_plugin, "bundled_resource_root", lambda: source_root)
+    monkeypatch.setattr(build_plugin, "build_canonical_browser_client", lambda: canonical_client)
+    monkeypatch.setattr(
+        build_plugin, "project_canonical_browser_client", project_browser_client_fixture
+    )
     monkeypatch.setattr(build_plugin, "install_bundled_chrome_host", lambda _root: None)
     temp_root = tmp_path / "bundle"
 
@@ -784,6 +807,64 @@ def test_browser_use_node_repl_is_staged_from_upstream_resources(
     assert staged.exists()
     assert staged.stat().st_mode & 0o111
     assert staged.read_bytes() == Path(true_binary).read_bytes()
+    for plugin_name in ("browser-use", "chrome"):
+        staged_client = (
+            temp_root
+            / "resources"
+            / "plugins"
+            / "openai-bundled"
+            / "plugins"
+            / plugin_name
+            / "scripts"
+            / "browser-client.mjs"
+        )
+        assert staged_client.read_bytes() == canonical_client.read_bytes()
+
+
+def test_staging_drops_upstream_chrome_native_dependencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "upstream" / "resources" / "plugins" / "openai-bundled"
+    marketplace = source_root / ".agents" / "plugins" / "marketplace.json"
+    marketplace.parent.mkdir(parents=True)
+    marketplace.write_text(json.dumps({"plugins": []}), encoding="utf-8")
+    for plugin_name in ("browser-use", "chrome"):
+        plugin = source_root / "plugins" / plugin_name
+        (plugin / "scripts" / "node_modules" / "classic-level").mkdir(parents=True)
+        (plugin / "scripts" / "browser-client.mjs").write_text(
+            'import "classic-level";\n', encoding="utf-8"
+        )
+        (plugin / "scripts" / "node_modules" / "classic-level" / "package.json").write_text(
+            json.dumps({"name": "classic-level", "version": "3.0.0"}), encoding="utf-8"
+        )
+
+    canonical_client = tmp_path / "canonical-browser-client.mjs"
+    canonical_client.write_text(
+        "export async function setupBrowserRuntime() {}\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(build_plugin, "bundled_resource_root", lambda: source_root)
+    monkeypatch.setattr(build_plugin, "build_canonical_browser_client", lambda: canonical_client)
+    monkeypatch.setattr(
+        build_plugin, "project_canonical_browser_client", project_browser_client_fixture
+    )
+    monkeypatch.setattr(build_plugin, "install_bundled_chrome_host", lambda _root: None)
+
+    temp_root = tmp_path / "bundle"
+    build_plugin.stage_openai_bundled_plugins(temp_root)
+
+    for plugin_name in ("browser-use", "chrome"):
+        scripts = (
+            temp_root
+            / "resources"
+            / "plugins"
+            / "openai-bundled"
+            / "plugins"
+            / plugin_name
+            / "scripts"
+        )
+        assert (scripts / "browser-client.mjs").read_bytes() == canonical_client.read_bytes()
+        assert not (scripts / "node_modules").exists()
 
 
 def test_browser_use_node_repl_installer_rejects_incompatible_ldd(

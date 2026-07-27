@@ -45,6 +45,8 @@ BUNDLE_SOURCE_PATHS = [
 OPENAI_BUNDLED_PLUGIN_NAMES = ("browser-use", "chrome")
 OPENAI_BUNDLED_MARKETPLACE_PLUGIN_NAMES = ("browser-use", "chrome", "computer-use")
 NODE_REPL_NAME = "node_repl"
+CANONICAL_BROWSER_CLIENT = Path("packages/browser-use/build/browser-client.mjs")
+CANONICAL_BROWSER_PROJECTION = Path("packages/browser-use/build/projection.mjs")
 WORKTREE_BUNDLE_FILES = (
     Path(".claude-plugin") / "plugin.json",
     Path(".claude-plugin") / "marketplace.json",
@@ -660,6 +662,27 @@ def bundled_resource_root() -> Path:
     )
 
 
+def build_canonical_browser_client() -> Path:
+    package_root = REPO_ROOT / "packages" / "browser-use"
+    subprocess.run(["bun", "run", "build"], cwd=package_root, check=True)
+    client = REPO_ROOT / CANONICAL_BROWSER_CLIENT
+    if not client.is_file():
+        raise FileNotFoundError(f"canonical Browser client build is missing: {client}")
+    return client
+
+
+def project_canonical_browser_client(client: Path, projection_root: Path) -> None:
+    projection = REPO_ROOT / CANONICAL_BROWSER_PROJECTION
+    if not projection.is_file():
+        raise FileNotFoundError(f"canonical Browser projection build is missing: {projection}")
+    subprocess.run(
+        ["bun", str(projection), str(client), str(projection_root)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def stage_openai_bundled_plugins(temp_root: Path) -> None:
     source_root = bundled_resource_root()
     source_marketplace = source_root / ".agents" / "plugins" / "marketplace.json"
@@ -679,6 +702,8 @@ def stage_openai_bundled_plugins(temp_root: Path) -> None:
 
     plugins_destination = destination_root / "plugins"
     plugins_destination.mkdir(parents=True, exist_ok=True)
+    canonical_browser_client = build_canonical_browser_client()
+    staged_plugins: set[str] = set()
     for plugin_name in OPENAI_BUNDLED_PLUGIN_NAMES:
         source_plugin = source_root / "plugins" / plugin_name
         if not source_plugin.exists():
@@ -690,6 +715,19 @@ def stage_openai_bundled_plugins(temp_root: Path) -> None:
         destination_plugin = plugins_destination / plugin_name
         shutil.copytree(source_plugin, destination_plugin, dirs_exist_ok=True)
         remove_macos_sidecar_files(destination_plugin)
+        staged_plugins.add(plugin_name)
+
+    project_canonical_browser_client(canonical_browser_client, destination_root.parent)
+    for plugin_name in set(OPENAI_BUNDLED_PLUGIN_NAMES) - staged_plugins:
+        remove_path(plugins_destination / plugin_name)
+    for plugin_name in OPENAI_BUNDLED_PLUGIN_NAMES:
+        scripts_root = plugins_destination / plugin_name / "scripts"
+        if not scripts_root.is_dir():
+            continue
+        # The canonical client is self-contained. Do not retain upstream native
+        # dependencies such as classic-level: incomplete prebuild trees fail at
+        # module initialization before the Chrome transport can be selected.
+        remove_path(scripts_root / "node_modules")
 
     source_node_repl = source_root.parents[1] / NODE_REPL_NAME
     destination_node_repl = temp_root / "resources" / NODE_REPL_NAME

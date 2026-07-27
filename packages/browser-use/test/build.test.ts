@@ -71,3 +71,32 @@ test("the canonical fixed-path Browser module connects without a caller hash", a
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("Node 24 ABI 137 initializes the canonical Chrome projection without native addons", async () => {
+  const root = await mkdtemp(join(tmpdir(), "heliasar-browser-node24-"));
+  try {
+    await buildAt(join(root, "build"));
+    const clientPath = join(root, "build", "browser-client.mjs");
+    const script = [
+      'import { pathToFileURL } from "node:url";',
+      `const client = await import(pathToFileURL(${JSON.stringify(clientPath)}).href);`,
+      "const globals = {};",
+      "await client.setupBrowserRuntime({ globals });",
+      'if (typeof globals.agent?.browsers?.list !== "function") throw new Error("Browser runtime was not initialized");',
+      'process.stdout.write(`${process.versions.node} ${process.versions.modules}`);',
+    ].join("\n");
+    const process = Bun.spawn(["node", "--input-type=module", "--eval", script], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      process.exited,
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text(),
+    ]);
+    assert.equal(exitCode, 0, stderr);
+    assert.match(stdout, /^24\.\d+\.\d+ 137$/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
