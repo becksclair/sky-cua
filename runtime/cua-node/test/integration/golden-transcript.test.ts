@@ -30,13 +30,15 @@ test("built host reproduces the golden initialize, tools, and js transcript", as
     await mkdir(join(directory, "bin"));
     await symlink(TEST_NODE_PATH, isolatedExactNodePath);
     const hostExecutable = isolatedExactNodePath;
+    const childEnvironment: NodeJS.ProcessEnv = {
+      ...process.env,
+      NODE_REPL_ALLOW_HOST_NODE: "1",
+      NODE_REPL_NODE_PATH: isolatedExactNodePath,
+    };
+    delete childEnvironment.SKY_CUA_MCP_CALLER_PROVENANCE;
     const child = spawn(hostExecutable, [join(directory, "node-repl.js")], {
       cwd: directory,
-      env: {
-        ...process.env,
-        NODE_REPL_ALLOW_HOST_NODE: "1",
-        NODE_REPL_NODE_PATH: isolatedExactNodePath,
-      },
+      env: childEnvironment,
       stdio: ["pipe", "pipe", "pipe"],
     });
     const reader = createInterface({ input: child.stdout, crlfDelay: Infinity });
