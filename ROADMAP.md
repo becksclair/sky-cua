@@ -200,6 +200,9 @@ Open boxes link to the active ExecPlan that owns the work.
 - [ ] Extend the standalone builder beyond Linux x86-64 glibc by feeding native
       per-platform runtime artifacts into the same flat payload contract; do
       not reintroduce generation stores or platform-specific public installers.
+  - [ ] Deferred with the arm64 release lane: add a pinned, checksum-verified
+        arm64 Node/QEMU `classic-level` database round-trip. This is not part of
+        current x64 Chrome connector acceptance.
 - [ ] Detached launch breadth across more desktop/session launchers
 
 ## Phase: Android phone control (phone-use)
