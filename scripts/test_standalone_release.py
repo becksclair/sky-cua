@@ -117,6 +117,8 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
     core = root / "core"
     for name in ("sky-cua-client", "sky-cua-service", "sky-cua-overlay-host"):
         _write(core / f"bin/{name}", executable=True)
+    for name in ("sky-cua-cosmic-helper", "sky-cua-input-helper"):
+        _write(core / f"bin/runtimes/linux-x64/{name}", executable=True)
     _write(core / "bin/runtimes/linux-x64/sky-cua-chrome-host", executable=True)
     _write(core / "resources/chrome-extension/codex/1_0/manifest.json", "{}\n")
 
@@ -275,6 +277,10 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
     assert not (install_root / "releases").exists()
     assert host_node.read_text(encoding="utf-8") == "#!/bin/sh\nprintf 'host node\\n'\n"
     assert (home / ".local/bin/node_repl").resolve() == install_root / "bin/node_repl"
+    for name in ("sky-cua-cosmic-helper", "sky-cua-input-helper"):
+        assert (home / ".local/bin" / name).resolve() == (
+            install_root / "bin/runtimes/linux-x64" / name
+        )
     for name in standalone_release.SKILL_NAMES:
         assert (home / ".agents/skills" / name).resolve() == install_root / "skills" / name
     native_manifest = json.loads(

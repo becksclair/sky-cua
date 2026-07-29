@@ -33,6 +33,8 @@ LAUNCHER_NAMES = (
     "sky-cua-client",
     "sky-cua-service",
     "sky-cua-overlay-host",
+    "sky-cua-cosmic-helper",
+    "sky-cua-input-helper",
     "node_repl",
     "sky-cua-chrome-host",
 )
@@ -166,6 +168,8 @@ def validate_payload(payload_root: Path) -> None:
         "bin/sky-cua-client",
         "bin/sky-cua-service",
         "bin/sky-cua-overlay-host",
+        "bin/runtimes/linux-x64/sky-cua-cosmic-helper",
+        "bin/runtimes/linux-x64/sky-cua-input-helper",
         "bin/node",
         "bin/node_repl",
         "browser/browser-client.mjs",
@@ -367,6 +371,8 @@ def _install_launchers(install_root: Path, home: Path) -> tuple[Path, ...]:
         "sky-cua-client": install_root / "bin/sky-cua-client",
         "sky-cua-service": install_root / "bin/sky-cua-service",
         "sky-cua-overlay-host": install_root / "bin/sky-cua-overlay-host",
+        "sky-cua-cosmic-helper": install_root / "bin/runtimes/linux-x64/sky-cua-cosmic-helper",
+        "sky-cua-input-helper": install_root / "bin/runtimes/linux-x64/sky-cua-input-helper",
         "node_repl": install_root / "bin/node_repl",
         "sky-cua-chrome-host": install_root / "browser/native-host/sky-cua-chrome-host",
     }
