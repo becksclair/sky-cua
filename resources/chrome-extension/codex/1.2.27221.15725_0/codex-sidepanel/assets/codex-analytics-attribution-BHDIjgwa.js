@@ -1,0 +1,1 @@
+import{Tt as e}from"./button-NT8jlGNO.js";import{Li as t,q as n}from"./app-server-manager-signals-B7LUkeum.js";var r=e(t,({get:e,scope:t})=>{if(t.value.routeKind!==`local-thread`)return null;let r=e(n,t.value.conversationId);return r?.turnId==null?null:{threadId:t.value.conversationId,turnId:r.turnId}});export{r as t};

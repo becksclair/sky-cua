@@ -1,0 +1,1 @@
+import{an as e}from"./button-NT8jlGNO.js";import{t}from"./persisted-atom-D838HzfA.js";var n=t(`skip-full-access-confirm`,!1),r=t(`prompt-history`,[]),i=e(null);export{r as n,n as r,i as t};

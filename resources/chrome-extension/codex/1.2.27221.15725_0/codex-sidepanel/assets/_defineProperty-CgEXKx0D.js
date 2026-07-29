@@ -1,0 +1,1 @@
+import{t as e}from"./chunk-CFjPhJqf.js";import{Sa as t}from"./spinner-Do7-KqTg.js";var n=e(((e,n)=>{var r=t();n.exports=function(){try{var e=r(Object,`defineProperty`);return e({},``,{}),e}catch{}}()}));export{n as t};

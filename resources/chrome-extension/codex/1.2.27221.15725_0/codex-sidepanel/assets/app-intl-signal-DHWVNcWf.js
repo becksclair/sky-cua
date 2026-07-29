@@ -1,0 +1,1 @@
+import{c as e}from"./lib-CGpsYybA.js";import{Mt as t,gt as n}from"./button-NT8jlGNO.js";var r=t(n,e({locale:`en`,messages:{}}));export{r as t};

@@ -1,0 +1,3 @@
+import{Bn as e}from"./app-server-manager-signals-B7LUkeum.js";var t=RegExp(`^ {0,3}:::${e}(?:\\{.*)?\\s*$`),n=/^ {0,3}:::\s*$/;function r(e){if(!e.includes(`:::writing`))return e;let r=[],a=!1,o=null;for(let s of e.split(`
+`)){let e=o!=null;if(o=i(o,s),e||o!=null){r.push(s);continue}if(t.test(s)){a=!0;continue}if(a&&n.test(s)){a=!1;continue}r.push(s)}return r.join(`
+`)}function i(e,t){let n=t.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);if(n==null)return e;let r=n[1]??``,i=r.startsWith("`")?"`":`~`;return e==null?i==="`"&&(n[2]??``).includes("`")?null:{length:r.length,marker:i}:i===e.marker&&r.length>=e.length&&(n[2]??``).trim().length===0?null:e}export{r as t};

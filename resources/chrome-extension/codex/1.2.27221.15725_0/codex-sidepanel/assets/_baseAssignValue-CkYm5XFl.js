@@ -1,0 +1,1 @@
+import{t as e}from"./chunk-CFjPhJqf.js";import{t}from"./_defineProperty-CgEXKx0D.js";var n=e(((e,n)=>{var r=t();function i(e,t,n){t==`__proto__`&&r?r(e,t,{configurable:!0,enumerable:!0,value:n,writable:!0}):e[t]=n}n.exports=i}));export{n as t};
