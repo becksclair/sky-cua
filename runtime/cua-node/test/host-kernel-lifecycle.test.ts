@@ -431,6 +431,44 @@ test("production nodeRepl elicitation round-trips through the MCP client", async
   }
 });
 
+test("production nodeRepl preserves MCP client rejection details", async () => {
+  const output = new PassThrough();
+  let written = "";
+  output.on("data", (chunk) => { written += chunk.toString(); });
+  const server = new McpServer({ output });
+  try {
+    await server.dispatch({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: { elicitation: { form: {} } },
+      },
+    });
+    const request = server.requestClient("elicitation/create", {
+      message: "Choose",
+    });
+    await waitFor(() => written.includes('"method":"elicitation/create"'));
+    const outbound = written
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((message) => message.method === "elicitation/create");
+    await server.handleLine(JSON.stringify({
+      jsonrpc: "2.0",
+      id: outbound?.id,
+      error: { code: -32602, message: "requestedSchema is required" },
+    }));
+    await assert.rejects(
+      request,
+      /MCP client request failed \(-32602\): requestedSchema is required/u,
+    );
+  } finally {
+    await server.close();
+  }
+});
+
 test("client disconnect rejects production elicitation and lets the server stop", async () => {
   const input = new PassThrough();
   const output = new PassThrough();

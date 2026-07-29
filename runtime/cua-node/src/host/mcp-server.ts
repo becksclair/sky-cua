@@ -354,8 +354,19 @@ export class McpServer {
     this.clientRequests.delete(id);
     if (pending.signal !== undefined && pending.onAbort !== undefined)
       pending.signal.removeEventListener("abort", pending.onAbort);
-    if ("error" in response) pending.reject(new Error("client request failed"));
-    else pending.resolve(response.result);
+    if ("error" in response) {
+      const error = response.error;
+      const code = isObject(error) && typeof error.code === "number" ? error.code : null;
+      const message =
+        isObject(error) && typeof error.message === "string"
+          ? error.message
+          : "unknown MCP client error";
+      pending.reject(
+        new Error(
+          `MCP client request failed${code === null ? "" : ` (${code})`}: ${message}`,
+        ),
+      );
+    } else pending.resolve(response.result);
   }
 }
 
