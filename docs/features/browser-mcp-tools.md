@@ -256,9 +256,10 @@ Install outputs:
   copyable MCP snippet. If `~/.pi/agent` exists, it also merges the `sky_cua`
   entry into `~/.pi/agent/mcp.json` and copies sky-cua skills into
   `~/.pi/agent/skills` without replacing unrelated Pi MCP servers.
-- `scripts/install_mcp_server.py --host openclaw` writes `openclaw_mcp.json`
-  and registers the `sky_cua` stdio server through `openclaw mcp set` (the
-  workspace-skills copy was retired 2026-07-03).
+- `python3 install.py install` supplies OpenClaw through native Codex
+  compatibility plugins, registers global `node_repl`, and enables no-prompt
+  full-auto Codex policy. The former `openclaw_mcp.json` / standalone
+  `sky_cua` MCP registration was retired.
 - `scripts/install_mcp_server.py --host claude-code` writes
   `claude_code_mcp.json`, registers the `sky-cua` stdio server (Claude Code
   reserves the name `computer-use`) through

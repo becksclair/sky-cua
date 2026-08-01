@@ -4,7 +4,7 @@
 
 Shipped for the Linux x86-64 glibc producer. The fixed-root standalone
 distribution contract replaced the former generation-selected release model on
-2026-07-22; consumer-repository convergence is tracked separately.
+2026-07-22; the OpenClaw no-prompt projection was verified on 2026-08-01.
 
 ## Summary
 
@@ -90,8 +90,11 @@ convergence in isolated homes. The proof must establish:
   convenience loaders preserve ordinary-import namespace identity from the
   installed fixed-root runtime.
 
-Codex Desktop and OpenClaw perform their own repository-owned acceptance against
-the producer artifact. Those changes are not made from the sky-cua repository.
+Codex Desktop and OpenClaw perform their own repository-owned live acceptance
+against the producer artifact. The producer installer does own the narrow
+OpenClaw integration projection required for zero-prompt operation: global
+`node_repl`, native Codex app-server full-auto policy, and matching policy in
+existing agent Codex homes.
 
 ## Known limitations
 

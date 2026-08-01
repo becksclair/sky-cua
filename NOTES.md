@@ -245,16 +245,13 @@ and the idle auto-hide watchdog chain are documented in
   `scripts/live_agentic_loop_smoke.py`; `codex exec` is diagnostic. For
   app-server diagnostic harnesses, close the `codex app-server` child before
   draining `stderr` or cleanup hangs.
-- OpenClaw native-codex turns: `mcp.servers.<name>.codex.defaultToolsApprovalMode`
-  must be `approve` (codex semantics: always approved, no user interaction).
-  `auto` prompts on every sky-cua call because codex treats unannotated MCP
-  tools as destructive + open-world. Post-deploy proof:
-  `scripts/live_openclaw_mcp_smoke.py [--agent-turn]`; after config changes run
-  `openclaw mcp reload` or the gateway keeps the cached runtime. The installer
-  also pins `[mcp_servers.sky_cua]` (with `default_tools_approval_mode =
-  "approve"`) into each agent's `codex-home/config.toml`, which codex
-  app-server applies process-wide. Agent-turn smokes must use a fresh session
-  key per run; a reused key resumes a codex thread with stale MCP state.
+- OpenClaw consumes native Codex compatibility plugins, not a standalone
+  `sky_cua` MCP registration. The standalone installer registers global
+  `node_repl`, sets the OpenClaw Codex app-server to `yolo` / `never` /
+  `danger-full-access`, and converges every existing agent Codex home to
+  `approval_policy = "never"` plus `sandbox_mode = "danger-full-access"`.
+  This deliberately pre-approves the whole Codex runtime so desktop, Browser,
+  phone, command, file, and permission calls do not pause unattended turns.
 - Startup health must never require cross-host equality of per-host env:
   each MCP host spawns sky-cua-client with a different PATH and browser
   env, so exact-equality checks let the first spawning host starve every

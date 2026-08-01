@@ -151,7 +151,6 @@ python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host claude-code
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host claude-desktop
-python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host openclaw
 ```
 
 The generated generic config keeps the MCP server name `computer-use`, uses
@@ -164,7 +163,6 @@ building and copying fresh binaries:
 ```bash
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode --bin-dir ~/.local/bin --restart-runtime
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host pi --bin-dir ~/.local/bin --restart-runtime
-python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host openclaw --bin-dir ~/.local/bin --restart-runtime
 ```
 
 `--restart-runtime` attempts to refresh the user AT-SPI accessibility bus on Linux
@@ -176,47 +174,21 @@ surprise. OpenCode and Pi usually respawn the lazy MCP process on the next tool
 call; if they do not, reload the host session. For Pi, run `/reload` or restart
 Pi.
 
-`--host openclaw` registers `sky_cua` through `openclaw mcp set`, targeting
-`~/.openclaw/openclaw.json` by default, and runs `openclaw mcp reload` so a
-live gateway drops its cached MCP runtime. The workspace-skills copy into
-`~/.openclaw/workspace/skills` was retired 2026-07-03. Use `--openclaw-dir`
-only for profile/test state directories.
+OpenClaw is not a `scripts/install_mcp_server.py` host. The standalone
+`python3 install.py install` path installs the native Computer Use and Browser
+Codex plugins, registers global `node_repl`, and projects the shared skills.
+It also sets OpenClaw's native Codex app-server to `mode: yolo`,
+`approvalPolicy: never`, and `sandbox: danger-full-access`, then converges all
+existing agent Codex homes to `approval_policy = "never"` and
+`sandbox_mode = "danger-full-access"`. This deliberately covers the whole
+Codex runtime so desktop input, Browser input, phone actions, commands, file
+changes, and permission requests do not prompt. The global OpenClaw policy
+covers agents created after installation; per-agent files make existing
+runtimes converge immediately.
 
-OpenClaw's native codex runtime projects `mcp.servers.sky_cua` into
-Codex-native `mcp_servers` thread config on `thread/start`/`thread/resume`.
-The `codex.defaultToolsApprovalMode` field controls Codex's per-tool approval
-(`auto` | `prompt` | `approve`). The installer pins `approve`, which codex
-treats as "always approved without user interaction". `auto` is not enough for
-unattended OpenClaw turns: sky-cua tools are annotated, but real workflows still
-need destructive or open-world calls such as browser input, desktop input, and
-phone actions, so Codex would prompt and OpenClaw would relay that prompt to
-chat. `openclaw mcp probe` passing does not cover this case; only an agent-turn
-check does.
-
-The installer additionally pins a marker-managed `[mcp_servers.sky_cua]`
-block (including `default_tools_approval_mode = "approve"` and the sky-cua
-environment) into every agent's `codex-home/config.toml` under the OpenClaw
-state directory. The codex app-server reads that file at process level, so
-the server reaches every codex thread even when the per-thread projection
-path is unavailable, and tool calls stay auto-approved at both layers.
-Re-running the installer replaces the managed block in place. The smoke's
-agent turn uses a fresh session key per run because OpenClaw resumes one
-codex thread per session key, and a resumed thread keeps the MCP state it
-had when it was created.
-
-Verify an OpenClaw deployment with the dedicated smoke:
-
-```bash
-python3 scripts/live_openclaw_mcp_smoke.py               # config + probe
-python3 scripts/live_openclaw_mcp_smoke.py --agent-turn  # plus one live turn
-```
-
-Stage 1 checks the registered config (binary path, `enabled`, approval mode);
-stage 2 has OpenClaw spawn the server and asserts the required grouped
-desktop/browser tools are listed; the optional agent turn asks the model to
-call `status` with `component="browser"` and return structured evidence that
-the tools were visible and executable. `scripts/live_agent_mcp_smoke.py
---agent openclaw` drives the desktop-fixture flow through OpenClaw as well.
+Verify deployment with a fresh OpenClaw native-Codex turn that exercises both
+Computer Use and `node_repl`. A resumed thread can retain pre-install runtime
+state, so it is not sufficient acceptance evidence.
 
 ## Machine configuration
 

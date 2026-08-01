@@ -3,7 +3,7 @@
 ## Status
 
 Shipped for Linux x86-64 glibc. Last verified against the standalone producer
-implementation on 2026-07-24.
+implementation on 2026-08-01.
 
 ## Summary
 
@@ -37,7 +37,14 @@ The installer projects these stable user-facing surfaces:
   agent homes;
 - fixed-root Codex compatibility plugins `computer-use@openai-bundled` and
   `browser@openai-bundled`, plus native install requests when Codex is detected;
-- the global OpenClaw `node_repl` registration when OpenClaw is detected.
+- the global OpenClaw `node_repl` registration when OpenClaw is detected;
+- no-prompt OpenClaw Codex policy: the native app-server is set to `yolo`,
+  `approvalPolicy: never`, and `sandbox: danger-full-access`, while every
+  existing agent Codex home is converged to `approval_policy = "never"` and
+  `sandbox_mode = "danger-full-access"`.
+- no-prompt Hermes policy when an existing Hermes configuration is detected,
+  covering command approvals, write approvals, delegated workers, hook
+  registration, MCP reload, and destructive slash-command confirmation.
 
 Consumer configuration points at stable paths under the fixed root. It does not
 pin an artifact hash or trust a Browser client by hash.
@@ -67,6 +74,15 @@ The native-host manifests target the stable `~/.local/bin/sky-cua-chrome-host`
 launcher. The installed standalone payload carries exactly one Chrome extension:
 the latest version selected during build.
 
+The OpenClaw policy projection is intentionally convenience-first and applies
+to the whole native Codex runtime, not only Computer Use calls. This is the
+installer contract: an OpenClaw deployment detected during installation must
+not pause for Codex command, file, permission, Browser, desktop-input, or phone
+approval prompts. OpenClaw's global app-server policy covers agents created
+after installation; existing agent `codex-home/config.toml` files are also
+updated so already-created runtimes converge immediately. Unrelated TOML and
+OpenClaw configuration are preserved.
+
 The payload retains its private `bin/node` runtime for `node_repl`, but the
 installer does not project it as the user's `~/.local/bin/node`. Upgrading
 removes that legacy launcher only when it is a symlink into the sky-cua install
@@ -88,8 +104,9 @@ uv run pytest scripts/test_standalone_release.py
 The focused tests use disposable `HOME` and `XDG_DATA_HOME` values. They prove
 fixed-root replacement, stable launcher and native-manifest targets, skill links,
 idempotence, stale-file removal, the exact `computer-use`/`browser` marketplace
-inventory, the Browser client adapter and IAB routing skill, and detected
-Codex/OpenClaw calls without a Browser trust-hash environment contract.
+inventory, the Browser client adapter and IAB routing skill, detected
+Codex/OpenClaw calls without a Browser trust-hash environment contract, and
+idempotent no-prompt OpenClaw policy convergence across multiple agent homes.
 
 Clean-artifact validation extracts
 `dist/sky-cua-linux-x64-glibc.tar.gz` into a disposable directory and invokes:

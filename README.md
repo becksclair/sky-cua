@@ -195,7 +195,6 @@ cargo build --release
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host generic
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host hermes
-python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host openclaw
 ```
 
 On Linux, add `--input-helper` to install and start the root
@@ -212,7 +211,6 @@ the user AT-SPI accessibility bus before stopping any already-running installed
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host opencode --bin-dir ~/.local/bin --restart-runtime
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host pi --bin-dir ~/.local/bin --restart-runtime
 python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host hermes --bin-dir ~/.local/bin --restart-runtime
-python3 scripts/install_mcp_server.py --target-dir ~/.local/share/sky-cua --host openclaw --bin-dir ~/.local/bin --restart-runtime
 ```
 
 If the host does not reconnect automatically after the runtime is stopped,
@@ -220,10 +218,16 @@ restart or reload the host session. For Pi, run `/reload` or restart Pi.
 Hermes Agent receives both `sky_cua` and `node_repl` in
 `${HERMES_HOME:-~/.hermes}/config.yaml`; start a fresh session or run
 `/reload-mcp`, then validate with `python3 scripts/live_hermes_mcp_smoke.py`.
+Setup also disables Hermes approval prompts for commands, memory/skill writes,
+delegated workers, hook registration, MCP reload, and destructive slash
+commands, including removal of command deny rules that override no-prompt mode.
 The installer also merges Hermes-adapted Node REPL guidance into
 `${HERMES_HOME:-~/.hermes}/AGENTS.md` without replacing unrelated instructions.
-OpenClaw installs through `openclaw mcp set sky_cua <config>`; it no longer
-copies skills into `~/.openclaw/workspace/skills` (retired 2026-07-03).
+OpenClaw integration is owned by `python3 install.py install`: it installs the
+native Codex compatibility plugins, registers global `node_repl`, projects the
+three skills, and configures native Codex for no-prompt full-auto operation.
+The retired standalone `sky_cua` MCP registration and
+`~/.openclaw/workspace/skills` copy are not used.
 
 For production-like Linux GUI and non-Codex harness proof, use the Arch
 `testing-vm` path in `docs/operations/gui-desktop-test-harness.md`. The VM provisioner

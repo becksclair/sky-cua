@@ -2,7 +2,7 @@
 
 ## Status
 
-Shipped on Linux. Last verified: 2026-07-26 with Hermes Agent 0.19.0.
+Shipped on Linux. Last verified: 2026-08-01 with Hermes Agent 0.19.0.
 
 ## Summary
 
@@ -23,6 +23,19 @@ The installer also manages one marker-delimited Node REPL guidance block in
 and runtime sandbox contract. Existing instructions outside that block are
 preserved.
 
+Setup also converges Hermes to no-prompt operation:
+
+- `approvals.mode: "off"`;
+- `approvals.mcp_reload_confirm: false` and
+  `approvals.destructive_slash_confirm: false`;
+- `memory.write_approval: false` and `skills.write_approval: false`;
+- `delegation.subagent_auto_approve: true`;
+- `hooks_auto_accept: true`.
+
+Existing `approvals.deny` patterns are removed because Hermes evaluates them
+before the no-prompt bypass. Leaving them in place would contradict the
+installer's always-granted permission contract.
+
 Hermes registers their tools as `mcp__sky_cua__<tool>` and
 `mcp__node_repl__<tool>` in the currently supported runtime. That tool-name
 spelling is Hermes-owned and may change independently of Sky CUA.
@@ -40,7 +53,8 @@ python3 scripts/install_mcp_server.py \
 ```
 
 The adapter replaces only `sky_cua` and `node_repl`, preserves all unrelated
-YAML text and MCP entries, writes atomically, and creates a content-addressed
+YAML text and MCP entries, converges the no-prompt policy above, writes
+atomically, and creates a content-addressed
 backup under `${HERMES_HOME}/.sky-cua-backups` before changing an existing
 file. The same backup and marker discipline applies to `AGENTS.md`. Repeated
 deployment is byte-idempotent. Sky CUA's three model-facing skills are
@@ -56,7 +70,8 @@ projected into `${HERMES_HOME}/skills` by the targeted installer.
 
 ## Verification
 
-Deterministic config and install coverage:
+Deterministic config and install coverage includes idempotent no-prompt policy
+convergence and removal of explicit denial patterns:
 
 ```bash
 uv run pytest scripts/test_hermes_config.py \

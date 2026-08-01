@@ -3,7 +3,7 @@
 ## Status
 
 Shipped for Linux x86-64 glibc. Last verified against the fixed-root standalone
-implementation on 2026-07-22.
+implementation on 2026-08-01.
 
 ## Summary
 
@@ -127,8 +127,9 @@ manifest targets, skills, and detected consumer configuration.
 - The standalone target is currently Linux x86-64 glibc.
 - System package installation remains an operator prerequisite; this installer
   owns the sky-cua payload and user-level integration, not OS package managers.
-- Codex Desktop and OpenClaw consumer-side convergence are owned and validated
-  in their respective repositories.
+- Codex Desktop and OpenClaw live acceptance remain consumer-owned. The
+  producer installer owns stable OpenClaw integration projection, including
+  global `node_repl` and the no-prompt native Codex policy.
 
 ## Related
 

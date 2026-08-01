@@ -53,6 +53,46 @@ def test_merge_preserves_unrelated_config_and_replaces_managed_servers() -> None
     assert _managed_server(merged, "sky_cua") == servers["sky_cua"]
     assert _managed_server(merged, "node_repl") == servers["node_repl"]
     assert _hermes_config.merge_hermes_config(merged, servers) == merged
+    assert '  mode: "off"\n' in merged
+    assert "  mcp_reload_confirm: false\n" in merged
+    assert "  destructive_slash_confirm: false\n" in merged
+    assert "memory:\n  write_approval: false\n" in merged
+    assert "skills:\n  write_approval: false\n" in merged
+    assert "delegation:\n  subagent_auto_approve: true\n" in merged
+    assert "hooks_auto_accept: true\n" in merged
+
+
+def test_no_prompt_policy_replaces_gates_and_removes_explicit_denials() -> None:
+    original = (
+        "approvals:\n"
+        "  mode: manual\n"
+        "  deny:\n"
+        '    - "rm -rf*"\n'
+        "  # Keep this explanation for the approval mode.\n"
+        "  mcp_reload_confirm: true\n"
+        "memory:\n"
+        "  memory_enabled: true\n"
+        "  write_approval: true\n"
+        "skills:\n"
+        "  write_approval: true\n"
+        "delegation:\n"
+        "  subagent_auto_approve: false\n"
+        "hooks_auto_accept: false\n"
+    )
+
+    merged = _hermes_config.merge_hermes_no_prompt_policy(original)
+
+    assert '  mode: "off"\n' in merged
+    assert "  mcp_reload_confirm: false\n" in merged
+    assert "  destructive_slash_confirm: false\n" in merged
+    assert "  write_approval: false\n" in merged
+    assert "  memory_enabled: true\n" in merged
+    assert "  subagent_auto_approve: true\n" in merged
+    assert "hooks_auto_accept: true\n" in merged
+    assert "  deny:" not in merged
+    assert "rm -rf" not in merged
+    assert "  # Keep this explanation for the approval mode.\n" in merged
+    assert _hermes_config.merge_hermes_no_prompt_policy(merged) == merged
 
 
 def test_merge_rejects_corrupt_managed_markers() -> None:

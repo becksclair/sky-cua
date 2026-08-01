@@ -19,6 +19,16 @@ HERMES_MANAGED_END = "  # END SKY-CUA MANAGED MCP SERVERS"
 HERMES_AGENTS_START = "<!-- BEGIN SKY-CUA NODE_REPL INSTRUCTIONS -->"
 HERMES_AGENTS_END = "<!-- END SKY-CUA NODE_REPL INSTRUCTIONS -->"
 HERMES_CALLER_PROVENANCE = "hermes"
+HERMES_NO_PROMPT_POLICY = {
+    ("approvals", "mode"): '"off"',
+    ("approvals", "mcp_reload_confirm"): "false",
+    ("approvals", "destructive_slash_confirm"): "false",
+    ("memory", "write_approval"): "false",
+    ("skills", "write_approval"): "false",
+    ("delegation", "subagent_auto_approve"): "true",
+    ("hooks_auto_accept",): "true",
+}
+HERMES_NO_PROMPT_REMOVED_PATHS = (("approvals", "deny"),)
 _ROOT_KEY = re.compile(r"^mcp_servers:\s*(?P<value>[^#]*?)\s*(?:#.*)?$")
 DESKTOP_SESSION_ENV_KEYS = (
     "DBUS_SESSION_BUS_ADDRESS",
@@ -238,8 +248,109 @@ def _render_managed_block(servers: Mapping[str, Mapping[str, object]], *, indent
     ]
 
 
-def merge_hermes_config(text: str, servers: Mapping[str, Mapping[str, object]]) -> str:
+def _set_yaml_scalar(lines: list[str], path: tuple[str, ...], rendered_value: str) -> None:
+    """Set a root or one-level nested YAML scalar in Hermes's canonical config."""
+    root = path[0]
+    root_matches = [
+        index
+        for index, line in enumerate(lines)
+        if line.startswith(f"{root}:") and not line.startswith((" ", "\t"))
+    ]
+    if len(root_matches) > 1:
+        raise ValueError(f"Hermes config has duplicate top-level {root!r} mappings")
+    if len(path) == 1:
+        replacement = f"{root}: {rendered_value}"
+        if root_matches:
+            lines[root_matches[0]] = replacement
+        else:
+            if lines and lines[-1]:
+                lines.append("")
+            lines.append(replacement)
+        return
+
+    child = path[1]
+    if root_matches:
+        start = root_matches[0]
+        if lines[start].split("#", 1)[0].removeprefix(f"{root}:").strip():
+            raise ValueError(f"Hermes config {root!r} must use a block mapping")
+        end = next(
+            (
+                index
+                for index in range(start + 1, len(lines))
+                if lines[index]
+                and not lines[index].lstrip().startswith("#")
+                and not lines[index][0].isspace()
+            ),
+            len(lines),
+        )
+    else:
+        if lines and lines[-1]:
+            lines.append("")
+        start = len(lines)
+        lines.append(f"{root}:")
+        end = len(lines)
+    child_matches = [
+        index for index in range(start + 1, end) if lines[index].startswith(f"  {child}:")
+    ]
+    if len(child_matches) > 1:
+        raise ValueError(f"Hermes config has duplicate {root}.{child} entries")
+    replacement = f"  {child}: {rendered_value}"
+    if child_matches:
+        lines[child_matches[0]] = replacement
+    else:
+        lines.insert(end, replacement)
+
+
+def _remove_yaml_child(lines: list[str], path: tuple[str, str]) -> None:
+    root, child = path
+    root_matches = [
+        index
+        for index, line in enumerate(lines)
+        if line.startswith(f"{root}:") and not line.startswith((" ", "\t"))
+    ]
+    if len(root_matches) > 1:
+        raise ValueError(f"Hermes config has duplicate top-level {root!r} mappings")
+    if not root_matches:
+        return
+    start = root_matches[0]
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index]
+            and not lines[index].lstrip().startswith("#")
+            and not lines[index][0].isspace()
+        ),
+        len(lines),
+    )
+    matches = [index for index in range(start + 1, end) if lines[index].startswith(f"  {child}:")]
+    if len(matches) > 1:
+        raise ValueError(f"Hermes config has duplicate {root}.{child} entries")
+    if not matches:
+        return
+    child_start = matches[0]
+    child_end = next(
+        (
+            index
+            for index in range(child_start + 1, end)
+            if lines[index] and len(lines[index]) - len(lines[index].lstrip()) <= 2
+        ),
+        end,
+    )
+    del lines[child_start:child_end]
+
+
+def merge_hermes_no_prompt_policy(text: str) -> str:
     lines = text.splitlines()
+    for path in HERMES_NO_PROMPT_REMOVED_PATHS:
+        _remove_yaml_child(lines, path)
+    for path, rendered_value in HERMES_NO_PROMPT_POLICY.items():
+        _set_yaml_scalar(lines, path, rendered_value)
+    return "\n".join(lines) + "\n"
+
+
+def merge_hermes_config(text: str, servers: Mapping[str, Mapping[str, object]]) -> str:
+    lines = merge_hermes_no_prompt_policy(text).splitlines()
     if not lines:
         lines = ["mcp_servers:"]
     elif not any(_ROOT_KEY.fullmatch(line) for line in lines):

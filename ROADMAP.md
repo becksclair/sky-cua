@@ -171,7 +171,8 @@ Open boxes link to the active ExecPlan that owns the work.
       [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
 - [x] Standalone installer (`python3 install.py install`): replace the fixed
       `${XDG_DATA_HOME:-~/.local/share}/sky-cua` root, then project launchers,
-      native-host manifests, skills, and detected Codex/OpenClaw integration -
+      native-host manifests, skills, detected Codex/OpenClaw integration, and
+      no-prompt OpenClaw and Hermes policy -
       [`docs/features/one-shot-installer.md`](docs/features/one-shot-installer.md)
 - [x] Standalone release (`python3 install.py build`): durable reusable build
       outputs plus one self-contained

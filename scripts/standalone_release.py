@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -501,6 +502,91 @@ def _install_openclaw_node_repl(
     return True
 
 
+def _set_top_level_toml_string(text: str, key: str, value: str) -> str:
+    """Set one top-level TOML string while preserving unrelated formatting."""
+    lines = text.splitlines(keepends=True)
+    first_table = next(
+        (index for index, line in enumerate(lines) if line.lstrip().startswith("[")),
+        len(lines),
+    )
+    replacement = f'{key} = "{value}"\n'
+    matches = [
+        index
+        for index, line in enumerate(lines[:first_table])
+        if line.split("=", 1)[0].strip() == key and "=" in line
+    ]
+    if len(matches) > 1:
+        raise ValueError(f"OpenClaw Codex config has duplicate top-level {key!r} entries")
+    if matches:
+        lines[matches[0]] = replacement
+    else:
+        lines.insert(first_table, replacement)
+    return "".join(lines)
+
+
+def _write_text_atomically(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = path.stat().st_mode if path.exists() else 0o600
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    _remove_path(temporary)
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        temporary.chmod(mode)
+        os.replace(temporary, path)
+    finally:
+        _remove_path(temporary)
+
+
+def _configure_openclaw_no_prompt_permissions(
+    *,
+    home: Path,
+    env: Mapping[str, str],
+    openclaw: str,
+    runner: Runner,
+) -> tuple[Path, ...]:
+    """Converge OpenClaw and every existing Codex home to full-auto operation."""
+    config_paths = sorted((home / ".openclaw/agents").glob("*/agent/codex-home/config.toml"))
+    planned: list[tuple[Path, str]] = []
+    for config_path in config_paths:
+        original = config_path.read_text(encoding="utf-8")
+        updated = _set_top_level_toml_string(original, "approval_policy", "never")
+        updated = _set_top_level_toml_string(updated, "sandbox_mode", "danger-full-access")
+        tomllib.loads(updated)
+        if updated != original:
+            planned.append((config_path, updated))
+
+    batch = [
+        {
+            "path": "plugins.entries.codex.config.appServer.mode",
+            "value": "yolo",
+        },
+        {
+            "path": "plugins.entries.codex.config.appServer.approvalPolicy",
+            "value": "never",
+        },
+        {
+            "path": "plugins.entries.codex.config.appServer.sandbox",
+            "value": "danger-full-access",
+        },
+    ]
+    command_env = os.environ.copy()
+    command_env.update(env)
+    command_env["HOME"] = str(home)
+    result = runner(
+        [openclaw, "config", "set", "--batch-json", json.dumps(batch, separators=(",", ":"))],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=command_env,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"OpenClaw no-prompt permission configuration failed: {detail}")
+    for config_path, updated in planned:
+        _write_text_atomically(config_path, updated)
+    return tuple(config_paths)
+
+
 def install_payload(
     payload_root: Path,
     *,
@@ -536,6 +622,7 @@ def install_payload(
     }
     plugins: tuple[str, ...] = ()
     openclaw = False
+    openclaw_permission_configs: tuple[Path, ...] = ()
     if configure_hosts:
         hermes_config = _hermes_config.install_hermes_config(
             install_root,
@@ -549,13 +636,21 @@ def install_payload(
                 env=active_env,
             ).report()
         plugins = _install_codex_plugins(install_root, env=active_env, which=which)
-        openclaw = _install_openclaw_node_repl(
-            install_root,
-            home=install_home,
-            env=active_env,
-            which=which,
-            runner=runner,
-        )
+        openclaw_bin = which("openclaw")
+        if openclaw_bin is not None:
+            openclaw_permission_configs = _configure_openclaw_no_prompt_permissions(
+                home=install_home,
+                env=active_env,
+                openclaw=openclaw_bin,
+                runner=runner,
+            )
+            openclaw = _install_openclaw_node_repl(
+                install_root,
+                home=install_home,
+                env=active_env,
+                which=lambda name: openclaw_bin if name == "openclaw" else which(name),
+                runner=runner,
+            )
     return {
         "install_root": str(install_root),
         "launchers": [str(path) for path in launchers],
@@ -563,6 +658,7 @@ def install_payload(
         "skills": [str(path) for path in skills],
         "codex_plugins": list(plugins),
         "openclaw_node_repl": openclaw,
+        "openclaw_permission_configs": [str(path) for path in openclaw_permission_configs],
         "opencode_config": opencode_report,
         "hermes_config": hermes_report,
     }

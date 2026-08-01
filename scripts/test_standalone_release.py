@@ -457,6 +457,13 @@ def test_detected_hosts_receive_native_plugins_and_hash_free_openclaw_definition
     home = tmp_path / "home"
     (home / ".codex").mkdir(parents=True)
     (home / ".openclaw").mkdir(parents=True)
+    main_codex_config = home / ".openclaw/agents/main/agent/codex-home/config.toml"
+    _write(
+        main_codex_config,
+        'model = "gpt-5"\napproval_policy = "on-request"\n\n[plugins.example]\nenabled = true\n',
+    )
+    sky_codex_config = home / ".openclaw/agents/sky/agent/codex-home/config.toml"
+    _write(sky_codex_config, '[plugins."computer-use@openai-bundled"]\nenabled = true\n')
     env = {
         "HOME": str(home),
         "XDG_DATA_HOME": str(tmp_path / "xdg-data"),
@@ -490,7 +497,32 @@ def test_detected_hosts_receive_native_plugins_and_hash_free_openclaw_definition
     assert plugin_calls == ["computer-use", "browser"]
     assert report["codex_plugins"] == ["computer-use", "browser"]
     assert report["openclaw_node_repl"] is True
-    openclaw_command, openclaw_kwargs = openclaw_calls[0]
+    permission_command, permission_kwargs = openclaw_calls[0]
+    assert permission_command[1:4] == ["config", "set", "--batch-json"]
+    permission_batch = json.loads(permission_command[4])
+    assert permission_batch == [
+        {"path": "plugins.entries.codex.config.appServer.mode", "value": "yolo"},
+        {
+            "path": "plugins.entries.codex.config.appServer.approvalPolicy",
+            "value": "never",
+        },
+        {
+            "path": "plugins.entries.codex.config.appServer.sandbox",
+            "value": "danger-full-access",
+        },
+    ]
+    assert permission_kwargs["env"]["HOME"] == str(home)
+    for config_path in (main_codex_config, sky_codex_config):
+        config = config_path.read_text(encoding="utf-8")
+        assert config.count('approval_policy = "never"') == 1
+        assert config.count('sandbox_mode = "danger-full-access"') == 1
+    assert "[plugins.example]\nenabled = true" in main_codex_config.read_text(encoding="utf-8")
+    assert report["openclaw_permission_configs"] == [
+        str(main_codex_config),
+        str(sky_codex_config),
+    ]
+
+    openclaw_command, openclaw_kwargs = openclaw_calls[1]
     definition = json.loads(openclaw_command[-1])
     assert openclaw_command[1:4] == ["mcp", "set", "node_repl"]
     assert openclaw_kwargs["env"]["PATH"] == "/usr/bin"
@@ -500,6 +532,59 @@ def test_detected_hosts_receive_native_plugins_and_hash_free_openclaw_definition
         assert sorted(path.name for path in skill_root.iterdir()) == sorted(
             standalone_release.SKILL_NAMES
         )
+
+
+def test_openclaw_no_prompt_permissions_are_idempotent_and_preserve_agent_config(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    config_path = home / ".openclaw/agents/sky/agent/codex-home/config.toml"
+    _write(
+        config_path,
+        'model = "gpt-5"\napproval_policy = "on-request"\n\n[plugins.example]\nenabled = true\n',
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    for _ in range(2):
+        inode_before = config_path.stat().st_ino
+        assert standalone_release._configure_openclaw_no_prompt_permissions(
+            home=home,
+            env={"HOME": str(home)},
+            openclaw="/usr/bin/openclaw",
+            runner=fake_run,
+        ) == (config_path,)
+        if _ == 1:
+            assert config_path.stat().st_ino == inode_before
+
+    config = config_path.read_text(encoding="utf-8")
+    assert config.count('approval_policy = "never"') == 1
+    assert config.count('sandbox_mode = "danger-full-access"') == 1
+    assert "[plugins.example]\nenabled = true" in config
+    assert len(calls) == 2
+
+
+def test_openclaw_permission_command_failure_preserves_agent_config(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    config_path = home / ".openclaw/agents/sky/agent/codex-home/config.toml"
+    original = 'approval_policy = "on-request"\n'
+    _write(config_path, original)
+
+    def fake_run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 1, "", "invalid policy")
+
+    with pytest.raises(RuntimeError, match="invalid policy"):
+        standalone_release._configure_openclaw_no_prompt_permissions(
+            home=home,
+            env={"HOME": str(home)},
+            openclaw="/usr/bin/openclaw",
+            runner=fake_run,
+        )
+
+    assert config_path.read_text(encoding="utf-8") == original
 
 
 def _assemble_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
