@@ -568,6 +568,18 @@ def _configure_openclaw_no_prompt_permissions(
             "path": "plugins.entries.codex.config.appServer.sandbox",
             "value": "danger-full-access",
         },
+        {
+            "path": "plugins.entries.codex.config.codexPlugins.enabled",
+            "value": True,
+        },
+        {
+            "path": "plugins.entries.codex.config.codexPlugins.allow_all_plugins",
+            "value": True,
+        },
+        {
+            "path": "plugins.entries.codex.config.codexPlugins.allow_destructive_actions",
+            "value": "approve",
+        },
     ]
     command_env = os.environ.copy()
     command_env.update(env)
