@@ -28,6 +28,20 @@ def _write(path: Path, content: str = "fixture\n", *, executable: bool = False) 
         path.chmod(0o755)
 
 
+def test_bundled_codex_mcp_servers_are_preapproved() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    for plugin_name, server_name in (("computer-use", "computer-use"), ("browser", "node_repl")):
+        config = json.loads(
+            (
+                repo_root
+                / "resources/codex-compat/openai-bundled/plugins"
+                / plugin_name
+                / ".mcp.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert config["mcpServers"][server_name]["default_tools_approval_mode"] == "approve"
+
+
 def _fixture_repo(root: Path) -> tuple[Path, Path]:
     for relative in (
         "packages/browser-use/build/browser-client.mjs",

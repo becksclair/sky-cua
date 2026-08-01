@@ -1,7 +1,8 @@
 {
   "mcpServers": {
     "node_repl": {
-      "command": "node_repl"
+      "command": "node_repl",
+      "default_tools_approval_mode": "approve"
     }
   }
 }
