@@ -66,9 +66,13 @@ From a checkout, `install` runs the same durable build used by
 is already complete and no source build occurs.
 
 The installer validates the payload, removes the fixed destination, and copies
-the payload directly into its place before projecting integrations. A second
-install converges to the same tree. Replacing the payload also removes files
-that existed only in the previous install, so stale contents cannot accumulate.
+the payload directly into its place before projecting integrations. Before
+replacement it stops current-user sky-cua runtime processes executing from the
+fixed root, including the shared daemon and MCP clients; MCP hosts then respawn
+from the new binaries and the next client starts the daemon with the projected
+desktop environment. A second install converges to the same tree. Replacing the
+payload also removes files that existed only in the previous install, so stale
+contents cannot accumulate.
 
 The native-host manifests target the stable `~/.local/bin/sky-cua-chrome-host`
 launcher. The installed standalone payload carries exactly one Chrome extension:

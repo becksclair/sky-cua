@@ -17,6 +17,7 @@ from typing import Any
 
 import _hermes_config
 import _opencode_config
+import _plugin_bundle
 import _standalone_release_command
 from _standalone_release_command import (
     ReleaseError,
@@ -157,6 +158,7 @@ def assemble_payload(payload_root: Path, *, core_root: Path, cua_node_root: Path
     )
     _copy_file(REPO_ROOT / "scripts/_opencode_config.py", artifact_scripts / "_opencode_config.py")
     _copy_file(REPO_ROOT / "scripts/_hermes_config.py", artifact_scripts / "_hermes_config.py")
+    _copy_file(REPO_ROOT / "scripts/_plugin_bundle.py", artifact_scripts / "_plugin_bundle.py")
     _write_release_manifest(payload_root)
     validate_payload(payload_root)
 
@@ -199,6 +201,7 @@ def validate_payload(payload_root: Path) -> None:
         "scripts/_standalone_release_command.py",
         "scripts/_opencode_config.py",
         "scripts/_hermes_config.py",
+        "scripts/_plugin_bundle.py",
     )
     missing = [relative for relative in required if not (payload_root / relative).is_file()]
     if missing:
@@ -615,6 +618,10 @@ def install_payload(
     install_home = (home or Path(active_env.get("HOME", str(Path.home())))).expanduser().resolve()
     install_root = _data_root(active_env, install_home).absolute() / "sky-cua"
     install_root.parent.mkdir(parents=True, exist_ok=True)
+    # Retire processes executing from the fixed root before replacing it. MCP
+    # hosts respawn their stdio clients lazily, and the next client starts the
+    # shared daemon with the newly projected desktop environment.
+    _plugin_bundle.stop_unix_runtime_processes([install_root])
     _remove_path(install_root)
     shutil.copytree(payload_root, install_root, symlinks=False)
 

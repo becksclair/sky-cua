@@ -12,6 +12,8 @@
 #![cfg(unix)]
 
 use std::ffi::OsStr;
+use std::fs::{File, OpenOptions};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -24,6 +26,68 @@ pub(crate) fn socket_lock_path(socket_path: &Path) -> PathBuf {
         .unwrap_or_else(|| std::ffi::OsString::from("service.sock"));
     lock_name.push(".lock");
     socket_path.with_file_name(lock_name)
+}
+
+/// The persistent client lifecycle lease path for a daemon socket.
+pub(crate) fn lifecycle_lock_path(socket_path: &Path) -> PathBuf {
+    let mut lock_name = socket_path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_else(|| std::ffi::OsString::from("service.sock"));
+    lock_name.push(".lifecycle.lock");
+    socket_path.with_file_name(lock_name)
+}
+
+/// An endpoint-scoped, process-wide replacement/startup lease.
+///
+/// The file is deliberately persistent: unlinking a flock file can create two
+/// independently locked inodes at the same path. Closing this handle releases
+/// the lease.
+pub(crate) struct LifecycleLease {
+    _file: File,
+}
+
+impl LifecycleLease {
+    /// Try to acquire the lifecycle lease without blocking in the kernel.
+    pub(crate) fn try_acquire(socket_path: &Path) -> Result<Option<Self>> {
+        let path = lifecycle_lock_path(socket_path);
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "failed to create lifecycle lease directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("failed to open lifecycle lease {}", path.display()))?;
+        loop {
+            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if result == 0 {
+                return Ok(Some(Self { _file: file }));
+            }
+            let error = std::io::Error::last_os_error();
+            match error.raw_os_error() {
+                Some(libc::EINTR) => continue,
+                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => {
+                    return Ok(None);
+                }
+                _ => {
+                    return Err(error).with_context(|| {
+                        format!("failed to acquire lifecycle lease {}", path.display())
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Read the daemon pid recorded in the socket's singleton lock file, if present
@@ -97,6 +161,56 @@ mod tests {
             )),
             PathBuf::from("/run/user/1000/sky-cua/service-isolated-100.sock.lock")
         );
+        assert_eq!(
+            lifecycle_lock_path(Path::new("/tmp/sky-cua/service.sock")),
+            PathBuf::from("/tmp/sky-cua/service.sock.lifecycle.lock")
+        );
+    }
+
+    #[test]
+    fn lifecycle_lease_excludes_competitors_and_is_reacquired_after_drop() {
+        if let Some(socket_path) = std::env::var_os("SKY_CUA_LIFECYCLE_LEASE_HELPER_SOCKET") {
+            let acquired = LifecycleLease::try_acquire(Path::new(&socket_path))
+                .expect("helper lease attempt")
+                .is_some();
+            let expected = std::env::var_os("SKY_CUA_LIFECYCLE_LEASE_HELPER_EXPECT")
+                .is_some_and(|value| value == "acquired");
+            assert_eq!(acquired, expected);
+            return;
+        }
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "sky-cua-lifecycle-lease-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).expect("create test temp dir");
+        let socket_path = temp_dir.join("missing-parent/service.sock");
+        assert!(!socket_path.parent().expect("socket parent").exists());
+
+        let lease = LifecycleLease::try_acquire(&socket_path)
+            .expect("first lease attempt")
+            .expect("first lease should be acquired");
+        assert!(socket_path.parent().expect("socket parent").is_dir());
+        run_lifecycle_lease_helper(&socket_path, "excluded");
+        drop(lease);
+        run_lifecycle_lease_helper(&socket_path, "acquired");
+        assert!(lifecycle_lock_path(&socket_path).exists());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    fn run_lifecycle_lease_helper(socket_path: &Path, expected: &str) {
+        let status = std::process::Command::new(std::env::current_exe().expect("current test exe"))
+            .args([
+                "--exact",
+                "daemon_singleton::tests::lifecycle_lease_excludes_competitors_and_is_reacquired_after_drop",
+            ])
+            .env("SKY_CUA_LIFECYCLE_LEASE_HELPER_SOCKET", socket_path)
+            .env("SKY_CUA_LIFECYCLE_LEASE_HELPER_EXPECT", expected)
+            .status()
+            .expect("run lifecycle lease helper process");
+        assert!(status.success(), "lifecycle lease helper failed");
     }
 
     #[test]

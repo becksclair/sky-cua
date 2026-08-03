@@ -1,10 +1,10 @@
-#[cfg(unix)]
-use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(windows)]
 use std::net::TcpStream;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
+#[cfg(target_os = "linux")]
+use std::os::{fd::FromRawFd, unix::ffi::OsStrExt};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -43,9 +43,9 @@ const SERVICE_WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 const STARTUP_HEALTH_READ_TIMEOUT: Duration = Duration::from_millis(250);
 const STARTUP_HEALTH_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(150);
-const STARTUP_HEALTH_ATTEMPTS: usize = 160;
+const STARTUP_DEADLINE: Duration = Duration::from_secs(24);
 #[cfg(unix)]
-const STALE_SERVICE_TERMINATION_TIMEOUT: Duration = Duration::from_secs(3);
+const STALE_SERVICE_TERMINATION_GRACE: Duration = Duration::from_secs(3);
 #[derive(Debug, Clone)]
 pub struct ServiceClient {
     endpoint: ServiceEndpoint,
@@ -153,9 +153,8 @@ impl ServiceClient {
             }
             None => client,
         };
-        // Startup probes must fail fast; a stale or half-ready daemon should not
-        // consume the entire MCP server startup window before we even spawn a
-        // fresh service instance.
+        let deadline = Instant::now() + STARTUP_DEADLINE;
+        // Healthy compatible startup remains lock-free.
         match client.startup_health(&launch_environment) {
             Ok(_) => {
                 #[cfg(unix)]
@@ -171,14 +170,17 @@ impl ServiceClient {
                 {
                     return Err(error);
                 }
+                #[cfg(windows)]
                 if is_stale_startup_health_error(&error) {
-                    client.displace_stale_service(&error)?;
+                    return Err(anyhow!(
+                        "existing sky-cua-service is stale ({error}) and automatic daemon replacement is not implemented on Windows"
+                    ));
                 }
+                client
+                    .ensure_service_healthy(&launch_environment, deadline)
+                    .with_context(|| format!("after initial startup health failed: {error:#}"))?;
             }
         }
-
-        client.spawn_service(&launch_environment)?;
-        client.wait_for_startup_health(&launch_environment)?;
         #[cfg(unix)]
         if let Some((handle, viewer, _)) = &isolated {
             launch_isolated_viewer(handle, *viewer);
@@ -187,10 +189,26 @@ impl ServiceClient {
     }
 
     fn startup_health(&self, launch_environment: &LaunchEnvironment) -> Result<ServiceResponse> {
-        let (response, owner_pid) = self.call_with_timeouts_with_peer(
+        self.startup_health_before(
+            launch_environment,
+            Instant::now() + STARTUP_HEALTH_READ_TIMEOUT,
+        )
+    }
+
+    fn startup_health_before(
+        &self,
+        launch_environment: &LaunchEnvironment,
+        deadline: Instant,
+    ) -> Result<ServiceResponse> {
+        let remaining = remaining_before(deadline, "startup health probe")?;
+        let timeout = remaining.min(STARTUP_HEALTH_READ_TIMEOUT);
+        // Lifecycle decisions must never use a stream cached from an earlier
+        // daemon generation.
+        let (response, owner_pid) = self.call_fresh_with_timeouts_with_peer(
             &ServiceRequest::Health,
-            STARTUP_HEALTH_READ_TIMEOUT,
-            STARTUP_HEALTH_WRITE_TIMEOUT,
+            timeout,
+            remaining.min(STARTUP_HEALTH_WRITE_TIMEOUT),
+            deadline,
         )?;
         let requested_mode = resolved_browser_control_config()
             .map_err(anyhow::Error::msg)?
@@ -297,11 +315,11 @@ impl ServiceClient {
                 }
                 self.reap_exited_child()?;
                 let launch_environment = self.recovery_launch_environment();
-                self.spawn_service(&launch_environment)?;
-                self.wait_for_startup_health(&launch_environment)
-                    .with_context(|| format!("after service call failed: {first_error}"))?;
+                let first_detail = format!("{first_error:#}");
+                self.ensure_service_healthy(&launch_environment, Instant::now() + STARTUP_DEADLINE)
+                    .with_context(|| format!("after service call failed: {first_detail}"))?;
                 self.call_with_timeouts(request, SERVICE_READ_TIMEOUT, SERVICE_WRITE_TIMEOUT)
-                    .with_context(|| format!("after service call failed: {first_error}"))
+                    .with_context(|| format!("after service call failed: {first_detail}"))
             }
         }
     }
@@ -390,6 +408,24 @@ impl ServiceClient {
 
         // Attempt 2: fresh connection.
         let stream = self.endpoint.connect().map_err(CallFailure::BeforeWrite)?;
+        let (response, stream, owner_pid) =
+            self.perform_call_on_stream(stream, request, read_timeout, write_timeout)?;
+        self.store_cached_stream(stream);
+        Ok((response, owner_pid))
+    }
+
+    fn call_fresh_with_timeouts_with_peer(
+        &self,
+        request: &ServiceRequest,
+        read_timeout: Duration,
+        write_timeout: Duration,
+        deadline: Instant,
+    ) -> Result<(ServiceResponse, Option<u32>)> {
+        self.clear_cached_stream();
+        let stream = self
+            .endpoint
+            .connect_before(deadline)
+            .map_err(CallFailure::BeforeWrite)?;
         let (response, stream, owner_pid) =
             self.perform_call_on_stream(stream, request, read_timeout, write_timeout)?;
         self.store_cached_stream(stream);
@@ -544,27 +580,31 @@ impl ServiceClient {
         Ok(())
     }
 
-    fn wait_for_startup_health(&self, launch_environment: &LaunchEnvironment) -> Result<()> {
-        let mut last_error: Option<anyhow::Error> = None;
-        for _ in 0..STARTUP_HEALTH_ATTEMPTS {
-            match self.startup_health(launch_environment) {
+    fn wait_for_startup_health_before(
+        &self,
+        launch_environment: &LaunchEnvironment,
+        deadline: Instant,
+    ) -> Result<()> {
+        loop {
+            let last_error = match self.startup_health_before(launch_environment, deadline) {
                 Ok(_) => return Ok(()),
-                Err(error) => last_error = Some(error),
-            }
+                Err(error)
+                    if error
+                        .downcast_ref::<SharedBrowserDaemonConflict>()
+                        .is_some() =>
+                {
+                    return Err(error);
+                }
+                Err(error) => error,
+            };
             self.reap_exited_child()?;
-            thread::sleep(STARTUP_POLL_INTERVAL);
+            if !sleep_before(deadline, STARTUP_POLL_INTERVAL) {
+                return Err(anyhow!(
+                    "timed out during health convergence for sky-cua-service on {}; last health error: {last_error:#}",
+                    self.endpoint,
+                ));
+            }
         }
-
-        // Surface the concrete per-poll failure; "did not become healthy"
-        // alone hides whether the daemon was unreachable, slow, or rejected
-        // by an environment staleness check.
-        let detail = last_error
-            .map(|error| format!(": last health error: {error:#}"))
-            .unwrap_or_default();
-        Err(anyhow!(
-            "sky-cua-service did not become healthy on {}{detail}",
-            self.endpoint
-        ))
     }
 
     fn reap_exited_child(&self) -> Result<()> {
@@ -581,28 +621,139 @@ impl ServiceClient {
     }
 
     #[cfg(unix)]
-    fn displace_stale_service(&self, reason: &anyhow::Error) -> Result<()> {
-        let fallback_owner_pid = reason
-            .downcast_ref::<StaleStartupService>()
-            .and_then(|error| error.owner_pid);
-        match self.endpoint.terminate_stale_owners(fallback_owner_pid) {
-            Ok(killed) if !killed.is_empty() => {
-                self.clear_cached_stream();
-                self.endpoint.wait_for_singleton_release()?;
-                Ok(())
+    fn ensure_service_healthy(
+        &self,
+        launch_environment: &LaunchEnvironment,
+        deadline: Instant,
+    ) -> Result<()> {
+        let ServiceEndpoint::Unix(socket_path) = &self.endpoint;
+        let mut waited_for_lifecycle_actor = false;
+        loop {
+            if let Some(_lease) = crate::daemon_singleton::LifecycleLease::try_acquire(socket_path)?
+            {
+                return self.coordinate_lifecycle_as_lease_holder(
+                    launch_environment,
+                    deadline,
+                    waited_for_lifecycle_actor,
+                );
             }
-            Ok(_) => Err(anyhow!(
-                "existing sky-cua-service is stale ({reason}) but its singleton owner could not be identified"
-            )),
-            Err(error) => Err(error).context("failed to terminate stale sky-cua-service"),
+            waited_for_lifecycle_actor = true;
+
+            // Another lifecycle actor owns startup/replacement. Follow its
+            // winner through fresh userspace connects; the socket backlog is
+            // not used as a replacement queue.
+            let last_error = match self.startup_health_before(launch_environment, deadline) {
+                Ok(_) => return Ok(()),
+                Err(error)
+                    if error
+                        .downcast_ref::<SharedBrowserDaemonConflict>()
+                        .is_some() =>
+                {
+                    return Err(error);
+                }
+                Err(error) => error,
+            };
+            if !sleep_before(deadline, STARTUP_POLL_INTERVAL) {
+                return Err(anyhow!(
+                    "timed out waiting for the sky-cua-service lifecycle lease or a compatible winner on {}; last probe error: {last_error:#}",
+                    self.endpoint,
+                ));
+            }
         }
     }
 
+    #[cfg(unix)]
+    fn coordinate_lifecycle_as_lease_holder(
+        &self,
+        launch_environment: &LaunchEnvironment,
+        deadline: Instant,
+        waited_for_lifecycle_actor: bool,
+    ) -> Result<()> {
+        let mut may_replace_stale_owner = !waited_for_lifecycle_actor;
+        loop {
+            // Re-probe after lease acquisition and after every owner race. An
+            // observation from before this probe never authorizes a signal.
+            match self.startup_health_before(launch_environment, deadline) {
+                Ok(_) => return Ok(()),
+                Err(error)
+                    if error
+                        .downcast_ref::<SharedBrowserDaemonConflict>()
+                        .is_some() =>
+                {
+                    return Err(error);
+                }
+                Err(error) if is_stale_startup_health_error(&error) => {
+                    let owner_pid = error
+                        .downcast_ref::<StaleStartupService>()
+                        .and_then(|stale| stale.owner_pid)
+                        .ok_or_else(|| {
+                            stale_owner_without_exact_generation_error(&self.endpoint)
+                        })?;
+                    if !may_replace_stale_owner {
+                        return Err(anyhow!(SharedDaemonGenerationConflict {
+                            current_owner: owner_pid,
+                        }));
+                    }
+                    match self
+                        .endpoint
+                        .terminate_fresh_stale_owner(owner_pid)
+                        .context("failed during stale-owner termination")?
+                    {
+                        StaleOwnerTermination::Signalled => {
+                            self.clear_cached_stream();
+                            let graceful_deadline =
+                                stale_termination_deadline(deadline, Instant::now());
+                            self.endpoint
+                                .wait_for_singleton_release_before(graceful_deadline)
+                                .context(
+                                    "stale sky-cua-service did not release its singleton within the 3-second SIGTERM grace",
+                                )?;
+                            break;
+                        }
+                        StaleOwnerTermination::GenerationChanged => {
+                            // The stale response no longer describes the lock
+                            // owner. Keep the lifecycle lease and inspect the
+                            // successor from a new connection, but never signal
+                            // that successor from this lifecycle attempt.
+                            may_replace_stale_owner = false;
+                            self.clear_cached_stream();
+                            continue;
+                        }
+                    }
+                }
+                Err(_) => {
+                    // A daemon may hold its authoritative singleton while its
+                    // socket is temporarily absent/refusing connections. Give
+                    // that generation time to converge rather than spawning a
+                    // competing process.
+                    if !self.endpoint.singleton_lock_is_available()? {
+                        if !sleep_before(deadline, STARTUP_POLL_INTERVAL) {
+                            return Err(anyhow!(
+                                "sky-cua-service startup deadline expired while waiting for the singleton owner on {} to publish a healthy socket",
+                                self.endpoint
+                            ));
+                        }
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+
+        remaining_before(deadline, "service spawn")?;
+        self.spawn_service(launch_environment)
+            .context("failed during sky-cua-service spawn")?;
+        self.wait_for_startup_health_before(launch_environment, deadline)
+    }
+
     #[cfg(windows)]
-    fn displace_stale_service(&self, reason: &anyhow::Error) -> Result<()> {
-        Err(anyhow!(
-            "existing sky-cua-service is stale ({reason}) and automatic daemon replacement is not implemented on Windows"
-        ))
+    fn ensure_service_healthy(
+        &self,
+        launch_environment: &LaunchEnvironment,
+        deadline: Instant,
+    ) -> Result<()> {
+        self.spawn_service(launch_environment)?;
+        self.wait_for_startup_health_before(launch_environment, deadline)
     }
 }
 
@@ -689,6 +840,31 @@ impl ServiceEndpoint {
         }
     }
 
+    fn connect_before(&self, deadline: Instant) -> Result<EitherStream> {
+        match self {
+            #[cfg(target_os = "linux")]
+            Self::Unix(path) => connect_unix_before(path, deadline).map(EitherStream::Unix),
+            #[cfg(all(unix, not(target_os = "linux")))]
+            Self::Unix(path) => UnixStream::connect(path)
+                .with_context(|| {
+                    format!(
+                        "failed to connect to sky-cua-service socket {}",
+                        path.display()
+                    )
+                })
+                .map(EitherStream::Unix),
+            #[cfg(windows)]
+            Self::Tcp(addr) => {
+                let _ = deadline;
+                TcpStream::connect(addr)
+                    .with_context(|| {
+                        format!("failed to connect to sky-cua-service TCP endpoint {addr}")
+                    })
+                    .map(EitherStream::Tcp)
+            }
+        }
+    }
+
     /// One log per daemon endpoint: the default daemon and an isolated-desktop
     /// daemon (distinct socket) must not interleave in a single file.
     fn daemon_log_stem(&self) -> String {
@@ -720,44 +896,76 @@ impl ServiceEndpoint {
     }
 
     #[cfg(unix)]
-    fn terminate_stale_owners(&self, fallback_owner_pid: Option<u32>) -> Result<Vec<u32>> {
+    fn terminate_fresh_stale_owner(&self, observed_peer_pid: u32) -> Result<StaleOwnerTermination> {
         let Self::Unix(path) = self;
-        let candidates = owner_pids_for_termination(path, fallback_owner_pid)?;
-        let mut killed = Vec::new();
-        for pid in candidates {
-            // SAFETY: `kill` with SIGTERM has no Rust-side memory safety
-            // preconditions. Candidate PIDs are either the connected Unix
-            // socket peer or a lock-file owner that still looks like our
-            // service binary.
-            let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-            if result == 0 {
-                killed.push(pid);
-            } else {
-                let error = std::io::Error::last_os_error();
-                if error.raw_os_error() == Some(libc::ESRCH) {
-                    killed.push(pid);
-                } else {
-                    return Err(error.into());
-                }
-            }
+        let current_owner = crate::daemon_singleton::read_owner_pid(path)?;
+        if current_owner != Some(observed_peer_pid) {
+            return Ok(StaleOwnerTermination::GenerationChanged);
         }
-        Ok(killed)
+        if !crate::daemon_singleton::pid_is_sky_cua_service(observed_peer_pid) {
+            return Err(anyhow!(
+                "freshly observed stale owner pid {observed_peer_pid} no longer identifies as sky-cua-service; refusing to signal"
+            ));
+        }
+
+        // Re-read immediately before signalling to fence a daemon generation
+        // change between identity verification and SIGTERM.
+        if crate::daemon_singleton::read_owner_pid(path)? != Some(observed_peer_pid) {
+            return Ok(StaleOwnerTermination::GenerationChanged);
+        }
+        let result = unsafe { libc::kill(observed_peer_pid as libc::pid_t, libc::SIGTERM) };
+        if result == 0 {
+            return Ok(StaleOwnerTermination::Signalled);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(StaleOwnerTermination::Signalled)
+        } else {
+            Err(error.into())
+        }
     }
 
     #[cfg(unix)]
-    fn wait_for_singleton_release(&self) -> Result<()> {
+    fn wait_for_singleton_release_before(&self, deadline: Instant) -> Result<()> {
         let Self::Unix(path) = self;
-        let deadline = Instant::now() + STALE_SERVICE_TERMINATION_TIMEOUT;
-        while Instant::now() < deadline {
+        loop {
             if singleton_lock_is_available(path)? {
                 return Ok(());
             }
-            thread::sleep(STARTUP_POLL_INTERVAL);
+            if !sleep_before(deadline, STARTUP_POLL_INTERVAL) {
+                return Err(anyhow!(
+                    "timed out waiting for stale sky-cua-service singleton lock to release"
+                ));
+            }
         }
-        Err(anyhow!(
-            "timed out waiting for stale sky-cua-service singleton lock to release"
-        ))
     }
+
+    #[cfg(unix)]
+    fn singleton_lock_is_available(&self) -> Result<bool> {
+        let Self::Unix(path) = self;
+        singleton_lock_is_available(path)
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StaleOwnerTermination {
+    Signalled,
+    GenerationChanged,
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn stale_owner_without_exact_generation_error(endpoint: &ServiceEndpoint) -> anyhow::Error {
+    anyhow!(
+        "stale sky-cua-service on {endpoint} had no freshly verified peer pid; refusing replacement"
+    )
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn stale_owner_without_exact_generation_error(endpoint: &ServiceEndpoint) -> anyhow::Error {
+    anyhow!(
+        "stale sky-cua-service on {endpoint} cannot be replaced safely on this Unix platform: the health connection does not expose an exact peer generation; refusing to signal a lock owner that may be a successor"
+    )
 }
 
 #[cfg(unix)]
@@ -777,21 +985,119 @@ fn service_socket_path_for_launch_environment(launch_environment: &LaunchEnviron
     service_socket_path()
 }
 
-#[cfg(unix)]
-fn owner_pids_for_termination(
-    socket_path: &std::path::Path,
-    peer_pid: Option<u32>,
-) -> Result<Vec<u32>> {
-    let mut candidates = BTreeSet::new();
-    if let Some(pid) = peer_pid {
-        candidates.insert(pid);
+#[cfg(target_os = "linux")]
+fn connect_unix_before(path: &std::path::Path, deadline: Instant) -> Result<UnixStream> {
+    use std::os::fd::AsRawFd;
+
+    let path_bytes = path.as_os_str().as_bytes();
+    if path_bytes.contains(&0) {
+        return Err(anyhow!(
+            "sky-cua-service socket path contains an interior NUL: {}",
+            path.display()
+        ));
     }
-    if let Some(pid) = crate::daemon_singleton::read_owner_pid(socket_path)?
-        && crate::daemon_singleton::pid_is_sky_cua_service(pid)
-    {
-        candidates.insert(pid);
+
+    let mut address = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
+    if path_bytes.len() >= address.sun_path.len() {
+        return Err(anyhow!(
+            "sky-cua-service socket path is too long: {}",
+            path.display()
+        ));
     }
-    Ok(candidates.into_iter().collect())
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            path_bytes.as_ptr(),
+            address.sun_path.as_mut_ptr().cast::<u8>(),
+            path_bytes.len(),
+        );
+    }
+    let address_len = (std::mem::offset_of!(libc::sockaddr_un, sun_path) + path_bytes.len() + 1)
+        as libc::socklen_t;
+
+    let raw_fd = unsafe {
+        libc::socket(
+            libc::AF_UNIX,
+            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+            0,
+        )
+    };
+    if raw_fd < 0 {
+        return Err(std::io::Error::last_os_error()).context("failed to create Unix socket");
+    }
+    let stream = unsafe { UnixStream::from_raw_fd(raw_fd) };
+    let connected = unsafe {
+        libc::connect(
+            stream.as_raw_fd(),
+            (&raw const address).cast::<libc::sockaddr>(),
+            address_len,
+        )
+    };
+    if connected != 0 {
+        let error = std::io::Error::last_os_error();
+        if !matches!(error.raw_os_error(), Some(code) if code == libc::EINPROGRESS || code == libc::EAGAIN)
+        {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to connect to sky-cua-service socket {}",
+                    path.display()
+                )
+            });
+        }
+
+        loop {
+            let remaining = remaining_before(deadline, "Unix socket connect")?;
+            let timeout_ms = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+            let mut poll_fd = libc::pollfd {
+                fd: stream.as_raw_fd(),
+                events: libc::POLLOUT,
+                revents: 0,
+            };
+            let poll_result = unsafe { libc::poll(&raw mut poll_fd, 1, timeout_ms) };
+            if poll_result > 0 {
+                break;
+            }
+            if poll_result == 0 {
+                return Err(anyhow!(
+                    "timed out connecting to sky-cua-service socket {}",
+                    path.display()
+                ));
+            }
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::EINTR) {
+                return Err(error).context("failed while polling Unix socket connection");
+            }
+        }
+
+        let mut socket_error = 0;
+        let mut socket_error_len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        let result = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_ERROR,
+                (&raw mut socket_error).cast(),
+                &raw mut socket_error_len,
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("failed to inspect Unix socket connection result");
+        }
+        if socket_error != 0 {
+            return Err(std::io::Error::from_raw_os_error(socket_error)).with_context(|| {
+                format!(
+                    "failed to connect to sky-cua-service socket {}",
+                    path.display()
+                )
+            });
+        }
+    }
+
+    stream
+        .set_nonblocking(false)
+        .context("failed to restore blocking mode on sky-cua-service socket")?;
+    Ok(stream)
 }
 
 #[cfg(unix)]
@@ -804,18 +1110,41 @@ fn singleton_lock_is_available(socket_path: &std::path::Path) -> Result<bool> {
         .truncate(false)
         .write(true)
         .open(&lock_path)?;
-    let result = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if result == 0 {
-        let _ = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN) };
-        Ok(true)
-    } else {
+    loop {
+        let result = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result == 0 {
+            return Ok(true);
+        }
         let error = std::io::Error::last_os_error();
         match error.raw_os_error() {
-            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => Ok(false),
-            Some(libc::EINTR) => Ok(false),
-            _ => Err(error.into()),
+            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => return Ok(false),
+            Some(libc::EINTR) => continue,
+            _ => return Err(error.into()),
         }
     }
+}
+
+fn remaining_before(deadline: Instant, phase: &str) -> Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| anyhow!("sky-cua-service startup deadline expired during {phase}"))
+}
+
+fn sleep_before(deadline: Instant, interval: Duration) -> bool {
+    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+        return false;
+    };
+    if remaining.is_zero() {
+        return false;
+    }
+    thread::sleep(remaining.min(interval));
+    Instant::now() < deadline
+}
+
+#[cfg(unix)]
+fn stale_termination_deadline(startup_deadline: Instant, now: Instant) -> Instant {
+    startup_deadline.min(now + STALE_SERVICE_TERMINATION_GRACE)
 }
 
 impl std::fmt::Display for ServiceEndpoint {
@@ -1104,6 +1433,23 @@ impl std::fmt::Display for SharedBrowserDaemonConflict {
 
 impl std::error::Error for SharedBrowserDaemonConflict {}
 
+#[derive(Debug)]
+struct SharedDaemonGenerationConflict {
+    current_owner: u32,
+}
+
+impl std::fmt::Display for SharedDaemonGenerationConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "shared sky-cua-service remained incompatible after waiting for another lifecycle actor (current owner {}); that actor's generation was left running",
+            self.current_owner
+        )
+    }
+}
+
+impl std::error::Error for SharedDaemonGenerationConflict {}
+
 fn is_stale_startup_health_error(error: &anyhow::Error) -> bool {
     error.downcast_ref::<StaleStartupService>().is_some()
 }
@@ -1162,6 +1508,7 @@ mod tests {
     use std::ffi::OsStr;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
     use std::sync::Mutex;
 
     use sky_cua_platform::{
@@ -1518,33 +1865,326 @@ mod tests {
     }
 
     #[test]
-    fn unix_service_termination_ignores_unverified_lock_pid_when_peer_is_known() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "sky-cua-client-peer-pid-test-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&temp_dir);
-        fs::create_dir_all(&temp_dir).expect("create test temp dir");
-        let socket_path = temp_dir.join("service.sock");
-        fs::write(
-            crate::daemon_singleton::socket_lock_path(&socket_path),
-            "4242\n",
-        )
-        .expect("write lock pid");
-
-        let pids =
-            owner_pids_for_termination(&socket_path, Some(7777)).expect("pid should resolve");
-
-        let _ = fs::remove_dir_all(&temp_dir);
-        assert_eq!(pids, vec![7777]);
+    fn startup_deadline_fits_the_mcp_startup_window() {
+        assert!(STARTUP_DEADLINE >= Duration::from_secs(20));
+        assert!(STARTUP_DEADLINE < Duration::from_secs(30));
     }
 
     #[test]
-    fn startup_health_budget_allows_slow_desktop_service_startup() {
-        let budget = STARTUP_POLL_INTERVAL * STARTUP_HEALTH_ATTEMPTS as u32;
+    fn stale_owner_change_is_fenced_before_signal() {
+        let temp_dir = test_temp_dir("owner-fence");
+        let socket_path = temp_dir.join("service.sock");
+        fs::write(
+            crate::daemon_singleton::socket_lock_path(&socket_path),
+            format!("{}\n", std::process::id()),
+        )
+        .expect("write changed owner");
+        let endpoint = ServiceEndpoint::Unix(socket_path);
 
-        assert!(budget >= Duration::from_secs(20));
-        assert!(budget < Duration::from_secs(30));
+        let outcome = endpoint
+            .terminate_fresh_stale_owner(std::process::id().saturating_add(1))
+            .expect("changed owner is a lifecycle race, not a termination failure");
+
+        assert_eq!(outcome, StaleOwnerTermination::GenerationChanged);
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn owner_change_is_reprobed_and_healthy_successor_wins() {
+        let old_browser_control_mode =
+            std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
+        unsafe {
+            std::env::set_var(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV, "legacy");
+        }
+        let temp_dir = test_temp_dir("owner-race-successor");
+        let socket_path = temp_dir.join("service.sock");
+        fs::write(
+            crate::daemon_singleton::socket_lock_path(&socket_path),
+            format!("{}\n", std::process::id().saturating_add(1)),
+        )
+        .expect("write successor owner");
+        let mut successor_desktop_env = std::collections::BTreeMap::new();
+        successor_desktop_env.insert("DISPLAY".to_string(), ":test".to_string());
+        let server = spawn_health_sequence(
+            socket_path.clone(),
+            vec![
+                (PlatformBrowserControlMode::Legacy, Default::default()),
+                (PlatformBrowserControlMode::Legacy, successor_desktop_env),
+            ],
+        );
+        let client = test_client(socket_path);
+        let launch_environment =
+            LaunchEnvironment::from_repaired_desktop_vars_and_detached_for_tests(
+                vec![("DISPLAY".to_string(), ":test".to_string())],
+                true,
+            );
+
+        client
+            .ensure_service_healthy(&launch_environment, Instant::now() + Duration::from_secs(3))
+            .expect("healthy successor should win after owner race");
+
+        assert!(client.child.lock().expect("child mutex").is_none());
+        server.join().expect("health server should stop");
+        restore_env(
+            sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV,
+            old_browser_control_mode,
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn waiter_leaves_new_incompatible_generation_running() {
+        if let Some(socket_path) = std::env::var_os("SKY_CUA_STALE_SERVER_SOCKET") {
+            run_stale_test_server(
+                PathBuf::from(socket_path),
+                PathBuf::from(
+                    std::env::var_os("SKY_CUA_STALE_SERVER_READY")
+                        .expect("stale server ready path"),
+                ),
+                PathBuf::from(
+                    std::env::var_os("SKY_CUA_STALE_SERVER_OBSERVED")
+                        .expect("stale server observed path"),
+                ),
+                std::env::var("SKY_CUA_STALE_SERVER_MARK_ON_ACCEPT")
+                    .expect("stale server mark count")
+                    .parse()
+                    .expect("numeric stale server mark count"),
+            );
+            return;
+        }
+
+        let old_browser_control_mode =
+            std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
+        unsafe {
+            std::env::set_var(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV, "legacy");
+        }
+        let temp_dir = test_temp_dir("waiter-generation-fence");
+        let socket_path = temp_dir.join("service.sock");
+        let lease = crate::daemon_singleton::LifecycleLease::try_acquire(&socket_path)
+            .expect("lease attempt")
+            .expect("hold lifecycle lease");
+        let ready_a = temp_dir.join("ready-a");
+        let observed_a = temp_dir.join("observed-a");
+        let mut owner_a = spawn_stale_server_helper(&socket_path, &ready_a, &observed_a, 2);
+        wait_for_test_path(&ready_a, Duration::from_secs(2));
+
+        let client = test_client(socket_path.clone());
+        let launch_environment =
+            LaunchEnvironment::from_repaired_desktop_vars_and_detached_for_tests(
+                vec![("DISPLAY".to_string(), ":required".to_string())],
+                true,
+            );
+        let waiter = thread::spawn(move || {
+            client.ensure_service_healthy(
+                &launch_environment,
+                Instant::now() + Duration::from_secs(5),
+            )
+        });
+        wait_for_test_path(&observed_a, Duration::from_secs(2));
+
+        owner_a.kill().expect("stop first stale owner");
+        owner_a.wait().expect("reap first stale owner");
+        let _ = fs::remove_file(&socket_path);
+        let ready_b = temp_dir.join("ready-b");
+        let observed_b = temp_dir.join("observed-b");
+        let mut owner_b = spawn_stale_server_helper(&socket_path, &ready_b, &observed_b, 1);
+        wait_for_test_path(&ready_b, Duration::from_secs(2));
+        wait_for_test_path(&observed_b, Duration::from_secs(2));
+        drop(lease);
+
+        let error = waiter
+            .join()
+            .expect("waiter thread should not panic")
+            .expect_err("waiter must not replace the new incompatible generation");
+        assert!(
+            error
+                .downcast_ref::<SharedDaemonGenerationConflict>()
+                .is_some()
+        );
+        assert!(
+            owner_b.try_wait().expect("inspect second owner").is_none(),
+            "new incompatible owner was signalled"
+        );
+        owner_b.kill().expect("stop second stale owner");
+        owner_b.wait().expect("reap second stale owner");
+        restore_env(
+            sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV,
+            old_browser_control_mode,
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn stale_termination_grace_is_bounded_by_phase_and_startup_deadlines() {
+        let now = Instant::now();
+        let long_startup_deadline = now + Duration::from_secs(20);
+        let grace = stale_termination_deadline(long_startup_deadline, now);
+        assert!(grace <= long_startup_deadline);
+        assert!(grace.duration_since(now) <= STALE_SERVICE_TERMINATION_GRACE);
+
+        let short_startup_deadline = now + Duration::from_millis(100);
+        assert_eq!(
+            stale_termination_deadline(short_startup_deadline, now),
+            short_startup_deadline
+        );
+    }
+
+    #[test]
+    fn transient_refused_socket_waiter_converges_to_winner() {
+        let old_browser_control_mode =
+            std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
+        unsafe {
+            std::env::set_var(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV, "legacy");
+        }
+        let temp_dir = test_temp_dir("transient-refused");
+        let socket_path = temp_dir.join("service.sock");
+        let stale_listener = UnixListener::bind(&socket_path).expect("bind stale socket");
+        drop(stale_listener);
+        let lease = crate::daemon_singleton::LifecycleLease::try_acquire(&socket_path)
+            .expect("lease attempt")
+            .expect("hold lifecycle lease");
+        let client = test_client(socket_path.clone());
+        let launch_environment = test_launch_environment();
+        let waiter = thread::spawn(move || {
+            client.ensure_service_healthy(
+                &launch_environment,
+                Instant::now() + Duration::from_secs(3),
+            )
+        });
+
+        thread::sleep(Duration::from_millis(300));
+        fs::remove_file(&socket_path).expect("remove refused socket");
+        let server =
+            spawn_health_server(socket_path.clone(), PlatformBrowserControlMode::Legacy, 1);
+        waiter
+            .join()
+            .expect("waiter thread should not panic")
+            .expect("waiter should converge through fresh connects");
+        server.join().expect("health server should stop");
+        drop(lease);
+        restore_env(
+            sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV,
+            old_browser_control_mode,
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn persistent_browser_conflict_neither_signals_nor_spawns() {
+        let old_browser_control_mode =
+            std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
+        unsafe {
+            std::env::set_var(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV, "legacy");
+        }
+        let temp_dir = test_temp_dir("browser-conflict");
+        let socket_path = temp_dir.join("service.sock");
+        let server =
+            spawn_health_server(socket_path.clone(), PlatformBrowserControlMode::Hybrid, 1);
+        let client = test_client(socket_path);
+
+        let error = client
+            .ensure_service_healthy(
+                &test_launch_environment(),
+                Instant::now() + Duration::from_secs(3),
+            )
+            .expect_err("persistent browser daemon conflict must fail closed");
+
+        assert!(
+            error
+                .downcast_ref::<SharedBrowserDaemonConflict>()
+                .is_some()
+        );
+        assert!(client.child.lock().expect("child mutex").is_none());
+        server.join().expect("health server should stop");
+        restore_env(
+            sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV,
+            old_browser_control_mode,
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn concurrent_cold_start_converges_to_one_spawned_daemon() {
+        if let Some(socket_path) = std::env::var_os("SKY_CUA_COLD_START_HELPER_SOCKET") {
+            let ready_path = PathBuf::from(
+                std::env::var_os("SKY_CUA_COLD_START_HELPER_READY")
+                    .expect("cold-start helper ready path"),
+            );
+            let release_path = PathBuf::from(
+                std::env::var_os("SKY_CUA_COLD_START_HELPER_RELEASE")
+                    .expect("cold-start helper release path"),
+            );
+            fs::write(&ready_path, b"ready").expect("announce cold-start helper readiness");
+            wait_for_test_path(&release_path, Duration::from_secs(5));
+            let client = test_client(PathBuf::from(socket_path));
+            client
+                .ensure_service_healthy(
+                    &test_launch_environment(),
+                    Instant::now() + Duration::from_secs(5),
+                )
+                .expect("independent client should converge");
+            return;
+        }
+
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let temp_dir = test_temp_dir("concurrent-cold-start");
+        let service_script = temp_dir.join("sky-cua-service");
+        let socket_path = temp_dir.join("service.sock");
+        let spawn_count_path = temp_dir.join("spawn-count");
+        let release_path = temp_dir.join("release");
+        fs::write(&service_script, FAKE_SERVICE).expect("write fake service script");
+        fs::set_permissions(&service_script, fs::Permissions::from_mode(0o755))
+            .expect("make fake service executable");
+        let old_service_path = std::env::var_os("SKY_CUA_SERVICE_PATH");
+        let old_count_path = std::env::var_os("SKY_CUA_TEST_SPAWN_COUNT_PATH");
+        let old_browser_control_mode =
+            std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
+        unsafe {
+            std::env::set_var("SKY_CUA_SERVICE_PATH", &service_script);
+            std::env::set_var("SKY_CUA_TEST_SPAWN_COUNT_PATH", &spawn_count_path);
+            std::env::set_var(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV, "legacy");
+        }
+
+        let ready_paths = [temp_dir.join("ready-0"), temp_dir.join("ready-1")];
+        let clients = ready_paths
+            .iter()
+            .map(|ready_path| spawn_cold_start_helper(&socket_path, ready_path, &release_path))
+            .collect::<Vec<_>>();
+        for ready_path in &ready_paths {
+            wait_for_test_path(ready_path, Duration::from_secs(2));
+        }
+        fs::write(&release_path, b"go").expect("release cold-start helpers");
+        for client in clients {
+            let output = client
+                .wait_with_output()
+                .expect("wait for independent client");
+            assert!(
+                output.status.success(),
+                "independent client failed to converge: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        assert_eq!(
+            fs::read_to_string(&spawn_count_path)
+                .expect("read spawn count")
+                .lines()
+                .count(),
+            1
+        );
+        if let Some(owner_pid) =
+            crate::daemon_singleton::read_owner_pid(&socket_path).expect("read fake daemon owner")
+        {
+            let result = unsafe { libc::kill(owner_pid as libc::pid_t, libc::SIGTERM) };
+            assert_eq!(result, 0, "terminate fake daemon");
+        }
+        restore_env("SKY_CUA_SERVICE_PATH", old_service_path);
+        restore_env("SKY_CUA_TEST_SPAWN_COUNT_PATH", old_count_path);
+        restore_env(
+            sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV,
+            old_browser_control_mode,
+        );
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
@@ -1613,6 +2253,162 @@ mod tests {
         Ok(())
     }
 
+    fn test_temp_dir(stem: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "sky-cua-client-{stem}-{}-{:?}",
+            std::process::id(),
+            thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("create test temp dir");
+        path
+    }
+
+    fn test_launch_environment() -> LaunchEnvironment {
+        LaunchEnvironment::from_repaired_desktop_vars_and_detached_for_tests(Vec::new(), true)
+    }
+
+    fn test_client(socket_path: PathBuf) -> ServiceClient {
+        ServiceClient {
+            endpoint: ServiceEndpoint::Unix(socket_path),
+            child: Arc::new(Mutex::new(None)),
+            cached_stream: Arc::new(Mutex::new(None)),
+            isolated: None,
+            isolated_lifecycle: Lifecycle::Persistent,
+        }
+    }
+
+    fn spawn_health_server(
+        socket_path: PathBuf,
+        mode: PlatformBrowserControlMode,
+        requests: usize,
+    ) -> thread::JoinHandle<()> {
+        spawn_health_sequence(socket_path, vec![(mode, Default::default()); requests])
+    }
+
+    fn spawn_health_sequence(
+        socket_path: PathBuf,
+        responses: Vec<(
+            PlatformBrowserControlMode,
+            std::collections::BTreeMap<String, String>,
+        )>,
+    ) -> thread::JoinHandle<()> {
+        let listener = UnixListener::bind(&socket_path).expect("bind health server");
+        thread::spawn(move || {
+            for (mode, desktop_env) in responses {
+                let (mut stream, _) = listener.accept().expect("accept health request");
+                let mut request = String::new();
+                BufReader::new(stream.try_clone().expect("clone health stream"))
+                    .read_line(&mut request)
+                    .expect("read health request");
+                let response = ServiceResponse::Health {
+                    ok: true,
+                    service_socket: socket_path.display().to_string(),
+                    protocol_version: 1,
+                    service_version: "test".to_string(),
+                    capabilities: vec![sky_cua_platform::model::browser_control_mode_capability(
+                        mode,
+                    )],
+                    desktop_env,
+                    browser_env: Default::default(),
+                };
+                serde_json::to_writer(&mut stream, &response).expect("write health response");
+                stream.write_all(b"\n").expect("terminate health response");
+            }
+        })
+    }
+
+    fn spawn_cold_start_helper(
+        socket_path: &std::path::Path,
+        ready_path: &std::path::Path,
+        release_path: &std::path::Path,
+    ) -> Child {
+        Command::new(std::env::current_exe().expect("current test exe"))
+            .args([
+                "--exact",
+                "service_launcher::tests::concurrent_cold_start_converges_to_one_spawned_daemon",
+            ])
+            .env("SKY_CUA_COLD_START_HELPER_SOCKET", socket_path)
+            .env("SKY_CUA_COLD_START_HELPER_READY", ready_path)
+            .env("SKY_CUA_COLD_START_HELPER_RELEASE", release_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn independent cold-start client")
+    }
+
+    fn spawn_stale_server_helper(
+        socket_path: &std::path::Path,
+        ready_path: &std::path::Path,
+        observed_path: &std::path::Path,
+        mark_on_accept: usize,
+    ) -> Child {
+        Command::new(std::env::current_exe().expect("current test exe"))
+            .args([
+                "--exact",
+                "service_launcher::tests::waiter_leaves_new_incompatible_generation_running",
+            ])
+            .env("SKY_CUA_STALE_SERVER_SOCKET", socket_path)
+            .env("SKY_CUA_STALE_SERVER_READY", ready_path)
+            .env("SKY_CUA_STALE_SERVER_OBSERVED", observed_path)
+            .env(
+                "SKY_CUA_STALE_SERVER_MARK_ON_ACCEPT",
+                mark_on_accept.to_string(),
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn stale owner helper")
+    }
+
+    fn run_stale_test_server(
+        socket_path: PathBuf,
+        ready_path: PathBuf,
+        observed_path: PathBuf,
+        mark_on_accept: usize,
+    ) {
+        let _ = fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path).expect("bind stale owner socket");
+        fs::write(ready_path, b"ready").expect("announce stale owner readiness");
+        for (index, stream) in listener.incoming().enumerate() {
+            let mut stream = stream.expect("accept stale health request");
+            if index + 1 == mark_on_accept {
+                fs::write(&observed_path, b"observed").expect("record stale health observation");
+            }
+            let mut request = String::new();
+            BufReader::new(stream.try_clone().expect("clone stale health stream"))
+                .read_line(&mut request)
+                .expect("read stale health request");
+            let response = ServiceResponse::Health {
+                ok: true,
+                service_socket: socket_path.display().to_string(),
+                protocol_version: 1,
+                service_version: "stale-test".to_string(),
+                capabilities: vec![sky_cua_platform::model::browser_control_mode_capability(
+                    PlatformBrowserControlMode::Legacy,
+                )],
+                desktop_env: Default::default(),
+                browser_env: Default::default(),
+            };
+            serde_json::to_writer(&mut stream, &response).expect("write stale health response");
+            stream.write_all(b"\n").expect("terminate stale response");
+        }
+    }
+
+    fn wait_for_test_path(path: &std::path::Path, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while !path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {}",
+                path.display()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn command_env_value<'a>(
         command: &'a Command,
         key: &str,
@@ -1658,6 +2454,7 @@ mod tests {
 
     const FAKE_SERVICE: &str = r#"#!/usr/bin/env python3
 import json
+import fcntl
 import os
 import socket
 import sys
@@ -1666,6 +2463,18 @@ if len(sys.argv) < 2 or sys.argv[1] != "daemon":
     raise SystemExit("expected daemon mode")
 
 path = os.environ["SKY_CUA_SERVICE_SOCKET_PATH"]
+lock = open(path + ".lock", "a+")
+try:
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    raise SystemExit(0)
+lock.seek(0)
+lock.truncate()
+lock.write(str(os.getpid()) + "\n")
+lock.flush()
+if os.environ.get("SKY_CUA_TEST_SPAWN_COUNT_PATH"):
+    with open(os.environ["SKY_CUA_TEST_SPAWN_COUNT_PATH"], "a") as count:
+        count.write("spawn\n")
 try:
     os.unlink(path)
 except FileNotFoundError:

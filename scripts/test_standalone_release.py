@@ -59,6 +59,7 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
         "scripts/_codex_app_server.py",
         "scripts/_hermes_config.py",
         "scripts/_opencode_config.py",
+        "scripts/_plugin_bundle.py",
         "scripts/_standalone_release_command.py",
         "install.py",
     ):
@@ -327,6 +328,36 @@ def test_install_preserves_unresolvable_user_node_symlink(
     assert legacy_node.readlink() == Path("node")
 
 
+def test_install_stops_fixed_root_runtime_before_replacing_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    core, cua_node = _fixture_repo(repo)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", repo)
+    payload = tmp_path / "payload"
+    assemble_payload(payload, core_root=core, cua_node_root=cua_node)
+    home = tmp_path / "home"
+    env = {"HOME": str(home), "XDG_DATA_HOME": str(tmp_path / "xdg-data")}
+    install_root = Path(env["XDG_DATA_HOME"]) / "sky-cua"
+    _write(install_root / "stale-runtime-marker")
+    calls: list[Path] = []
+
+    def fake_stop(search_roots: list[Path]) -> None:
+        assert (install_root / "stale-runtime-marker").is_file()
+        calls.extend(search_roots)
+
+    monkeypatch.setattr(
+        standalone_release._plugin_bundle,
+        "stop_unix_runtime_processes",
+        fake_stop,
+    )
+
+    install_payload(payload, home=home, env=env, configure_hosts=False)
+
+    assert calls == [install_root]
+    assert not (install_root / "stale-runtime-marker").exists()
+
+
 def test_install_projects_both_mcp_servers_into_existing_hermes_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -378,6 +409,7 @@ def test_extracted_payload_install_imports_hermes_adapter(
         "scripts/_codex_app_server.py",
         "scripts/_hermes_config.py",
         "scripts/_opencode_config.py",
+        "scripts/_plugin_bundle.py",
         "scripts/_standalone_release_command.py",
     ):
         source = real_root / relative

@@ -403,9 +403,8 @@ Accessibility workflow in three tool calls
 (`phone_connection(operation="connect")` →
 `phone_setup(operation="open_settings")` → `phone_accessibility_tree`), reaching
 `com.android.settings/.Settings$AccessibilitySettingsActivity` with no redundant
-captures or taps. opencode must run from a neutral working directory (the harness
-handles this) so it loads the global MCP config — a worktree `opencode.json` can
-otherwise point `sky_cua` at a sibling checkout that lacks the phone tools.
+captures or taps. The harness runs OpenCode from a neutral working directory so
+repository fixtures cannot override the installed global MCP configuration.
 
 The full live smoke should also run from the installed MCP surface
 (`--installed`) after packaging and record adb version, Android version,

@@ -379,8 +379,9 @@ bun scripts/patch/apply.ts --check
 
 ## OpenCode adapter
 
-The repo-local `opencode.json` registers `sky_cua` as a local MCP server for
-OpenCode:
+The standalone installer registers `sky_cua` in the user's global OpenCode
+configuration. Run OpenCode from any project without adding a repository-local
+MCP override:
 
 ```bash
 opencode mcp list
