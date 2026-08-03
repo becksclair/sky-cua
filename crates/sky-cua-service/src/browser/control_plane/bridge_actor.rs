@@ -118,6 +118,7 @@ pub(crate) struct BridgeActorHealth {
     pub(crate) reconnect_count: u64,
     pub(crate) last_heartbeat_rtt_ms: Option<u64>,
     pub(crate) quarantine_reason: Option<String>,
+    pub(crate) connection_epoch: u64,
 }
 
 impl BridgeActorHealth {
@@ -137,6 +138,7 @@ impl BridgeActorHealth {
             reconnect_count: 0,
             last_heartbeat_rtt_ms: None,
             quarantine_reason: None,
+            connection_epoch: 0,
         }
     }
 }
@@ -156,6 +158,11 @@ pub(crate) enum BridgeActorEvent {
         browser_instance_id: String,
         reason: String,
         stable_recovery: bool,
+    },
+    Failover {
+        state: String,
+        reason: Option<String>,
+        connection_epoch: u64,
     },
 }
 
@@ -226,6 +233,11 @@ enum Command {
     ServerMessage(Value),
     #[cfg(test)]
     Barrier(oneshot::Sender<()>),
+    ForceReconnect {
+        expected_epoch: u64,
+        reason: String,
+        reply: oneshot::Sender<bool>,
+    },
     Shutdown,
 }
 
@@ -278,6 +290,23 @@ impl BridgeActor {
     ) -> Result<(), BridgeActorError> {
         let frame = settlement_ack_frame(settlement, &self.health().daemon_generation)?;
         self.send_server_message(frame).await
+    }
+
+    pub(crate) async fn request_reconnect(&self, expected_epoch: u64, reason: String) -> bool {
+        let (reply, rx) = oneshot::channel();
+        if self
+            .sender
+            .send(Command::ForceReconnect {
+                expected_epoch,
+                reason,
+                reply,
+            })
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        rx.await.unwrap_or(false)
     }
 
     #[cfg(test)]
@@ -399,8 +428,13 @@ async fn run_actor(
     let mut backoff = config.reconnect_min;
     let mut ever_ready = false;
     let mut prior_host_instance_id: Option<String> = None;
+    let mut connection_epoch: u64 = 0;
+    let (run_reason_sender, mut run_reason_receiver) = watch::channel(None::<Vec<String>>);
 
     loop {
+        connection_epoch = connection_epoch.wrapping_add(1);
+        health.connection_epoch = connection_epoch;
+        let _ = health_sender.send(health.clone());
         set_state(
             &config,
             &events,
@@ -426,6 +460,8 @@ async fn run_actor(
                     &mut receiver,
                     &mut runtime,
                     BridgeActorError::Unavailable(error.to_string()),
+                    &events,
+                    &mut run_reason_receiver,
                 )
                 .await
                 {
@@ -440,6 +476,8 @@ async fn run_actor(
                     &mut receiver,
                     &mut runtime,
                     BridgeActorError::Unavailable("bridge connect timed out".to_owned()),
+                    &events,
+                    &mut run_reason_receiver,
                 )
                 .await
                 {
@@ -475,14 +513,22 @@ async fn run_actor(
                     },
                     Some(format!("{error:?}")),
                 );
-                if delay_or_shutdown(backoff, &mut receiver, &mut runtime, error).await {
+                if delay_or_shutdown(
+                    backoff,
+                    &mut receiver,
+                    &mut runtime,
+                    error,
+                    &events,
+                    &mut run_reason_receiver,
+                )
+                .await
+                {
                     break;
                 }
                 backoff = doubled(backoff, config.reconnect_max);
                 continue;
             }
         };
-
         let browser_instance_id = if handshake.browser_instance_stability
             == BrowserInstanceStability::Stable
         {
@@ -560,6 +606,8 @@ async fn run_actor(
             &health_sender,
             &mut health,
             &mut runtime,
+            connection_epoch,
+            run_reason_sender.clone(),
         )
         .await;
         record_persistent_actor_health(&config.socket_path, false);
@@ -596,6 +644,8 @@ async fn serve_ready_connection(
     health_sender: &watch::Sender<BridgeActorHealth>,
     health: &mut BridgeActorHealth,
     runtime: &mut Runtime,
+    connection_epoch: u64,
+    reason_sender: watch::Sender<Option<Vec<String>>>,
 ) -> bool {
     let mut heartbeat_tick = tokio::time::interval_at(
         Instant::now() + config.heartbeat_interval,
@@ -604,6 +654,7 @@ async fn serve_ready_connection(
     heartbeat_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut maintenance_tick = tokio::time::interval(Duration::from_millis(25));
     maintenance_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut reason_receiver = reason_sender.subscribe();
     loop {
         if dispatch_queued(stream, config, runtime).await.is_err() {
             return false;
@@ -630,6 +681,17 @@ async fn serve_ready_connection(
                         runtime.resolve_settlement(&operation_id);
                     }
                 }
+                Some(Command::ForceReconnect { expected_epoch, reason, reply }) => {
+                    let matches = connection_epoch == expected_epoch;
+                    let _ = reply.send(matches);
+                    if matches {
+                        let _ = reason_sender.send_if_modified(|slot| {
+                            slot.get_or_insert_with(Vec::new).push(reason);
+                            true
+                        });
+                        return false;
+                    }
+                }
                 #[cfg(test)]
                 Some(Command::Barrier(reply)) => {
                     let _ = reply.send(());
@@ -653,6 +715,15 @@ async fn serve_ready_connection(
                     }
                 }
                 Ok(None) | Err(_) => return false,
+            },
+            _ = reason_receiver.changed() => {
+                let reasons = reason_receiver.borrow_and_update().clone();
+                let _ = events.send(BridgeActorEvent::Failover {
+                    state: "force_reconnect".to_owned(),
+                    reason: reasons.as_ref().and_then(|r| r.last().cloned()),
+                    connection_epoch,
+                });
+                return false;
             },
             _ = heartbeat_tick.tick() => {
                 if let Some((_, sent_at)) = &runtime.heartbeat
@@ -1027,6 +1098,8 @@ async fn delay_or_shutdown(
     receiver: &mut mpsc::Receiver<Command>,
     runtime: &mut Runtime,
     error: BridgeActorError,
+    events: &broadcast::Sender<BridgeActorEvent>,
+    reason_receiver: &mut watch::Receiver<Option<Vec<String>>>,
 ) -> bool {
     let sleep = tokio::time::sleep(delay);
     tokio::pin!(sleep);
@@ -1038,12 +1111,25 @@ async fn delay_or_shutdown(
                     let _ = reply.send(Err(error.clone()));
                 }
                 Some(Command::ServerMessage(_)) => {}
+                Some(Command::ForceReconnect { expected_epoch: _, reason: _, reply }) => {
+                    let _ = reply.send(false);
+                    return false;
+                }
                 #[cfg(test)]
                 Some(Command::Barrier(reply)) => {
                     let _ = reply.send(());
                 }
                 Some(Command::Shutdown) | None => return true,
-            }
+            },
+            _ = reason_receiver.changed() => {
+                let reasons = reason_receiver.borrow_and_update().clone();
+                let _ = events.send(BridgeActorEvent::Failover {
+                    state: "force_reconnect".to_owned(),
+                    reason: reasons.as_ref().and_then(|r| r.last().cloned()),
+                    connection_epoch: 0,
+                });
+                return false;
+            },
         }
         runtime.prune_tombstones(Instant::now());
     }

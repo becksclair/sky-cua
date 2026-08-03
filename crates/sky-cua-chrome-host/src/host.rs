@@ -4,6 +4,8 @@ use crate::app_server::{AppServerControlResult, AppServerManager};
 use crate::frame::{read_frame, write_frame};
 mod control_plane;
 mod control_plane_settlement;
+mod diagnostics;
+mod timing;
 
 use anyhow::{Context, Result, bail};
 use control_plane::*;
@@ -49,10 +51,20 @@ type SharedClientWriter = Arc<Mutex<UnixStream>>;
 #[derive(Clone)]
 struct Client {
     writer: SharedClientWriter,
+    /// A `try_clone` of the client socket used to break a stuck blocked writer
+    /// (peer stopped reading) via the shared file description, independent of
+    /// the writer mutex.
+    shutdown_handle: Option<Arc<UnixStream>>,
     role: ClientRole,
     daemon_generation: Option<String>,
     capabilities: HashSet<String>,
     connected_at: Instant,
+    /// Updated after every successfully read frame; the control-plane liveness
+    /// fence evicts a connected-but-silent peer against this.
+    last_seen_at: Instant,
+    /// Set by `request_client_close`; suppresses repeated shutdowns and
+    /// duplicate close diagnostics.
+    close_requested: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,10 +116,11 @@ struct HostState {
     pending_chrome_requests: HashMap<String, PendingChromeRequest>,
     pending_client_requests: HashMap<String, PendingClientRequest>,
     pending_id_tombstones: HashMap<String, Instant>,
-    queued_settlements: VecDeque<Value>,
+    queued_settlements: VecDeque<QueuedSettlement>,
     settlement_delivery_in_progress: bool,
     settlement_delivered_to: Option<usize>,
     settlement_delivered_at: Option<Instant>,
+    delivery_seq: u64,
     next_client_id: usize,
     next_chrome_id: u64,
     next_client_request_id: u64,
@@ -152,6 +165,7 @@ impl HostState {
             settlement_delivery_in_progress: false,
             settlement_delivered_to: None,
             settlement_delivered_at: None,
+            delivery_seq: 0,
             next_client_id: 1,
             next_chrome_id: 1,
             next_client_request_id: 1,
@@ -172,16 +186,24 @@ impl HostState {
     }
 
     fn add_client(&mut self, writer: SharedClientWriter) -> usize {
+        let shutdown_handle = writer
+            .lock()
+            .ok()
+            .and_then(|stream| stream.try_clone().ok())
+            .map(Arc::new);
         let id = self.next_client_id;
         self.next_client_id += 1;
         self.clients.insert(
             id,
             Client {
                 writer,
+                shutdown_handle,
                 role: ClientRole::Unknown,
                 daemon_generation: None,
                 capabilities: HashSet::new(),
                 connected_at: Instant::now(),
+                last_seen_at: Instant::now(),
+                close_requested: false,
             },
         );
         id
@@ -337,14 +359,18 @@ fn write_chrome_frame(stdout: &Arc<Mutex<io::Stdout>>, host_name: &str, message:
 /// Write a frame to a client socket. Must be called WITHOUT the host state lock
 /// held, for the same head-of-line reason as [`write_chrome_frame`]. A write
 /// error is non-fatal: the client's own reader thread observes the broken socket
-/// and deregisters it.
-fn write_client_frame(writer: &SharedClientWriter, host_name: &str, message: &Value) -> bool {
+/// and deregisters it. Returns the raw `io::ErrorKind` for delivery-error
+/// classification.
+fn write_client_frame(
+    writer: &SharedClientWriter,
+    host_name: &str,
+    message: &Value,
+) -> io::Result<()> {
     let mut writer = writer.lock().expect("client writer mutex poisoned");
-    if let Err(error) = write_frame(&mut *writer, message) {
+    write_frame(&mut *writer, message).map_err(|error| {
         log(host_name, &format!("client socket write error: {error}"));
-        return false;
-    }
-    true
+        error
+    })
 }
 
 #[derive(Clone)]
@@ -723,7 +749,9 @@ fn peer_cred(stream: &UnixStream) -> Result<PeerCred> {
 }
 
 fn close_client_socket(client: &Client) {
-    if let Ok(writer) = client.writer.lock() {
+    if let Some(handle) = &client.shutdown_handle {
+        let _ = handle.shutdown(Shutdown::Both);
+    } else if let Ok(writer) = client.writer.lock() {
         let _ = writer.shutdown(Shutdown::Both);
     }
 }
@@ -741,7 +769,15 @@ fn read_chrome_messages(state: SharedState) -> Result<()> {
 fn read_client_messages(state: SharedState, client_id: usize, mut stream: UnixStream) {
     loop {
         match read_frame(&mut stream) {
-            Ok(Some(message)) => handle_client_message(&state, client_id, message),
+            Ok(Some(message)) => {
+                {
+                    let mut state = state.lock().expect("host state mutex poisoned");
+                    if let Some(client) = state.clients.get_mut(&client_id) {
+                        client.last_seen_at = Instant::now();
+                    }
+                }
+                handle_client_message(&state, client_id, message);
+            }
             Ok(None) => break,
             Err(error) => {
                 log(
@@ -818,7 +854,7 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
             );
             close_client_socket(legacy_client);
         }
-        if write_client_frame(&writer, &host_name, &outcome.response) {
+        if write_client_frame(&writer, &host_name, &outcome.response).is_ok() {
             deliver_queued_settlements(state);
         }
         return;
@@ -835,7 +871,7 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         }) else {
             return;
         };
-        write_client_frame(&writer, &host_name, &response);
+        let _ = write_client_frame(&writer, &host_name, &response);
         return;
     }
 
@@ -874,7 +910,7 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
             }
         };
         if let Some((Some(writer), host_name, response)) = rejection {
-            write_client_frame(&writer, &host_name, &response);
+            let _ = write_client_frame(&writer, &host_name, &response);
             return;
         }
     }
@@ -899,7 +935,7 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         }) else {
             return;
         };
-        write_client_frame(
+        let _ = write_client_frame(
             &writer,
             &host_name,
             &json!({
@@ -961,7 +997,7 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         }) else {
             return;
         };
-        write_client_frame(
+        let _ = write_client_frame(
             &writer,
             &host_name,
             &json!({ "jsonrpc": "2.0", "id": id, "result": "pong" }),
@@ -1046,13 +1082,30 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
     }
 
     let (stdout, host_name, outbound) = {
-        let mut state = state.lock().expect("host state mutex poisoned");
-        if !state.clients.contains_key(&client_id) {
+        let mut guard = state.lock().expect("host state mutex poisoned");
+        if !guard.clients.contains_key(&client_id) {
             return;
         }
-        state.cleanup_old_requests();
-        let chrome_id = state.allocate_chrome_id();
-        state.pending_chrome_requests.insert(
+        guard.cleanup_old_requests();
+        // Re-check capacity under the same lock so a concurrent Chrome
+        // response handler cannot silently consume the last settlement
+        // slot between the admission check (line 1025) and this insert.
+        if let Some(ref meta) = settlement {
+            if meta.operation_class.requires_settlement() && !guard.settlement_capacity_available()
+            {
+                drop(guard);
+                reject_control_plane_request(
+                    state,
+                    client_id,
+                    &client_request_id,
+                    "sky_cua_host_settlement_capacity",
+                    "native-host settlement retention is full",
+                );
+                return;
+            }
+        }
+        let chrome_id = guard.allocate_chrome_id();
+        guard.pending_chrome_requests.insert(
             chrome_id.clone(),
             PendingChromeRequest {
                 client_id,
@@ -1062,7 +1115,7 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
                 state: PendingRequestState::Active,
             },
         );
-        let (stdout, host_name) = state.chrome_writer();
+        let (stdout, host_name) = guard.chrome_writer();
         (
             stdout,
             host_name,
@@ -1120,7 +1173,14 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
                     // A successful socket write is not application-level
                     // receipt. Keep every mutating completion until the actor
                     // acknowledges its exact settlement identity.
-                    state.queue_settlement(settlement);
+                    let metadata = pending
+                        .settlement
+                        .as_ref()
+                        .expect("retained settlement has metadata")
+                        .clone();
+                    if let Err(reason) = state.queue_settlement(metadata, settlement) {
+                        diagnostics::settlement_metadata_rejected(reason);
+                    }
                 }
                 ResponseRoute::Client {
                     writer: original_writer.expect("active pending client has writer"),
@@ -1135,7 +1195,9 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
                     &metadata,
                     Some(message),
                 );
-                state.queue_settlement(settlement);
+                if let Err(reason) = state.queue_settlement(metadata, settlement) {
+                    diagnostics::settlement_metadata_rejected(reason);
+                }
                 ResponseRoute::Queued
             } else {
                 ResponseRoute::Queued
@@ -1148,7 +1210,7 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
                 outbound,
                 retained_settlement,
             } => {
-                write_client_frame(&writer, &host_name, &outbound);
+                let _ = write_client_frame(&writer, &host_name, &outbound);
                 if retained_settlement {
                     deliver_queued_settlements(state);
                 }
@@ -1164,7 +1226,7 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
             (state.notification_client_writers(), state.host_name.clone())
         };
         for writer in writers {
-            write_client_frame(&writer, &host_name, &message);
+            let _ = write_client_frame(&writer, &host_name, &message);
         }
         return;
     }
@@ -1253,7 +1315,7 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
 
     match route {
         ChromeRoute::ToClient(writer, outbound) => {
-            write_client_frame(&writer, &host_name, &outbound);
+            let _ = write_client_frame(&writer, &host_name, &outbound);
         }
         ChromeRoute::RouteError(stdout, outbound) => {
             write_chrome_frame(&stdout, &host_name, &outbound)
@@ -2339,11 +2401,14 @@ mod tests {
     fn test_client_with_role(role: ClientRole) -> Client {
         let (stream, _peer) = UnixStream::pair().unwrap();
         Client {
+            shutdown_handle: stream.try_clone().ok().map(Arc::new),
             writer: Arc::new(Mutex::new(stream)),
             role,
             daemon_generation: (role == ClientRole::ControlPlane).then_some("daemon-1".to_string()),
             capabilities: HashSet::new(),
             connected_at: Instant::now(),
+            last_seen_at: Instant::now(),
+            close_requested: false,
         }
     }
 

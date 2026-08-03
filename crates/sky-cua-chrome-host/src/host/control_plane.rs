@@ -395,6 +395,7 @@ impl HostState {
         client.capabilities = negotiated_capabilities.clone();
         self.owner_mode = requested_mode;
         self.owner_daemon_generation = Some(daemon_generation.clone());
+        self.supersede_prior_generation_settlements(&daemon_generation);
 
         let mut negotiated_capabilities = negotiated_capabilities.into_iter().collect::<Vec<_>>();
         negotiated_capabilities.sort();
@@ -496,7 +497,7 @@ pub(super) fn reject_control_plane_request(
     }) else {
         return;
     };
-    write_client_frame(
+    let _ = write_client_frame(
         &writer,
         &host_name,
         &json!({

@@ -41,6 +41,68 @@ pub fn write_frame(writer: &mut impl Write, message: &serde_json::Value) -> io::
     writer.flush()
 }
 
+/// Write a full frame (length prefix + JSON body encoded into one contiguous
+/// buffer) under a total wall-clock deadline. Manual loop rather than
+/// `write_all`, because the caller cannot re-check a deadline inside
+/// `write_all`; each syscall gets the remaining budget as its socket write
+/// timeout, and the prior timeout is restored on every exit path so the final
+/// tiny remaining timeout cannot poison later writes.
+#[cfg(unix)]
+pub fn write_frame_until(
+    stream: &mut std::os::unix::net::UnixStream,
+    message: &serde_json::Value,
+    deadline: std::time::Instant,
+) -> io::Result<()> {
+    let body = serde_json::to_vec(message).map_err(io::Error::other)?;
+    if body.len() > u32::MAX as usize {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "message too large for 4-byte length prefix",
+        ));
+    }
+
+    let mut frame = Vec::with_capacity(4 + body.len());
+    frame.extend_from_slice(&(body.len() as u32).to_ne_bytes());
+    frame.extend_from_slice(&body);
+
+    let previous_timeout = stream.write_timeout()?;
+    let result = (|| {
+        let mut offset = 0;
+        while offset < frame.len() {
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .ok_or_else(write_deadline_exceeded)?;
+            if remaining.is_zero() {
+                return Err(write_deadline_exceeded());
+            }
+            stream.set_write_timeout(Some(remaining))?;
+            match stream.write(&frame[offset..]) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        ErrorKind::WriteZero,
+                        "write to native-host client returned zero bytes",
+                    ));
+                }
+                Ok(written) => offset += written,
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        stream.flush()
+    })();
+    match stream.set_write_timeout(previous_timeout) {
+        Ok(()) => result,
+        Err(error) => Err(error),
+    }
+}
+
+fn write_deadline_exceeded() -> io::Error {
+    io::Error::new(
+        ErrorKind::TimedOut,
+        "control-plane frame write deadline exceeded",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

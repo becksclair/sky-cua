@@ -2122,7 +2122,7 @@ async fn actor_event_lag_records_diagnostic_and_continues_processing() {
     assert!(events.iter().any(|event| matches!(
         &event.kind,
         BrowserControlEventKind::MigrationDiagnostic { code }
-            if code.starts_with("actor_event_lagged_fail_closed:")
+            if code.starts_with("actor_event_lagged_force_reconnect:")
     )));
     assert!(
         events

@@ -309,11 +309,21 @@ fn acknowledged_strict_release_restores_legacy_on_surviving_host_after_drain() {
         .unwrap()
         .add_client(Arc::new(Mutex::new(legacy_writer)));
 
+    let metadata = test_settlement_metadata("operation-blocked");
     state
         .lock()
         .unwrap()
-        .queued_settlements
-        .push_back(json!({ "method": SKY_CUA_HOST_SETTLEMENT_METHOD }));
+        .queue_settlement(
+            metadata.clone(),
+            settlement_message(
+                "completed",
+                "chrome-blocked",
+                &json!("actor-request-blocked"),
+                &metadata,
+                None,
+            ),
+        )
+        .unwrap();
     handle_client_message(
         &state,
         control_plane_id,
@@ -849,11 +859,14 @@ fn test_client() -> Client {
 fn test_client_with_role(role: ClientRole) -> Client {
     let (stream, _peer) = UnixStream::pair().unwrap();
     Client {
+        shutdown_handle: stream.try_clone().ok().map(Arc::new),
         writer: Arc::new(Mutex::new(stream)),
         role,
         daemon_generation: (role == ClientRole::ControlPlane).then_some("daemon-1".to_string()),
         capabilities: HashSet::new(),
         connected_at: Instant::now(),
+        last_seen_at: Instant::now(),
+        close_requested: false,
     }
 }
 
@@ -903,4 +916,19 @@ fn test_host_state() -> HostState {
         Arc::clone(&stdout),
         RolloutTracker::without_worker("com.openai.codexextension".to_string(), stdout, None),
     )
+}
+
+fn test_settlement_metadata(operation_id: &str) -> SettlementMetadata {
+    SettlementMetadata {
+        operation_id: operation_id.to_string(),
+        daemon_generation: "daemon-1".to_string(),
+        actor_generation: json!(7),
+        target_lifetime_key: Some(json!({
+            "browser_instance_id": "browser-1",
+            "tab_id": 42,
+            "target_lifetime": "target-1"
+        })),
+        operation_class: OperationClass::Mutation,
+        settlement_deadline_ms: unix_epoch_ms() + 60_000,
+    }
 }

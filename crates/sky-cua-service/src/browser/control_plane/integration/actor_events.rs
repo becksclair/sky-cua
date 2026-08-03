@@ -19,6 +19,7 @@ fn spawn_actor_event_receiver(
     control: ControlPlane,
 ) {
     tokio::spawn(async move {
+        let mut blocked_until_epoch: u64 = 0;
         loop {
             let event = match tokio::select! {
                 biased;
@@ -27,12 +28,19 @@ fn spawn_actor_event_receiver(
             } {
                 Ok(event) => event,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    let epoch = actor.health().connection_epoch;
                     control.events.record(
                         BrowserControlEventKind::MigrationDiagnostic {
-                            code: format!("actor_event_lagged_fail_closed:{skipped}"),
+                            code: format!("actor_event_lagged_force_reconnect:{skipped}"),
                         },
                         super::super::introspection::EventContext::default(),
                     );
+                    if actor
+                        .request_reconnect(epoch, format!("actor_event_lagged_force_reconnect"))
+                        .await
+                    {
+                        blocked_until_epoch = epoch.wrapping_add(1);
+                    }
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -55,7 +63,26 @@ fn spawn_actor_event_receiver(
                         )
                         .await
                     {
-                        let _ = actor.acknowledge_settlement(&message).await;
+                        let epoch = actor.health().connection_epoch;
+                        let barrier_cleared = epoch > blocked_until_epoch
+                            && actor.health().state == BridgeActorState::Ready;
+                        if barrier_cleared {
+                            if let Err(error) = actor.acknowledge_settlement(&message).await {
+                                control.events.record(
+                                    BrowserControlEventKind::MigrationDiagnostic {
+                                        code: format!("settlement_ack_failed:{epoch}:{:?}", error),
+                                    },
+                                    super::super::introspection::EventContext::default(),
+                                );
+                                if actor
+                                    .request_reconnect(epoch, "settlement_ack_failed".to_owned())
+                                    .await
+                                {
+                                    blocked_until_epoch = epoch.wrapping_add(1);
+                                }
+                                continue;
+                            }
+                        }
                     }
                 }
                 BridgeActorEvent::SettlementUnknown(message) => {
@@ -69,7 +96,26 @@ fn spawn_actor_event_receiver(
                         )
                         .await
                     {
-                        let _ = actor.acknowledge_settlement(&message).await;
+                        let epoch = actor.health().connection_epoch;
+                        let barrier_cleared = epoch > blocked_until_epoch
+                            && actor.health().state == BridgeActorState::Ready;
+                        if barrier_cleared {
+                            if let Err(error) = actor.acknowledge_settlement(&message).await {
+                                control.events.record(
+                                    BrowserControlEventKind::MigrationDiagnostic {
+                                        code: format!("settlement_ack_failed:{epoch}:{:?}", error),
+                                    },
+                                    super::super::introspection::EventContext::default(),
+                                );
+                                if actor
+                                    .request_reconnect(epoch, "settlement_ack_failed".to_owned())
+                                    .await
+                                {
+                                    blocked_until_epoch = epoch.wrapping_add(1);
+                                }
+                                continue;
+                            }
+                        }
                     }
                 }
                 BridgeActorEvent::BrowserLost {
@@ -114,7 +160,9 @@ fn spawn_actor_event_receiver(
                 } => {
                     settle_late_response(&control, &shared, child_id, response).await;
                 }
-                BridgeActorEvent::State(_) | BridgeActorEvent::LateResponse { .. } => {}
+                BridgeActorEvent::State(_)
+                | BridgeActorEvent::LateResponse { .. }
+                | BridgeActorEvent::Failover { .. } => {}
             }
         }
     });
@@ -309,6 +357,12 @@ fn record_actor_event(control: &ControlPlane, event: &BridgeActorEvent) {
                     "browser_lost_connection_identity"
                 }
                 .to_owned(),
+            },
+            None,
+        ),
+        BridgeActorEvent::Failover { state, .. } => (
+            BrowserControlEventKind::Failover {
+                state: state.clone(),
             },
             None,
         ),

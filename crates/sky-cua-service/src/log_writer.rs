@@ -24,9 +24,18 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use sky_cua_platform::log_rotation::{DAEMON_LOG_ROTATE_BYTES, guarded_rotate_oversized};
+use sky_cua_platform::log_rotation::{guarded_rotate_oversized, DAEMON_LOG_ROTATE_BYTES};
 use tracing_subscriber::fmt::MakeWriter;
+
+/// Check the log inode every N writes (or wallclock seconds) so the daemon
+/// reopens its append handle after an external rename rather than silently
+/// appending to the now-unlinked inode.
+#[cfg(unix)]
+const ROTATING_LOG_INODE_CHECK_INTERVAL: u64 = 1024;
+#[cfg(unix)]
+const ROTATING_LOG_INODE_CHECK_WALLCLOCK: Duration = Duration::from_secs(10);
 
 /// A `MakeWriter` that appends tracing output to a fixed log path and rotates it
 /// in place once it exceeds the cap. Cheap to clone (shares one locked handle).
@@ -44,6 +53,12 @@ struct Inner {
     /// Cached running byte count of `file`, kept so the hot path never stats.
     bytes: u64,
     cap: u64,
+    /// Write count since the last inode staleness check.
+    #[cfg(unix)]
+    inode_write_count: u64,
+    /// Wall clock of the last inode staleness check.
+    #[cfg(unix)]
+    inode_last_check: Instant,
     /// Re-point fd 2 at every fresh log handle so panic output and the stderr
     /// fallback follow the live log across rotations (the inherited stderr fd
     /// stays bound to the pre-rotation inode otherwise). Production-only: the
@@ -76,6 +91,10 @@ impl RotatingLog {
             file: None,
             bytes: 0,
             cap,
+            #[cfg(unix)]
+            inode_write_count: 0,
+            #[cfg(unix)]
+            inode_last_check: Instant::now(),
             #[cfg(unix)]
             redirect_stderr: _redirect_stderr,
         };
@@ -153,6 +172,88 @@ impl Inner {
         }
     }
 
+    /// Reopen the log fd when the inode has been replaced externally. Unlike
+    /// the rotation reopen, on failure we keep the old fd so writes continue
+    /// landing somewhere (even if the path has moved) rather than falling back
+    /// to stderr. Returns whether a fresh handle was obtained.
+    #[cfg(unix)]
+    fn reopen_if_stale(&mut self) -> bool {
+        match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
+            Ok(file) => {
+                let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+                self.adopt(file, len);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Check whether the open file handle still points at the same file as the
+    /// path. If an external rename replaced the on-disk file (while our handle
+    /// still appends to the old inode), reopen a new handle to the fresh file.
+    ///
+    /// The check fires at most once every N writes OR every 10s of wall clock,
+    /// whichever comes first, so the hot path adds at most a counter compare and
+    /// a saturating duration check — no syscall — between most events.
+    ///
+    /// On Unix the comparison uses (dev, ino). On non-Unix this is a no-op.
+    fn check_stale_inode(&mut self) {
+        #[cfg(unix)]
+        {
+            let Some(file) = self.file.as_ref() else {
+                return;
+            };
+
+            let now = Instant::now();
+            let since_check = now.saturating_duration_since(self.inode_last_check);
+            if self.inode_write_count < ROTATING_LOG_INODE_CHECK_INTERVAL
+                && since_check < ROTATING_LOG_INODE_CHECK_WALLCLOCK
+            {
+                return;
+            }
+
+            use std::os::unix::fs::MetadataExt;
+            let file_meta = match file.metadata() {
+                Ok(m) => m,
+                Err(_) => return,
+            };
+            let path_meta = match std::fs::metadata(&self.path) {
+                Ok(m) => m,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    self.emit_stale_diagnostic();
+                    self.reopen_if_stale();
+                    return;
+                }
+                Err(_) => return,
+            };
+
+            if file_meta.dev() != path_meta.dev() || file_meta.ino() != path_meta.ino() {
+                self.emit_stale_diagnostic();
+                self.reopen_if_stale();
+            }
+
+            self.inode_write_count = 0;
+            self.inode_last_check = now;
+        }
+        #[cfg(not(unix))]
+        {}
+    }
+
+    #[cfg(unix)]
+    fn emit_stale_diagnostic(&self) {
+        let path_str = self.path.to_string_lossy();
+        let escaped = serde_json::to_string(&path_str.as_ref())
+            .unwrap_or_else(|_| format!("\"{}\"", path_str));
+        eprintln!(
+            "{{\"type\":\"sky_cua_log_reopened_after_external_rename\",\"path\":{}}}",
+            escaped
+        );
+    }
+
     /// Install a fresh handle (and byte count), re-pointing fd 2 at it when
     /// stderr redirection is enabled so panics keep landing in the live log.
     fn adopt(&mut self, file: File, len: u64) {
@@ -182,12 +283,17 @@ impl Inner {
         if self.bytes > self.cap {
             self.rotate();
         }
+        self.check_stale_inode();
         let Some(file) = self.file.as_mut() else {
             return false;
         };
         match file.write_all(buf) {
             Ok(()) => {
                 self.bytes = self.bytes.saturating_add(buf.len() as u64);
+                #[cfg(unix)]
+                {
+                    self.inode_write_count = self.inode_write_count.saturating_add(1);
+                }
                 true
             }
             Err(_) => {
@@ -359,5 +465,126 @@ mod tests {
         write(&log, b"event\n");
 
         assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rotating_log_reopens_after_external_rename() {
+        let dir = temp_dir("rename-reopen");
+        let path = dir.join("daemon-service.log");
+        let renamed = dir.join("daemon-service.log.renamed");
+
+        let log = RotatingLog::with_cap(path.clone(), 65536);
+
+        // Write 1024 times. Each write checks `inode_write_count < 1024` before
+        // incrementing, so the check never fires during the loop — at the end
+        // `inode_write_count` is 1024 but the threshold never triggered. Push
+        // the counter to 1023 and age the wall-clock so the next write fires
+        // the wall-clock check.
+        for _ in 0..1024 {
+            write(&log, b"x\n");
+        }
+        {
+            let mut guard = log.inner.lock().unwrap();
+            guard.inode_write_count = 1023;
+            guard.inode_last_check = Instant::now() - Duration::from_secs(11);
+        }
+
+        // Verify the inode check correctly detects the stale handle
+        // and reopens.
+        std::fs::rename(&path, &renamed).unwrap();
+
+        // This write triggers the inode check, detects the stale inode,
+        // and reopens a fresh handle at the original path.
+        write(&log, b"post-rename\n");
+
+        let old_data = std::fs::read_to_string(&renamed).unwrap();
+        assert_eq!(old_data.lines().filter(|l| *l == "x").count(), 1024);
+
+        let new_data = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(new_data, "post-rename\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rotating_log_reopens_at_low_event_rate() {
+        let dir = temp_dir("low-rate-reopen");
+        let path = dir.join("daemon-service.log");
+        let renamed = dir.join("daemon-service.log.renamed");
+
+        let log = RotatingLog::with_cap(path.clone(), 65536);
+        write(&log, b"first\n");
+
+        // Push the last-check timestamp far enough back that the wall-clock
+        // branch triggers on the next write regardless of the write count.
+        {
+            let mut guard = log.inner.lock().unwrap();
+            guard.inode_last_check = Instant::now() - Duration::from_secs(11);
+        }
+
+        std::fs::rename(&path, &renamed).unwrap();
+        write(&log, b"post-rename\n");
+
+        let old_data = std::fs::read_to_string(&renamed).unwrap();
+        assert_eq!(old_data, "first\n");
+
+        let new_data = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(new_data, "post-rename\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rotating_log_revalidates_before_first_post_quiet_write() {
+        let dir = temp_dir("pre-quiet");
+        let path = dir.join("daemon-service.log");
+        let renamed = dir.join("daemon-service.log.renamed");
+
+        let log = RotatingLog::with_cap(path.clone(), 65536);
+        write(&log, b"before\n");
+
+        // Age last-check so the wall-clock branch fires on the next write.
+        {
+            let mut guard = log.inner.lock().unwrap();
+            guard.inode_last_check = Instant::now() - Duration::from_secs(11);
+        }
+
+        std::fs::rename(&path, &renamed).unwrap();
+        write(&log, b"after\n");
+
+        // The "after" write should have landed in a fresh file at the original
+        // path, proving the check ran before the append.
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(after, "after\n");
+        assert!(std::fs::read_to_string(&renamed)
+            .unwrap()
+            .contains("before"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rotating_log_handles_path_temporarily_missing() {
+        let dir = temp_dir("missing-path");
+        let path = dir.join("daemon-service.log");
+
+        let log = RotatingLog::with_cap(path.clone(), 65536);
+        write(&log, b"existing\n");
+        assert!(path.exists());
+
+        // Remove the file entirely (no rename — the path disappears).
+        std::fs::remove_file(&path).unwrap();
+
+        // Force an inode check on the next write.
+        {
+            let mut guard = log.inner.lock().unwrap();
+            guard.inode_write_count = 1023;
+            guard.inode_last_check = Instant::now() - Duration::from_secs(11);
+        }
+
+        // The check sees NotFound → reopens a fresh file at the path.
+        write(&log, b"recreated\n");
+
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "recreated\n");
     }
 }
