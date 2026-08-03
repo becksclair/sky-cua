@@ -1090,19 +1090,19 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         // Re-check capacity under the same lock so a concurrent Chrome
         // response handler cannot silently consume the last settlement
         // slot between the admission check (line 1025) and this insert.
-        if let Some(ref meta) = settlement {
-            if meta.operation_class.requires_settlement() && !guard.settlement_capacity_available()
-            {
-                drop(guard);
-                reject_control_plane_request(
-                    state,
-                    client_id,
-                    &client_request_id,
-                    "sky_cua_host_settlement_capacity",
-                    "native-host settlement retention is full",
-                );
-                return;
-            }
+        if let Some(ref meta) = settlement
+            && meta.operation_class.requires_settlement()
+            && !guard.settlement_capacity_available()
+        {
+            drop(guard);
+            reject_control_plane_request(
+                state,
+                client_id,
+                &client_request_id,
+                "sky_cua_host_settlement_capacity",
+                "native-host settlement retention is full",
+            );
+            return;
         }
         let chrome_id = guard.allocate_chrome_id();
         guard.pending_chrome_requests.insert(

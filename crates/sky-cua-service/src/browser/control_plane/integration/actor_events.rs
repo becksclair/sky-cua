@@ -36,7 +36,7 @@ fn spawn_actor_event_receiver(
                         super::super::introspection::EventContext::default(),
                     );
                     if actor
-                        .request_reconnect(epoch, format!("actor_event_lagged_force_reconnect"))
+                        .request_reconnect(epoch, "actor_event_lagged_force_reconnect".to_string())
                         .await
                     {
                         blocked_until_epoch = epoch.wrapping_add(1);
@@ -66,22 +66,22 @@ fn spawn_actor_event_receiver(
                         let epoch = actor.health().connection_epoch;
                         let barrier_cleared = epoch > blocked_until_epoch
                             && actor.health().state == BridgeActorState::Ready;
-                        if barrier_cleared {
-                            if let Err(error) = actor.acknowledge_settlement(&message).await {
-                                control.events.record(
-                                    BrowserControlEventKind::MigrationDiagnostic {
-                                        code: format!("settlement_ack_failed:{epoch}:{:?}", error),
-                                    },
-                                    super::super::introspection::EventContext::default(),
-                                );
-                                if actor
-                                    .request_reconnect(epoch, "settlement_ack_failed".to_owned())
-                                    .await
-                                {
-                                    blocked_until_epoch = epoch.wrapping_add(1);
-                                }
-                                continue;
+                        if barrier_cleared
+                            && let Err(error) = actor.acknowledge_settlement(&message).await
+                        {
+                            control.events.record(
+                                BrowserControlEventKind::MigrationDiagnostic {
+                                    code: format!("settlement_ack_failed:{epoch}:{:?}", error),
+                                },
+                                super::super::introspection::EventContext::default(),
+                            );
+                            if actor
+                                .request_reconnect(epoch, "settlement_ack_failed".to_owned())
+                                .await
+                            {
+                                blocked_until_epoch = epoch.wrapping_add(1);
                             }
+                            continue;
                         }
                     }
                 }
@@ -99,22 +99,22 @@ fn spawn_actor_event_receiver(
                         let epoch = actor.health().connection_epoch;
                         let barrier_cleared = epoch > blocked_until_epoch
                             && actor.health().state == BridgeActorState::Ready;
-                        if barrier_cleared {
-                            if let Err(error) = actor.acknowledge_settlement(&message).await {
-                                control.events.record(
-                                    BrowserControlEventKind::MigrationDiagnostic {
-                                        code: format!("settlement_ack_failed:{epoch}:{:?}", error),
-                                    },
-                                    super::super::introspection::EventContext::default(),
-                                );
-                                if actor
-                                    .request_reconnect(epoch, "settlement_ack_failed".to_owned())
-                                    .await
-                                {
-                                    blocked_until_epoch = epoch.wrapping_add(1);
-                                }
-                                continue;
+                        if barrier_cleared
+                            && let Err(error) = actor.acknowledge_settlement(&message).await
+                        {
+                            control.events.record(
+                                BrowserControlEventKind::MigrationDiagnostic {
+                                    code: format!("settlement_ack_failed:{epoch}:{:?}", error),
+                                },
+                                super::super::introspection::EventContext::default(),
+                            );
+                            if actor
+                                .request_reconnect(epoch, "settlement_ack_failed".to_owned())
+                                .await
+                            {
+                                blocked_until_epoch = epoch.wrapping_add(1);
                             }
+                            continue;
                         }
                     }
                 }

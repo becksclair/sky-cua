@@ -1427,7 +1427,7 @@ fn fence_unresponsive_control_plane_no_op_when_last_seen_fresh() {
 
 #[test]
 fn fence_then_reader_eof_then_same_generation_hello_accepts() {
-    let (mut peer, writer_stream) = UnixStream::pair().unwrap();
+    let (peer, writer_stream) = UnixStream::pair().unwrap();
     let mut host = test_host_state();
     let metadata = test_settlement_metadata("operation-fence-reconnect");
     host.queue_settlement(
@@ -1463,7 +1463,7 @@ fn fence_then_reader_eof_then_same_generation_hello_accepts() {
     assert!(host.active_control_plane().is_none());
 
     // A new client connects with the same daemon generation.
-    let (mut new_peer, new_writer) = UnixStream::pair().unwrap();
+    let (new_peer, new_writer) = UnixStream::pair().unwrap();
     let new_id = host.add_client(Arc::new(Mutex::new(new_writer)));
     let outcome = host.handle_host_hello(
         new_id,

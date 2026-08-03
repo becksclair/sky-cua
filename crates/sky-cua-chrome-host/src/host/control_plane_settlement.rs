@@ -310,8 +310,7 @@ impl HostState {
                 if let Some(metadata) = request
                     .settlement
                     .filter(|metadata| metadata.operation_class.requires_settlement())
-                {
-                    if let Err(reason) = self.queue_settlement(
+                    && let Err(reason) = self.queue_settlement(
                         metadata.clone(),
                         settlement_message(
                             "settlement_unknown",
@@ -320,9 +319,9 @@ impl HostState {
                             &metadata,
                             None,
                         ),
-                    ) {
-                        diagnostics::settlement_metadata_rejected(reason);
-                    }
+                    )
+                {
+                    diagnostics::settlement_metadata_rejected(reason);
                 }
             }
         }
@@ -847,7 +846,7 @@ fn deliver_settlement_frame(
         }
     };
     let deadline = Instant::now() + CONTROL_PLANE_FRAME_WRITE_DEADLINE;
-    match write_frame_until(&mut *writer, message, deadline) {
+    match write_frame_until(&mut writer, message, deadline) {
         Ok(()) => true,
         Err(error) => {
             diagnostics::control_plane_socket_closed_delivery_failure(
