@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use sky_cua_platform::log_rotation::{guarded_rotate_oversized, DAEMON_LOG_ROTATE_BYTES};
+use sky_cua_platform::log_rotation::{DAEMON_LOG_ROTATE_BYTES, guarded_rotate_oversized};
 use tracing_subscriber::fmt::MakeWriter;
 
 /// Check the log inode every N writes (or wallclock seconds) so the daemon
@@ -555,9 +555,11 @@ mod tests {
         // path, proving the check ran before the append.
         let after = std::fs::read_to_string(&path).unwrap();
         assert_eq!(after, "after\n");
-        assert!(std::fs::read_to_string(&renamed)
-            .unwrap()
-            .contains("before"));
+        assert!(
+            std::fs::read_to_string(&renamed)
+                .unwrap()
+                .contains("before")
+        );
     }
 
     #[cfg(unix)]
