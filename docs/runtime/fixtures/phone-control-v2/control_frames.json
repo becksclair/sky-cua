@@ -1,0 +1,11 @@
+{
+  "valid": [
+    "{\"device_id\":\"device-fixture\",\"expires_at_ms\":2000,\"idempotent\":false,\"link_epoch\":4,\"method\":\"ui.tap\",\"params\":{\"x\":1,\"y\":2},\"request_id\":\"request-1\",\"type\":\"request\"}"
+  ],
+  "invalid": [
+    {"name": "missing_device_id", "expected_error": "missing_field", "json": "{\"type\":\"request\",\"request_id\":\"request-1\",\"link_epoch\":4}"},
+    {"name": "old_epoch", "expected_error": "old_epoch", "json": "{\"type\":\"request\",\"device_id\":\"device-fixture\",\"request_id\":\"request-1\",\"link_epoch\":3,\"idempotent\":false}"},
+    {"name": "replay_non_idempotent", "expected_error": "replay_non_idempotent", "json": "{\"type\":\"request\",\"device_id\":\"device-fixture\",\"request_id\":\"request-1\",\"link_epoch\":4,\"idempotent\":false}"},
+    {"name": "wrong_role", "expected_error": "wrong_role", "json": "{\"type\":\"auth_proof\",\"role\":\"operator\"}"}
+  ]
+}

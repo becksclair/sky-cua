@@ -47,6 +47,7 @@ pub(super) fn browser_point_properties() -> Value {
     merge_properties(
         browser_tab_properties(),
         json!({
+            "appshot_id": non_blank_string_schema(),
             "x": {"type": "number", "minimum": 0, "description": "CSS pixel x coordinate."},
             "y": {"type": "number", "minimum": 0, "description": "CSS pixel y coordinate."},
             "wait_for_arrival": optional_bool_schema(json!({
@@ -89,6 +90,7 @@ pub(super) fn browser_input_properties() -> Value {
     merge_properties(
         browser_xy_properties(),
         json!({
+            "appshot_id": non_blank_string_schema(),
             "operation": {"type": "string", "enum": ["click", "type_text", "press_key"]},
             "text": non_empty_string_schema(),
             "key": non_blank_string_schema(),
@@ -107,8 +109,8 @@ pub(super) fn browser_input_constraints() -> Value {
                 // ({ref}); exactly one of the two is required.
                 (
                     vec![("operation", "click")],
-                    &["tab_id"][..],
-                    &["operation", "target", "tab_id", "x", "y", "ref"][..],
+                    &["tab_id", "appshot_id"][..],
+                    &["operation", "target", "tab_id", "appshot_id", "x", "y", "ref"][..],
                     Some(json!({
                         "oneOf": [
                             {"required": ["x", "y"]},
@@ -120,14 +122,14 @@ pub(super) fn browser_input_constraints() -> Value {
                 // type into that element, absent => the current focus).
                 (
                     vec![("operation", "type_text")],
-                    &["tab_id", "text"][..],
-                    &["operation", "target", "tab_id", "text", "ref"][..],
+                    &["tab_id", "appshot_id", "text"][..],
+                    &["operation", "target", "tab_id", "appshot_id", "text", "ref"][..],
                     None,
                 ),
                 (
                     vec![("operation", "press_key")],
-                    &["tab_id", "key"][..],
-                    &["operation", "target", "tab_id", "key"][..],
+                    &["tab_id", "appshot_id", "key"][..],
+                    &["operation", "target", "tab_id", "appshot_id", "key"][..],
                     None,
                 ),
             ],
@@ -139,6 +141,7 @@ pub(super) fn browser_scroll_properties() -> Value {
     merge_properties(
         browser_optional_xy_properties(),
         json!({
+            "appshot_id": non_blank_string_schema(),
             "delta_x": {"type": "number", "description": "Horizontal wheel delta in CSS pixels; at least one delta must be non-zero."},
             "delta_y": {"type": "number", "description": "Vertical wheel delta in CSS pixels; at least one delta must be non-zero."}
         }),

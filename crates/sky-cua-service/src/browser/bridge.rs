@@ -1,10 +1,17 @@
+use base64::Engine as _;
+use sha2::{Digest, Sha256};
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{fs, path::Path};
 
+use sky_cua_platform::appshot_artifacts_dir;
 use sky_cua_platform::model::{
-    BrowserActionResponse, BrowserClaimTabResponse, BrowserEvalResponse, BrowserListTabsResponse,
-    BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse,
-    BrowserScreenshotResponse, BrowserSessionIdentity, BrowserSnapshotResponse, BrowserTargetKind,
-    DiagnosticEntry, normalize_browser_open_url,
+    AppShotActionSnapshot, AppShotCapture, AppShotConsistency, AppShotCoverage, AppShotEnvelope,
+    AppShotTrigger, BrowserActionResponse, BrowserAppShotResponse, BrowserClaimTabResponse,
+    BrowserEvalResponse, BrowserListTabsResponse, BrowserMoveMouseResponse,
+    BrowserNavigateResponse, BrowserOpenResponse, BrowserScreenshotResponse,
+    BrowserSessionIdentity, BrowserSnapshotResponse, BrowserTargetKind, ContentPersistence,
+    ContentRef, ContentSource, DiagnosticEntry, PixelSize, normalize_browser_open_url,
 };
 use tokio::time::Instant as TokioInstant;
 
@@ -205,6 +212,7 @@ pub(crate) async fn open_tab_with_identity(
             return BrowserOpenResponse {
                 target: resolved_target,
                 tab: None,
+                destination_appshot: None,
                 diagnostics: vec![diagnostic],
             };
         }
@@ -219,6 +227,7 @@ pub(crate) async fn open_tab_with_identity(
             return BrowserOpenResponse {
                 target: resolved_target,
                 tab: None,
+                destination_appshot: None,
                 diagnostics: vec![diagnostic],
             };
         }
@@ -229,6 +238,7 @@ pub(crate) async fn open_tab_with_identity(
         Err(diagnostic) => BrowserOpenResponse {
             target: resolved_target,
             tab: None,
+            destination_appshot: None,
             diagnostics: vec![diagnostic],
         },
     }
@@ -351,6 +361,7 @@ pub(crate) async fn navigate_with_identity(
             target: resolved_target,
             tab_id: normalized_tab_id,
             url: normalized_url,
+            destination_appshot: None,
             diagnostics,
         };
     }
@@ -369,6 +380,7 @@ pub(crate) async fn navigate_with_identity(
             target: resolved_target,
             tab_id: normalized_tab_id,
             url,
+            destination_appshot: None,
             diagnostics: Vec::new(),
         },
         Ok(_) => unreachable!("navigate action returns navigate result"),
@@ -376,6 +388,7 @@ pub(crate) async fn navigate_with_identity(
             target: resolved_target,
             tab_id: normalized_tab_id,
             url: normalized_url,
+            destination_appshot: None,
             diagnostics: vec![diagnostic],
         },
     }
@@ -438,6 +451,412 @@ pub(crate) async fn snapshot_with_identity(
             diagnostics: vec![diagnostic],
         },
     }
+}
+
+pub(crate) async fn observe_appshot_with_identity(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    text_limit: Option<usize>,
+    element_limit: Option<usize>,
+    include_image_data: bool,
+    identity: Option<BrowserSessionIdentity>,
+) -> BrowserAppShotResponse {
+    let fallback_tab = tab_id.clone();
+    match tokio::time::timeout(
+        Duration::from_secs(2),
+        observe_appshot_with_identity_inner(
+            target,
+            tab_id,
+            text_limit,
+            element_limit,
+            include_image_data,
+            identity.clone(),
+        ),
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(_) => BrowserAppShotResponse {
+            appshot: AppShotEnvelope {
+                appshot_id: uuid::Uuid::new_v4().to_string(),
+                trigger: AppShotTrigger::Observe,
+                captured_at: chrono::Utc::now(),
+                consistency: AppShotConsistency::Partial,
+                capture: AppShotCapture::Browser {
+                    tab_id: fallback_tab,
+                    url: String::new(),
+                    title: None,
+                    viewport: PixelSize {
+                        width: 0,
+                        height: 0,
+                    },
+                    document_generation: 0,
+                    semantic_snapshot: serde_json::json!({}),
+                },
+                image: ContentRef {
+                    content_id: uuid::Uuid::new_v4().to_string(),
+                    device_id: None,
+                    link_epoch: None,
+                    mime_type: "application/octet-stream".into(),
+                    filename: None,
+                    size_bytes: 0,
+                    sha256: "00".repeat(32),
+                    source: ContentSource::Screenshot,
+                    expires_at_ms: None,
+                    persistence: ContentPersistence::Temporary,
+                },
+                action_snapshot: AppShotActionSnapshot {
+                    snapshot_id: uuid::Uuid::new_v4().to_string(),
+                    session_id: identity.map(|value| value.session_id),
+                    subject_generation: None,
+                },
+                coverage: AppShotCoverage {
+                    pixels_complete: false,
+                    semantics_complete: false,
+                    secure_regions_redacted: false,
+                    projection_truncated: false,
+                    total_semantic_nodes: None,
+                    projected_semantic_nodes: None,
+                },
+                capability_profile_id: "browser-v1".into(),
+                diagnostics: vec![DiagnosticEntry {
+                    code: "BrowserCaptureDeadlineExceeded".into(),
+                    message: "Browser AppShot capture exceeded its two-second aggregate deadline."
+                        .into(),
+                    details: None,
+                }],
+            },
+            image_data_base64: String::new(),
+            image_mime_type: "application/octet-stream".into(),
+        },
+    }
+}
+
+async fn observe_appshot_with_identity_inner(
+    target: Option<BrowserTargetKind>,
+    tab_id: String,
+    text_limit: Option<usize>,
+    element_limit: Option<usize>,
+    include_image_data: bool,
+    identity: Option<BrowserSessionIdentity>,
+) -> BrowserAppShotResponse {
+    let target = target.unwrap_or(BrowserTargetKind::UserChrome);
+    let tab_id = tab_id.trim().to_string();
+    let mut last: Option<AppShotEnvelope> = None;
+    for attempt in 0..2 {
+        let snapshot = snapshot_with_identity(
+            Some(target),
+            tab_id.clone(),
+            text_limit,
+            None,
+            element_limit,
+            None,
+            identity.clone(),
+        )
+        .await;
+        let screenshot = screenshot_with_identity(
+            Some(target),
+            tab_id.clone(),
+            include_image_data,
+            identity.clone(),
+        )
+        .await;
+        // Fence the capture against navigation/document replacement: a second
+        // semantic read after pixels must agree on URL and viewport before the
+        // envelope can claim stable consistency.
+        let after = snapshot_with_identity(
+            Some(target),
+            tab_id.clone(),
+            Some(0),
+            None,
+            Some(0),
+            None,
+            identity.clone(),
+        )
+        .await;
+        let url = snapshot.url.clone().unwrap_or_default();
+        let width = screenshot.width.unwrap_or(0);
+        let height = screenshot.height.unwrap_or(0);
+        let bytes = if !screenshot.data_base64.is_empty() {
+            base64::engine::general_purpose::STANDARD
+                .decode(&screenshot.data_base64)
+                .unwrap_or_default()
+        } else {
+            screenshot
+                .screenshot_path
+                .as_deref()
+                .and_then(|path| fs::read(path).ok())
+                .unwrap_or_default()
+        };
+        let semantic_viewport = snapshot
+            .snapshot
+            .as_ref()
+            .and_then(|value| value.get("viewport"));
+        let viewport_matches = semantic_viewport
+            .and_then(|value| value.get("width"))
+            .and_then(|value| value.as_u64())
+            .zip(
+                semantic_viewport
+                    .and_then(|value| value.get("height"))
+                    .and_then(|value| value.as_u64()),
+            )
+            .is_some_and(|(width, height)| {
+                Some(width as u32) == screenshot.width && Some(height as u32) == screenshot.height
+            });
+        let decoded_dimensions = image::load_from_memory(&bytes)
+            .ok()
+            .map(|image| (image.width(), image.height()));
+        let image_matches_viewport = decoded_dimensions.is_some_and(|(width, height)| {
+            Some(width) == screenshot.width && Some(height) == screenshot.height
+        });
+        let mut hasher = Sha256::new();
+        hasher.update(
+            snapshot
+                .snapshot
+                .as_ref()
+                .and_then(|v| v.get("documentGeneration"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(&url)
+                .as_bytes(),
+        );
+        let digest = hasher.finalize();
+        let generation = u64::from_le_bytes(digest[..8].try_into().unwrap_or([0; 8]));
+        let mut diagnostics = snapshot.diagnostics.clone();
+        diagnostics.extend(screenshot.diagnostics.clone());
+        let mut consistency = classify_document_capture(
+            snapshot.url.as_deref(),
+            after.url.as_deref(),
+            snapshot.snapshot.as_ref(),
+            after.snapshot.as_ref(),
+            screenshot.diagnostics.is_empty()
+                && !bytes.is_empty()
+                && viewport_matches
+                && image_matches_viewport
+                && semantic_viewport
+                    == after
+                        .snapshot
+                        .as_ref()
+                        .and_then(|value| value.get("viewport"))
+                && screenshot.target == target
+                && snapshot.target == target
+                && screenshot.tab_id == tab_id
+                && snapshot.tab_id == tab_id,
+            attempt,
+        );
+        if consistency == AppShotConsistency::ChangedDuringCapture {
+            diagnostics.push(DiagnosticEntry {
+                code: "ChangedDuringCapture".into(),
+                message: "Browser document changed while capturing pixels and semantics.".into(),
+                details: None,
+            });
+        }
+        let expires_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_millis() as u64 + 60 * 60 * 1000);
+        let sha = Sha256::digest(&bytes);
+        let final_artifact = if consistency == AppShotConsistency::Stable || attempt == 1 {
+            persist_browser_appshot_artifact(&bytes, &screenshot.mime_type).ok()
+        } else {
+            None
+        };
+        if final_artifact.is_none() && consistency == AppShotConsistency::Stable {
+            consistency = AppShotConsistency::Partial;
+            diagnostics.push(DiagnosticEntry {
+                code: "BrowserArtifactPersistFailed".into(),
+                message: "Browser AppShot pixels could not be committed to a private artifact."
+                    .into(),
+                details: None,
+            });
+        }
+        let image = ContentRef {
+            content_id: uuid::Uuid::new_v4().to_string(),
+            device_id: None,
+            link_epoch: None,
+            mime_type: screenshot.mime_type.clone(),
+            filename: screenshot
+                .screenshot_path
+                .as_deref()
+                .and_then(|path| Path::new(path).file_name())
+                .map(|name| name.to_string_lossy().into_owned()),
+            size_bytes: bytes.len() as u64,
+            sha256: format!("{sha:x}"),
+            source: ContentSource::HostPrivateArtifact,
+            expires_at_ms,
+            persistence: ContentPersistence::Temporary,
+        };
+        let image = final_artifact
+            .as_ref()
+            .and_then(|path| fs::metadata(path).ok().map(|metadata| (path, metadata)))
+            .map(|(path, metadata)| ContentRef {
+                content_id: uuid::Uuid::new_v4().to_string(),
+                device_id: None,
+                link_epoch: None,
+                mime_type: screenshot.mime_type.clone(),
+                filename: path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned()),
+                size_bytes: metadata.len(),
+                sha256: Sha256::digest(&bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+                source: ContentSource::HostPrivateArtifact,
+                expires_at_ms,
+                persistence: ContentPersistence::Temporary,
+            })
+            .unwrap_or(image);
+        let envelope = AppShotEnvelope {
+            appshot_id: uuid::Uuid::new_v4().to_string(),
+            trigger: AppShotTrigger::Observe,
+            captured_at: chrono::Utc::now(),
+            consistency,
+            capture: AppShotCapture::Browser {
+                tab_id: tab_id.clone(),
+                url,
+                title: snapshot.title.clone(),
+                viewport: PixelSize { width, height },
+                document_generation: generation,
+                semantic_snapshot: snapshot
+                    .snapshot
+                    .clone()
+                    .unwrap_or_else(|| serde_json::json!({})),
+            },
+            image,
+            action_snapshot: AppShotActionSnapshot {
+                snapshot_id: uuid::Uuid::new_v4().to_string(),
+                session_id: identity.clone().map(|i| i.session_id),
+                subject_generation: Some(generation),
+            },
+            coverage: AppShotCoverage {
+                pixels_complete: !bytes.is_empty(),
+                semantics_complete: snapshot.snapshot.is_some(),
+                secure_regions_redacted: false,
+                projection_truncated: snapshot
+                    .snapshot
+                    .as_ref()
+                    .and_then(|s| s.get("textTruncated"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                total_semantic_nodes: snapshot
+                    .snapshot
+                    .as_ref()
+                    .and_then(|s| s.get("elementCount"))
+                    .and_then(|v| v.as_u64()),
+                projected_semantic_nodes: snapshot
+                    .snapshot
+                    .as_ref()
+                    .and_then(|s| s.get("elements"))
+                    .and_then(|v| v.as_array())
+                    .map(|v| v.len() as u64),
+            },
+            capability_profile_id: "browser-v1".to_string(),
+            diagnostics,
+        };
+        if attempt == 1 || envelope.consistency == AppShotConsistency::Stable {
+            return BrowserAppShotResponse {
+                appshot: envelope,
+                image_data_base64: attachment_data(&bytes, include_image_data),
+                image_mime_type: screenshot.mime_type,
+            };
+        }
+        last = Some(envelope);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    BrowserAppShotResponse {
+        appshot: last.expect("observe always produces an envelope"),
+        image_data_base64: String::new(),
+        image_mime_type: "image/png".into(),
+    }
+}
+
+fn classify_document_capture(
+    before_url: Option<&str>,
+    after_url: Option<&str>,
+    before: Option<&serde_json::Value>,
+    after: Option<&serde_json::Value>,
+    screenshot_ok: bool,
+    attempt: usize,
+) -> AppShotConsistency {
+    let before_generation = before.and_then(|v| v.get("documentGeneration"));
+    let after_generation = after.and_then(|v| v.get("documentGeneration"));
+    let changed = before_url != after_url || before_generation != after_generation;
+    if !changed && before_url.is_some() && screenshot_ok {
+        AppShotConsistency::Stable
+    } else if changed && attempt > 0 {
+        AppShotConsistency::ChangedDuringCapture
+    } else {
+        AppShotConsistency::Partial
+    }
+}
+
+fn attachment_data(bytes: &[u8], include_image_data: bool) -> String {
+    if include_image_data && !bytes.is_empty() {
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    } else {
+        String::new()
+    }
+}
+
+fn persist_browser_appshot_artifact(
+    bytes: &[u8],
+    mime_type: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write;
+    use std::time::{Duration, SystemTime};
+    let root = appshot_artifacts_dir();
+    std::fs::create_dir_all(&root)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let expiry = SystemTime::now()
+        .checked_sub(Duration::from_secs(60 * 60))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    for entry in std::fs::read_dir(&root)?.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| modified < expiry)
+        {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    let extension = match mime_type {
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        _ => "png",
+    };
+    let artifact = root.join(format!(
+        "browser-appshot-{}.{}",
+        uuid::Uuid::new_v4(),
+        extension
+    ));
+    let temporary = root.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&temporary)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&temporary, &artifact).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temporary);
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&artifact, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(artifact)
 }
 
 pub(crate) async fn screenshot_with_identity(
@@ -861,4 +1280,66 @@ async fn run_cdp_action(
     let executor =
         BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout(), identity)?;
     executor.bind_tab(target, tab_id).run_cdp(action).await
+}
+
+#[cfg(test)]
+mod appshot_capture_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn stable_generation_is_accepted() {
+        let before = json!({"documentGeneration": "doc-1"});
+        assert_eq!(
+            classify_document_capture(Some("u"), Some("u"), Some(&before), Some(&before), true, 0),
+            AppShotConsistency::Stable
+        );
+    }
+
+    #[test]
+    fn generation_changes_are_reported_across_the_single_retry() {
+        let before = json!({"documentGeneration": "doc-1"});
+        let after = json!({"documentGeneration": "doc-2"});
+        assert_eq!(
+            classify_document_capture(Some("u"), Some("u"), Some(&before), Some(&after), true, 0),
+            AppShotConsistency::Partial
+        );
+        assert_eq!(
+            classify_document_capture(Some("u"), Some("u"), Some(&before), Some(&after), true, 1),
+            AppShotConsistency::ChangedDuringCapture
+        );
+    }
+
+    #[test]
+    fn browser_artifacts_are_private_unique_and_exactly_hashed() {
+        let first = persist_browser_appshot_artifact(b"first", "image/png").unwrap();
+        let second = persist_browser_appshot_artifact(b"second", "image/png").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read(&first).unwrap(), b"first");
+        assert_eq!(std::fs::read(&second).unwrap(), b"second");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&first).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                std::fs::metadata(appshot_artifacts_dir())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
+        let _ = std::fs::remove_file(first);
+        let _ = std::fs::remove_file(second);
+    }
+
+    #[test]
+    fn image_attachment_is_omitted_for_text_only_capture() {
+        assert!(attachment_data(b"pixels", false).is_empty());
+        assert_eq!(attachment_data(b"pixels", true), "cGl4ZWxz");
+    }
 }

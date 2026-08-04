@@ -20,6 +20,7 @@ fn boxed_execute_action_preserves_wire_shape() {
     let rendered = serde_json::to_value(ServiceRequest::ExecuteAction {
         request: Box::new(ActionRequest {
             action: ActionName::Click,
+            appshot_id: None,
             snapshot_id: Some("snap-1".to_string()),
             element_index: Some(7),
             arguments: json!({"x": 10, "y": 20}),

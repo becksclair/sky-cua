@@ -14,8 +14,10 @@
 //! feedback stays coupled to real input.
 
 use sky_cua_platform::model::{
-    DiagnosticEntry, PhoneActionResponse, PhoneAvailableAction, PhoneBackendCapabilities,
-    PhoneBackendKind, PhoneCapabilityProfile, PhoneCapabilityRefreshState, PhonePoint,
+    DiagnosticEntry, PhoneActionResponse, PhoneActivationClass, PhoneAvailableAction,
+    PhoneBackendCapabilities, PhoneBackendKind, PhoneCapabilityAvailability,
+    PhoneCapabilityFidelity, PhoneCapabilityProfile, PhoneCapabilityRefreshState,
+    PhoneCapabilityRoute, PhoneConnectionKind, PhoneOperationProvider, PhonePoint,
     PhonePressKeyRequest, PhoneSwipeRequest, PhoneTapRequest, PhoneTypeTextRequest,
     PhoneUnavailableAction,
 };
@@ -23,6 +25,7 @@ use sky_cua_platform::model::{
 use super::{ActionContext, PhoneManager, no_companion_diagnostic, now_ms, selector_ids};
 use crate::phone::adb;
 use crate::phone::companion::protocol::{GestureKind, GesturePoint};
+use crate::phone::direct::DirectRuntimeError;
 use crate::phone::mapping;
 use crate::phone::snapshot;
 use crate::phone::{cursor, scrcpy};
@@ -201,6 +204,35 @@ impl PhoneManager {
         let Some(ctx) = self.action_context(&request.session) else {
             return action_no_session(&request.session, "phone_type_text");
         };
+        if let Some((device_id, epoch)) = self.direct_identity(&ctx.session_id) {
+            let result = self
+                .direct_provider
+                .as_ref()
+                .expect("direct identity requires provider")
+                .dispatch(
+                    &device_id,
+                    epoch,
+                    "input.text",
+                    serde_json::json!({"text": request.text}),
+                    false,
+                    std::time::Duration::from_secs(5),
+                )
+                .await
+                .map(|_| true)
+                .map_err(direct_error_diagnostic);
+            return self
+                .finish_action(
+                    &ctx,
+                    "phone_type_text",
+                    PhoneBackendKind::Companion,
+                    None,
+                    None,
+                    None,
+                    None,
+                    result,
+                )
+                .await;
+        }
         // Text input has no companion RPC method in v1; route through ADB.
         let backend = PhoneBackendKind::Adb;
         let result = adb::input_text(
@@ -231,6 +263,35 @@ impl PhoneManager {
         let Some(ctx) = self.action_context(&request.session) else {
             return action_no_session(&request.session, "phone_press_key");
         };
+        if let Some((device_id, epoch)) = self.direct_identity(&ctx.session_id) {
+            let result = self
+                .direct_provider
+                .as_ref()
+                .expect("direct identity requires provider")
+                .dispatch(
+                    &device_id,
+                    epoch,
+                    "input.key",
+                    serde_json::json!({"key": request.key}),
+                    false,
+                    std::time::Duration::from_secs(5),
+                )
+                .await
+                .map(|_| true)
+                .map_err(direct_error_diagnostic);
+            return self
+                .finish_action(
+                    &ctx,
+                    "phone_press_key",
+                    PhoneBackendKind::Companion,
+                    None,
+                    None,
+                    None,
+                    None,
+                    result,
+                )
+                .await;
+        }
         let backend = PhoneBackendKind::Adb;
         let result = adb::input_keyevent(
             self.runner.as_ref(),
@@ -311,6 +372,28 @@ impl PhoneManager {
         points: Vec<PhonePoint>,
         duration_ms: u32,
     ) -> Result<bool, DiagnosticEntry> {
+        if let Some((device_id, epoch)) = self.direct_identity(&ctx.session_id) {
+            let kind = match kind {
+                GestureKind::Tap => "tap",
+                GestureKind::Swipe => "swipe",
+            };
+            let points = points.into_iter().map(|point| serde_json::json!({"x": point.x.round() as i64, "y": point.y.round() as i64})).collect::<Vec<_>>();
+            return self
+                .direct_provider
+                .as_ref()
+                .expect("direct identity requires provider")
+                .dispatch(
+                    &device_id,
+                    epoch,
+                    "gesture",
+                    serde_json::json!({"kind": kind, "points": points, "duration_ms": duration_ms}),
+                    false,
+                    std::time::Duration::from_secs(5),
+                )
+                .await
+                .map(|_| true)
+                .map_err(direct_error_diagnostic);
+        }
         let Some(entry) = self.sessions.get_mut(&ctx.session_id) else {
             return Err(no_companion_diagnostic());
         };
@@ -727,18 +810,52 @@ pub(super) fn populate_actions(
         });
     };
 
-    // Always-available ADB baseline actions.
-    add("phone_observe", screenshot_backend);
-    add("phone_screenshot", screenshot_backend);
-    add("phone_type_text", PhoneBackendKind::Adb);
-    add("phone_press_key", PhoneBackendKind::Adb);
-    add("phone_app_current", PhoneBackendKind::Adb);
-    add("phone_app_list", PhoneBackendKind::Adb);
+    if caps.screenshot {
+        add("phone_observe", screenshot_backend);
+        add("phone_screenshot", screenshot_backend);
+    }
+    let interactive_backend =
+        if caps.companion && profile.connection_kind == PhoneConnectionKind::CompanionDirect {
+            PhoneBackendKind::Companion
+        } else {
+            PhoneBackendKind::Adb
+        };
+    if caps.text_input {
+        add("phone_type_text", interactive_backend);
+    }
+    if caps.key_input {
+        add("phone_press_key", interactive_backend);
+    }
+    if caps.app_management {
+        add("phone_app_current", interactive_backend);
+        add("phone_app_list", interactive_backend);
+    }
     add("phone_app_launch", app_op_backend);
     add("phone_app_open_intent", app_op_backend);
-    add("phone_app_force_stop", PhoneBackendKind::Adb);
-    add("phone_app_install", PhoneBackendKind::Adb);
-    add("phone_open_settings", PhoneBackendKind::Adb);
+    if caps.adb {
+        add("phone_app_force_stop", PhoneBackendKind::Adb);
+        add("phone_app_install", PhoneBackendKind::Adb);
+    } else {
+        for action in ["phone_app_force_stop", "phone_app_install"] {
+            unavailable.push(PhoneUnavailableAction {
+                action: action.into(),
+                reason: "operation requires the optional ADB backend".into(),
+                detail: None,
+            });
+        }
+    }
+    add("phone_open_settings", interactive_backend);
+    if caps.companion {
+        for action in [
+            "phone_content",
+            "phone_clipboard",
+            "phone_editor",
+            "phone_camera",
+            "phone_storage",
+        ] {
+            add(action, PhoneBackendKind::Companion);
+        }
+    }
 
     // Companion-gated actions.
     if let Some(backend) = coordinate_backend {
@@ -788,8 +905,155 @@ pub(super) fn populate_actions(
         }
     }
 
+    let evidenced_at_ms = profile.detected_at_ms;
+    profile.routes = available
+        .iter()
+        .flat_map(|action| {
+            route_operations(&action.action)
+                .into_iter()
+                .map(move |operation| {
+                    let provider = operation_provider(&operation, action.backend);
+                    let activation = operation_activation(&operation, provider);
+                    PhoneCapabilityRoute {
+                        operation,
+                        provider,
+                        availability: PhoneCapabilityAvailability::Ready,
+                        prerequisites: Vec::new(),
+                        activation,
+                        fidelity: if provider == PhoneOperationProvider::Adb {
+                            PhoneCapabilityFidelity::Exact
+                        } else {
+                            PhoneCapabilityFidelity::Native
+                        },
+                        evidenced_at_ms,
+                        link_epoch: None,
+                        detail: action.detail.clone(),
+                    }
+                })
+        })
+        .chain(unavailable.iter().map(|action| PhoneCapabilityRoute {
+            operation: action.action.clone(),
+            provider: PhoneOperationProvider::None,
+            availability: if action.reason.contains("not enabled") {
+                PhoneCapabilityAvailability::ActivationRequired
+            } else {
+                PhoneCapabilityAvailability::Unsupported
+            },
+            prerequisites: vec![action.reason.clone()],
+            activation: PhoneActivationClass::UserSettings,
+            fidelity: PhoneCapabilityFidelity::Partial,
+            evidenced_at_ms,
+            link_epoch: None,
+            detail: action.detail.clone(),
+        }))
+        .collect();
     profile.available_actions = available;
     profile.unavailable_actions = unavailable;
+}
+
+fn route_operations(action: &str) -> Vec<String> {
+    let operations: &[&str] = match action {
+        "phone_content" => &[
+            "phone_content.describe",
+            "phone_content.import_host_file",
+            "phone_content.export_host_file",
+            "phone_content.release",
+        ],
+        "phone_clipboard" => &[
+            "phone_clipboard.get",
+            "phone_clipboard.set",
+            "phone_clipboard.clear",
+            "phone_clipboard.changes",
+        ],
+        "phone_editor" => &[
+            "phone_editor.context",
+            "phone_editor.set_text",
+            "phone_editor.insert_text",
+            "phone_editor.set_selection",
+            "phone_editor.select_all",
+            "phone_editor.copy",
+            "phone_editor.cut",
+            "phone_editor.paste",
+            "phone_editor.insert_content",
+        ],
+        "phone_camera" => &[
+            "phone_camera.enumerate",
+            "phone_camera.capabilities",
+            "phone_camera.photo",
+            "phone_camera.video_start",
+            "phone_camera.video_pause",
+            "phone_camera.video_resume",
+            "phone_camera.video_stop",
+            "phone_camera.preview_start",
+            "phone_camera.preview_frame",
+            "phone_camera.preview_stop",
+            "phone_camera.controls",
+        ],
+        "phone_storage" => &[
+            "phone_storage.roots",
+            "phone_storage.list",
+            "phone_storage.stat",
+            "phone_storage.read",
+            "phone_storage.write",
+            "phone_storage.mkdir",
+            "phone_storage.copy",
+            "phone_storage.move",
+            "phone_storage.rename",
+            "phone_storage.delete",
+            "phone_storage.trash",
+            "phone_storage.hash",
+            "phone_storage.search",
+            "phone_storage.thumbnail",
+            "phone_storage.metadata",
+            "phone_storage.add_saf_root",
+            "phone_storage.remove_saf_root",
+            "phone_storage.list_saf_roots",
+        ],
+        _ => return vec![action.to_owned()],
+    };
+    operations
+        .iter()
+        .map(|operation| (*operation).to_owned())
+        .collect()
+}
+
+fn operation_provider(operation: &str, backend: PhoneBackendKind) -> PhoneOperationProvider {
+    match backend {
+        PhoneBackendKind::Adb => PhoneOperationProvider::Adb,
+        PhoneBackendKind::Scrcpy => PhoneOperationProvider::Scrcpy,
+        PhoneBackendKind::Companion if operation.starts_with("phone_camera") => {
+            PhoneOperationProvider::CompanionCamera
+        }
+        PhoneBackendKind::Companion if operation.starts_with("phone_storage") => {
+            PhoneOperationProvider::CompanionStorage
+        }
+        PhoneBackendKind::Companion
+            if operation.starts_with("phone_editor")
+                || operation.contains("tap")
+                || operation.contains("swipe")
+                || operation.contains("observe")
+                || operation.contains("accessibility") =>
+        {
+            PhoneOperationProvider::CompanionAccessibility
+        }
+        PhoneBackendKind::Companion => PhoneOperationProvider::CompanionNative,
+        _ => PhoneOperationProvider::None,
+    }
+}
+
+fn operation_activation(operation: &str, provider: PhoneOperationProvider) -> PhoneActivationClass {
+    if operation.starts_with("phone_camera.")
+        && !matches!(
+            operation,
+            "phone_camera.enumerate" | "phone_camera.capabilities"
+        )
+    {
+        PhoneActivationClass::VisibleActivity
+    } else if provider == PhoneOperationProvider::CompanionAccessibility {
+        PhoneActivationClass::AccessibilityService
+    } else {
+        PhoneActivationClass::None
+    }
 }
 
 /// An action response for a selector that resolved to no session.
@@ -828,6 +1092,15 @@ fn action_failure(
         phone_snapshot_id: None,
         cursor: None,
         diagnostics: vec![diagnostic],
+    }
+}
+
+fn direct_error_diagnostic(error: DirectRuntimeError) -> DiagnosticEntry {
+    let message = format!("CompanionDirect dispatch failed: {error:?}");
+    DiagnosticEntry {
+        code: "PhoneCompanionDirectDispatchFailed".to_string(),
+        message,
+        details: None,
     }
 }
 
@@ -875,6 +1148,7 @@ mod tests {
             device_owner: false,
             available_actions: Vec::new(),
             unavailable_actions: Vec::new(),
+            routes: Vec::new(),
         }
     }
 

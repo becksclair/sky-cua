@@ -102,8 +102,8 @@ pub(super) fn generated_tool_contract() -> Value {
     json!({
         "version": 1,
         "surface": "grouped",
-        "default_tool_count": 35,
-        "eval_tool_count": 36,
+        "default_tool_count": 40,
+        "eval_tool_count": 41,
         "tools": tools
     })
 }
@@ -171,10 +171,14 @@ fn grouped_contract_tools() -> Vec<Value> {
         contract_tool(
             "observe",
             vec![
-                branch("desktop", "get_app_state", json!({"surface": "desktop"})),
+                branch(
+                    "desktop",
+                    "desktop_observe_appshot",
+                    json!({"surface": "desktop"}),
+                ),
                 branch(
                     "browser",
-                    "browser_snapshot",
+                    "browser_appshot",
                     json!({"surface": "browser", "tab_id": "tab-1"}),
                 ),
                 branch(
@@ -551,6 +555,46 @@ fn grouped_contract_tools() -> Vec<Value> {
             )],
         ),
         contract_tool(
+            "phone_content",
+            vec![branch(
+                "describe",
+                "phone_content",
+                json!({"operation":"describe", "session_id":"phone-1", "content_id":"content-1"}),
+            )],
+        ),
+        contract_tool(
+            "phone_clipboard",
+            vec![branch(
+                "get",
+                "phone_clipboard",
+                json!({"operation":"get", "session_id":"phone-1"}),
+            )],
+        ),
+        contract_tool(
+            "phone_editor",
+            vec![branch(
+                "context",
+                "phone_editor",
+                json!({"operation":"context", "session_id":"phone-1"}),
+            )],
+        ),
+        contract_tool(
+            "phone_camera",
+            vec![branch(
+                "enumerate",
+                "phone_camera",
+                json!({"operation":"enumerate", "session_id":"phone-1"}),
+            )],
+        ),
+        contract_tool(
+            "phone_storage",
+            vec![branch(
+                "roots",
+                "phone_storage",
+                json!({"operation":"roots", "session_id":"phone-1"}),
+            )],
+        ),
+        contract_tool(
             "browser_eval",
             vec![branch(
                 "default",
@@ -569,7 +613,46 @@ fn contract_tool(name: &'static str, branches: Vec<Value>) -> Value {
 }
 
 fn branch(name: &'static str, handler_id: &'static str, minimal_valid_arguments: Value) -> Value {
-    branch_with_extra_errors(name, handler_id, minimal_valid_arguments, &[])
+    let mut arguments = minimal_valid_arguments;
+    if matches!(
+        handler_id,
+        "focus_element"
+            | "select_element"
+            | "expand_element"
+            | "collapse_element"
+            | "toggle_element"
+            | "scroll"
+            | "click"
+            | "perform_secondary_action"
+            | "drag"
+            | "type_text"
+            | "press_key"
+            | "activate_element"
+            | "perform_action"
+            | "set_value"
+            | "browser_scroll"
+            | "browser_move_mouse"
+            | "browser_click"
+            | "browser_type_text"
+            | "browser_press_key"
+            | "browser_eval"
+            | "phone_tap"
+            | "phone_swipe"
+            | "phone_type_text"
+            | "phone_press_key"
+            | "phone_notification_open"
+            | "phone_notification_dismiss"
+            | "phone_notification_action"
+            | "phone_notification_reply"
+            | "phone_app_force_stop"
+            | "phone_app_install"
+    ) {
+        arguments
+            .as_object_mut()
+            .expect("branch arguments")
+            .insert("appshot_id".into(), json!("appshot-1"));
+    }
+    branch_with_extra_errors(name, handler_id, arguments, &[])
 }
 
 /// Like [`branch`] but advertises additional tool-specific error codes beyond

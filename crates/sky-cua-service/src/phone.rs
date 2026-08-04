@@ -13,6 +13,7 @@ mod command;
 mod companion;
 mod cursor;
 mod device;
+mod direct;
 mod manager;
 mod mapping;
 mod scrcpy;
@@ -21,5 +22,8 @@ mod snapshot;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use direct::DirectRuntime;
+#[cfg(test)]
+pub(crate) use direct::DirectRuntimeHandle;
 pub(crate) use manager::{PhoneManager, ScrcpyAdoptionCandidate};
 pub(crate) use scrcpy::host_scrcpy_default_max_size;

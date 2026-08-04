@@ -12,8 +12,8 @@ mod response;
 pub(super) use args::BrowserTabTextFilter;
 pub(super) use args::{
     parse_browser_open_url, parse_browser_point, parse_browser_scroll, parse_browser_tab_id,
-    parse_browser_target, parse_required_browser_url, parse_required_literal_string,
-    parse_required_string,
+    parse_browser_target, parse_required_appshot_id, parse_required_browser_url,
+    parse_required_literal_string, parse_required_string,
 };
 use args::{
     parse_browser_snapshot_options, parse_browser_tab_filter, parse_optional_bool,
@@ -24,12 +24,13 @@ pub(super) use response::browser_list_tabs_summary;
 #[cfg(test)]
 pub(super) use response::browser_snapshot_summary;
 use response::{
-    apply_browser_tab_limit, browser_action_result, browser_claim_tab_is_error,
-    browser_claim_tab_summary, browser_eval_result, browser_list_tabs_is_error,
-    browser_list_tabs_structured_response, browser_list_tabs_summary_with_matches,
-    browser_move_mouse_is_error, browser_move_mouse_summary, browser_navigate_result,
-    browser_open_is_error, browser_screenshot_result, browser_snapshot_result,
-    browser_snapshot_structured_response, browser_tab_match_indexes,
+    apply_browser_tab_limit, browser_action_result, browser_appshot_required_result,
+    browser_claim_tab_is_error, browser_claim_tab_summary, browser_eval_result,
+    browser_list_tabs_is_error, browser_list_tabs_structured_response,
+    browser_list_tabs_summary_with_matches, browser_move_mouse_is_error,
+    browser_move_mouse_summary, browser_navigate_result, browser_open_is_error,
+    browser_screenshot_result, browser_snapshot_result, browser_snapshot_structured_response,
+    browser_tab_match_indexes,
 };
 pub(super) use response::{browser_open_summary, browser_status_summary};
 #[cfg(test)]
@@ -48,6 +49,7 @@ pub(super) fn is_browser_tool(tool_name: &str) -> bool {
             | "browser_move_mouse"
             | "browser_navigate"
             | "browser_snapshot"
+            | "browser_appshot"
             | "browser_screenshot"
             | "browser_click"
             | "browser_type_text"
@@ -203,12 +205,17 @@ pub(super) fn handle_tool_call(
                 Ok(wait_for_arrival) => wait_for_arrival,
                 Err(error) => return invalid_request_tool_error(error.to_string()),
             };
+            let appshot_id = match parse_required_appshot_id(&arguments, "browser_move_mouse") {
+                Ok(v) => v,
+                Err(e) => return invalid_request_tool_error(e.to_string()),
+            };
             match service.call(&browser_service_request(BrowserRequest::MoveMouse {
                 target,
                 tab_id,
                 x,
                 y,
                 wait_for_arrival,
+                appshot_id: Some(appshot_id),
             }))? {
                 ServiceResponse::Browser {
                     response: BrowserResponse::MoveMouse { response },
@@ -220,6 +227,9 @@ pub(super) fn handle_tool_call(
                     "structuredContent": response,
                     "isError": browser_move_mouse_is_error(&response)
                 })),
+                ServiceResponse::Browser {
+                    response: BrowserResponse::AppShotRequired { rejection },
+                } => browser_appshot_required_result(rejection),
                 ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for browser_move_mouse: {other:?}"
@@ -293,6 +303,51 @@ pub(super) fn handle_tool_call(
                 )),
             }
         }
+        "browser_appshot" => {
+            let target = match parse_browser_target(&arguments) {
+                Ok(v) => v,
+                Err(e) => return invalid_request_tool_error(e.to_string()),
+            };
+            let tab_id = match parse_browser_tab_id(&arguments) {
+                Ok(v) => v,
+                Err(e) => return invalid_request_tool_error(e.to_string()),
+            };
+            let options = match parse_browser_snapshot_options(&arguments) {
+                Ok(v) => v,
+                Err(e) => return invalid_request_tool_error(e.to_string()),
+            };
+            match service.call(&browser_service_request(BrowserRequest::ObserveAppShot {
+                target,
+                tab_id,
+                text_limit: Some(options.text_limit),
+                element_limit: options.element_limit,
+                include_image_data: model.can_receive_images(),
+            }))? {
+                ServiceResponse::Browser {
+                    response: BrowserResponse::AppShot { response },
+                } => {
+                    let text = format!(
+                        "Captured browser AppShot for tab {}.",
+                        match &response.appshot.capture {
+                            sky_cua_platform::model::AppShotCapture::Browser { tab_id, .. } =>
+                                tab_id,
+                            _ => "unknown",
+                        }
+                    );
+                    let mut content = vec![json!({"type":"text","text":text})];
+                    if model.can_receive_images() && !response.image_data_base64.is_empty() {
+                        content.push(json!({"type":"image","data":response.image_data_base64,"mimeType":response.image_mime_type}));
+                    }
+                    Ok(
+                        json!({"content":content,"structuredContent":response.appshot,"isError":false}),
+                    )
+                }
+                ServiceResponse::Error { code, message, .. } => tool_error(code, message),
+                other => Err(anyhow!(
+                    "unexpected response for browser_appshot: {other:?}"
+                )),
+            }
+        }
         "browser_screenshot" => {
             let target = match parse_browser_target(&arguments) {
                 Ok(target) => target,
@@ -329,11 +384,16 @@ pub(super) fn handle_tool_call(
             // Element-target clicking: when the caller passes an opaque `ref`
             // from observe(surface=browser), click by element identity (the
             // service re-resolves its live position) instead of by coordinates.
+            let appshot_id = match parse_required_appshot_id(&arguments, "browser_click") {
+                Ok(v) => v,
+                Err(e) => return invalid_request_tool_error(e.to_string()),
+            };
             let request = match parse_optional_element_ref(&arguments) {
                 Some(element_ref) => BrowserRequest::ClickElement {
                     target,
                     tab_id,
                     element_ref,
+                    appshot_id: Some(appshot_id),
                 },
                 None => {
                     let (x, y) = match parse_browser_point(&arguments, "browser_click") {
@@ -345,6 +405,7 @@ pub(super) fn handle_tool_call(
                         tab_id,
                         x,
                         y,
+                        appshot_id: Some(appshot_id),
                     }
                 }
             };
@@ -352,6 +413,9 @@ pub(super) fn handle_tool_call(
                 ServiceResponse::Browser {
                     response: BrowserResponse::Click { response },
                 } => browser_action_result(response),
+                ServiceResponse::Browser {
+                    response: BrowserResponse::AppShotRequired { rejection },
+                } => browser_appshot_required_result(rejection),
                 ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!("unexpected response for browser_click: {other:?}")),
             }
@@ -370,23 +434,32 @@ pub(super) fn handle_tool_call(
                     Ok(text) => text,
                     Err(error) => return invalid_request_tool_error(error.to_string()),
                 };
+            let appshot_id = match parse_required_appshot_id(&arguments, "browser_type_text") {
+                Ok(v) => v,
+                Err(e) => return invalid_request_tool_error(e.to_string()),
+            };
             let request = match parse_optional_element_ref(&arguments) {
                 Some(element_ref) => BrowserRequest::TypeTextElement {
                     target,
                     tab_id,
                     element_ref,
                     text,
+                    appshot_id: Some(appshot_id),
                 },
                 None => BrowserRequest::TypeText {
                     target,
                     tab_id,
                     text,
+                    appshot_id: Some(appshot_id),
                 },
             };
             match service.call(&browser_service_request(request))? {
                 ServiceResponse::Browser {
                     response: BrowserResponse::TypeText { response },
                 } => browser_action_result(response),
+                ServiceResponse::Browser {
+                    response: BrowserResponse::AppShotRequired { rejection },
+                } => browser_appshot_required_result(rejection),
                 ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for browser_type_text: {other:?}"
@@ -406,14 +479,22 @@ pub(super) fn handle_tool_call(
                 Ok(key) => key,
                 Err(error) => return invalid_request_tool_error(error.to_string()),
             };
+            let appshot_id = match parse_required_appshot_id(&arguments, "browser_press_key") {
+                Ok(v) => v,
+                Err(e) => return invalid_request_tool_error(e.to_string()),
+            };
             match service.call(&browser_service_request(BrowserRequest::PressKey {
                 target,
                 tab_id,
                 key,
+                appshot_id: Some(appshot_id),
             }))? {
                 ServiceResponse::Browser {
                     response: BrowserResponse::PressKey { response },
                 } => browser_action_result(response),
+                ServiceResponse::Browser {
+                    response: BrowserResponse::AppShotRequired { rejection },
+                } => browser_appshot_required_result(rejection),
                 ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!(
                     "unexpected response for browser_press_key: {other:?}"
@@ -433,6 +514,10 @@ pub(super) fn handle_tool_call(
                 Ok(scroll) => scroll,
                 Err(error) => return invalid_request_tool_error(error.to_string()),
             };
+            let appshot_id = match parse_required_appshot_id(&arguments, "browser_scroll") {
+                Ok(v) => v,
+                Err(e) => return invalid_request_tool_error(e.to_string()),
+            };
             match service.call(&browser_service_request(BrowserRequest::Scroll {
                 target,
                 tab_id,
@@ -440,10 +525,14 @@ pub(super) fn handle_tool_call(
                 delta_y,
                 x,
                 y,
+                appshot_id: Some(appshot_id),
             }))? {
                 ServiceResponse::Browser {
                     response: BrowserResponse::Scroll { response },
                 } => browser_action_result(response),
+                ServiceResponse::Browser {
+                    response: BrowserResponse::AppShotRequired { rejection },
+                } => browser_appshot_required_result(rejection),
                 ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!("unexpected response for browser_scroll: {other:?}")),
             }
@@ -472,14 +561,22 @@ pub(super) fn handle_tool_call(
                 Ok(expression) => expression,
                 Err(error) => return invalid_request_tool_error(error.to_string()),
             };
+            let appshot_id = match parse_required_appshot_id(&arguments, "browser_eval") {
+                Ok(v) => v,
+                Err(e) => return invalid_request_tool_error(e.to_string()),
+            };
             match service.call(&browser_service_request(BrowserRequest::Eval {
                 target,
                 tab_id,
                 expression,
+                appshot_id: Some(appshot_id),
             }))? {
                 ServiceResponse::Browser {
                     response: BrowserResponse::Eval { response },
                 } => browser_eval_result(response),
+                ServiceResponse::Browser {
+                    response: BrowserResponse::AppShotRequired { rejection },
+                } => browser_appshot_required_result(rejection),
                 ServiceResponse::Error { code, message, .. } => tool_error(code, message),
                 other => Err(anyhow!("unexpected response for browser_eval: {other:?}")),
             }

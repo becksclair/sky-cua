@@ -18,7 +18,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{DiagnosticEntry, PixelSize, RectF};
+use super::{
+    AppShotEnvelope, AppShotRequired, DiagnosticEntry, PhoneConnectionIdentity, PixelSize, RectF,
+};
 
 /// Normalized caller lane for a Phone request entering through MCP.
 ///
@@ -96,6 +98,11 @@ pub enum PhoneRequest {
     AppForceStop(PhoneAppForceStopRequest),
     AppInstall(PhoneAppInstallRequest),
     OpenSettings(PhoneOpenSettingsRequest),
+    Content(super::PhoneFeatureCall<super::PhoneContentRequest>),
+    Clipboard(super::PhoneFeatureCall<super::PhoneClipboardRequest>),
+    Editor(super::PhoneFeatureCall<super::PhoneEditorRequest>),
+    Camera(super::PhoneFeatureCall<super::PhoneCameraRequest>),
+    Storage(super::PhoneFeatureCall<super::PhoneStorageRequest>),
 }
 
 /// Tagged response envelope. Several request variants share a response variant
@@ -119,6 +126,13 @@ pub enum PhoneResponse {
     AccessibilityTree(PhoneAccessibilityTreeResponse),
     Notifications(PhoneNotificationsResponse),
     App(PhoneAppResponse),
+    AppShotRequired(Box<AppShotRequired>),
+    Content(super::PhoneContentResponse),
+    Clipboard(super::PhoneClipboardResponse),
+    Editor(super::PhoneEditorResponse),
+    Camera(super::PhoneCameraResponse),
+    Storage(super::PhoneStorageResponse),
+    FeatureError(super::PhoneFeatureError),
 }
 
 impl PhoneRequest {
@@ -150,6 +164,32 @@ impl PhoneRequest {
             | Self::Notifications(_)
             | Self::AppCurrent(_)
             | Self::AppList(_) => true,
+            Self::Content(call) => {
+                matches!(call.request, super::PhoneContentRequest::Describe { .. })
+            }
+            Self::Clipboard(call) => matches!(
+                call.request,
+                super::PhoneClipboardRequest::Get | super::PhoneClipboardRequest::Changes { .. }
+            ),
+            Self::Editor(call) => matches!(call.request, super::PhoneEditorRequest::Context),
+            Self::Camera(call) => matches!(
+                call.request,
+                super::PhoneCameraRequest::Enumerate
+                    | super::PhoneCameraRequest::Capabilities { .. }
+                    | super::PhoneCameraRequest::PreviewFrame { .. }
+            ),
+            Self::Storage(call) => matches!(
+                call.request,
+                super::PhoneStorageRequest::Roots
+                    | super::PhoneStorageRequest::List { .. }
+                    | super::PhoneStorageRequest::Stat { .. }
+                    | super::PhoneStorageRequest::Read { .. }
+                    | super::PhoneStorageRequest::Hash { .. }
+                    | super::PhoneStorageRequest::Search { .. }
+                    | super::PhoneStorageRequest::Thumbnail { .. }
+                    | super::PhoneStorageRequest::Metadata { .. }
+                    | super::PhoneStorageRequest::ListSafRoots
+            ),
             Self::PairWireless(_)
             | Self::Tap(_)
             | Self::Swipe(_)
@@ -199,6 +239,8 @@ pub enum PhoneConnectionKind {
     LegacyTcpip,
     /// Android 11+ wireless debugging via `adb pair`.
     WirelessDebugging,
+    /// Phone-initiated `phone-control.v2` link; no ADB serial exists.
+    CompanionDirect,
     Unknown,
 }
 
@@ -423,6 +465,10 @@ pub struct PhoneCapabilityProfile {
     pub available_actions: Vec<PhoneAvailableAction>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unavailable_actions: Vec<PhoneUnavailableAction>,
+    /// Provider-specific truth for each operation. `available_actions` and
+    /// `unavailable_actions` remain the compact agent-facing projection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<super::PhoneCapabilityRoute>,
 }
 
 // ===========================================================================
@@ -459,7 +505,13 @@ pub struct PhoneUnavailableAction {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PhoneSession {
     pub session_id: String,
+    /// Present for ADB-backed compatibility sessions. Direct sessions omit it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub serial: String,
+    /// Typed transport identity. New callers should use this instead of
+    /// inferring transport or identity from `serial`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<PhoneConnectionIdentity>,
     pub connection_kind: PhoneConnectionKind,
     pub backend: PhoneBackendKind,
     pub capabilities: PhoneBackendCapabilities,
@@ -547,7 +599,18 @@ pub enum PhoneDeviceState {
 /// One device as seen by `phone_list_devices`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PhoneDevice {
+    /// Present for ADB-discovered devices. Direct devices omit it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub serial: String,
+    /// Stable Companion identity for a direct device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// Current authenticated link epoch for a direct device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_epoch: Option<u64>,
+    /// Explicit transport identity; avoids synthetic ADB serials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<PhoneConnectionIdentity>,
     pub state: PhoneDeviceState,
     pub connection_kind: PhoneConnectionKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -719,6 +782,11 @@ pub struct PhoneSessionSelector {
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// Canonical AppShot required before a state-changing phone operation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appshot_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -779,6 +847,9 @@ pub struct PhoneConnectRequest {
     /// the configured default or the single connected device.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial: Option<String>,
+    /// Stable Companion device id. Mutually exclusive with `serial`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<PhoneBackendKind>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -1024,6 +1095,8 @@ pub struct PhoneOpenSettingsRequest {
 pub struct PhoneObserveResponse {
     pub session: PhoneSession,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appshot: Option<Box<AppShotEnvelope>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phone_snapshot_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screenshot_path: Option<String>,
@@ -1181,13 +1254,16 @@ pub enum PhoneInstallStrategy {
     MultiPackage,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PhoneAppResponse {
     pub session_id: String,
     pub serial: String,
     pub kind: PhoneAppResponseKind,
     pub backend: PhoneBackendKind,
     pub success: bool,
+    /// Destination AppShot for source-free launch/open-intent/settings flows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_appshot: Option<Box<AppShotEnvelope>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_app: Option<PhoneAppInfo>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

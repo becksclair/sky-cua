@@ -34,7 +34,7 @@ pub(crate) use control::{
     AdmissionError, CancelResult, ControlPlane, QueueLimits, SubmitOperation,
 };
 pub(crate) use group::{GroupAdmission, GroupError, GroupSnapshot};
-pub(crate) use integration::BrowserControlRuntime;
+pub(crate) use integration::{BrowserControlRuntime, execute_high_level};
 pub(crate) use lease::{IDLE_LEASE_MS, LeaseState};
 pub(crate) use operation::{
     BrowserInstanceId, ClientId, Completion, CompletionCertainty, CompletionDisposition,

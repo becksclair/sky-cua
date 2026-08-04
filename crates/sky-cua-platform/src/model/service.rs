@@ -12,11 +12,12 @@ use super::browser::BrowserRequestContext;
 
 use super::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AgentCursorCapabilities,
-    AgentCursorState, AppInfo, AppSelector, AppStateSnapshot, BrowserRequest, BrowserResponse,
-    BrowserSessionIdentity, CaptureBackendKind, CaptureScope, CaptureScreenMode, DiagnosticEntry,
-    DisplayRef, DisplayTarget, DoctorReport, EnvironmentInfo, InputBackendKind, PhoneRequest,
-    PhoneResponse, PixelSize, SessionPresenceIntent, SessionPresenceStatus, WindowInfo,
-    WindowTarget, WindowTargetingSetupReport,
+    AgentCursorState, AppInfo, AppSelector, AppShotEnvelope, AppShotRequired, AppStateSnapshot,
+    BrowserRequest, BrowserResponse, BrowserSessionIdentity, CaptureBackendKind, CaptureScope,
+    CaptureScreenMode, DiagnosticEntry, DisplayRef, DisplayTarget, DoctorReport, EnvironmentInfo,
+    InputBackendKind, PhoneEnrollmentPayload, PhoneRequest, PhoneResponse, PixelSize,
+    SessionPresenceIntent, SessionPresenceStatus, WindowInfo, WindowTarget,
+    WindowTargetingSetupReport,
 };
 
 pub const CUA_SERVICE_PROTOCOL_VERSION: u32 = 1;
@@ -117,6 +118,10 @@ pub struct AppShotCaptureResult {
     pub display: Option<DisplayRef>,
     #[serde(default)]
     pub diagnostics: Vec<DiagnosticEntry>,
+    /// Canonical host-independent AppShot returned by MCP `observe`. The
+    /// legacy fields above remain for existing AppShot capture consumers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appshot: Option<Box<AppShotEnvelope>>,
 }
 
 #[must_use]
@@ -196,6 +201,8 @@ fn default_cua_deadline_ms() -> u32 {
 pub struct CuaRequestContext {
     pub session_id: String,
     pub turn_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appshot_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline_ms: Option<u32>,
 }
@@ -533,6 +540,7 @@ pub enum ServiceRequest {
         #[serde(default)]
         flags: AppShotCaptureFlags,
     },
+    PhoneDirectCreateEnrollment,
     ResetPortalTokens,
     AgentCursorStatus,
     SetAgentCursor {
@@ -612,6 +620,7 @@ impl ServiceRequest {
             | Self::ActivateWindow { .. } => true,
             Self::Move { .. } => true,
             Self::LaunchApplication { .. }
+            | Self::PhoneDirectCreateEnrollment
             | Self::ResetPortalTokens
             | Self::SessionPresence { .. }
             | Self::ExecuteAction { .. }
@@ -697,6 +706,10 @@ pub enum ServiceResponse {
     },
     LaunchApplication {
         pid: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        destination_appshot: Option<Box<AppShotEnvelope>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        diagnostics: Vec<DiagnosticEntry>,
     },
     ListApps {
         environment: EnvironmentInfo,
@@ -715,6 +728,11 @@ pub enum ServiceResponse {
     },
     ActivateWindow {
         outcome: ActionOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        destination_appshot: Option<Box<AppShotEnvelope>>,
+    },
+    AppShotRequired {
+        rejection: Box<AppShotRequired>,
     },
     GetAppState {
         snapshot: Box<AppStateSnapshot>,
@@ -725,6 +743,9 @@ pub enum ServiceResponse {
     #[serde(rename = "appshot_capture")]
     AppShotCapture {
         result: Box<AppShotCaptureResult>,
+    },
+    PhoneDirectEnrollment {
+        payload: Box<PhoneEnrollmentPayload>,
     },
     ResetPortalTokens {
         cleared: bool,
@@ -871,6 +892,7 @@ mod tests {
         }
 
         let non_idempotent = [
+            ServiceRequest::PhoneDirectCreateEnrollment,
             ServiceRequest::LaunchApplication {
                 command: "kcalc".to_string(),
                 args: Vec::new(),
@@ -882,6 +904,7 @@ mod tests {
             ServiceRequest::ExecuteAction {
                 request: Box::new(ActionRequest {
                     action: ActionName::Click,
+                    appshot_id: None,
                     snapshot_id: None,
                     element_index: None,
                     arguments: json!({}),
@@ -898,6 +921,7 @@ mod tests {
                 request: BrowserRequest::Click {
                     target: Some(BrowserTargetKind::UserChrome),
                     tab_id: "123".to_string(),
+                    appshot_id: None,
                     x: 10.0,
                     y: 10.0,
                 },
@@ -1030,6 +1054,7 @@ mod tests {
                     request: BrowserRequest::MoveMouse {
                         target: Some(BrowserTargetKind::UserChrome),
                         tab_id: "123".to_string(),
+                        appshot_id: None,
                         x: 240.0,
                         y: 160.0,
                         wait_for_arrival: true,
@@ -1052,6 +1077,10 @@ mod tests {
                 "phone",
             ),
             (
+                ServiceRequest::PhoneDirectCreateEnrollment,
+                "phone_direct_create_enrollment",
+            ),
+            (
                 ServiceRequest::SessionPresence {
                     action: SessionPresenceAction::Ensure(SessionPresenceIntent {
                         unlock: true,
@@ -1065,6 +1094,7 @@ mod tests {
                 ServiceRequest::ExecuteAction {
                     request: Box::new(ActionRequest {
                         action: ActionName::Click,
+                        appshot_id: None,
                         snapshot_id: None,
                         element_index: None,
                         arguments: json!({}),
@@ -1285,6 +1315,7 @@ mod tests {
     fn activate_window_context_round_trips_and_legacy_request_stays_readable() {
         let context = CuaRequestContext {
             session_id: "node-repl-session".to_string(),
+            appshot_id: None,
             turn_id: "node-repl-turn".to_string(),
             deadline_ms: Some(1_234),
         };
@@ -1331,6 +1362,7 @@ mod tests {
         let viewport_scroll = BrowserRequest::Scroll {
             target: Some(BrowserTargetKind::UserChrome),
             tab_id: "123".to_string(),
+            appshot_id: None,
             delta_x: 0.0,
             delta_y: 400.0,
             x: None,
@@ -1354,6 +1386,7 @@ mod tests {
         let targeted_scroll = BrowserRequest::Scroll {
             target: Some(BrowserTargetKind::UserChrome),
             tab_id: "123".to_string(),
+            appshot_id: None,
             delta_x: 0.0,
             delta_y: 400.0,
             x: Some(10.0),
@@ -1451,6 +1484,7 @@ mod tests {
             BrowserRequest::MoveMouse {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
+                appshot_id: None,
                 x: 240.0,
                 y: 160.0,
                 wait_for_arrival: true,
@@ -1511,7 +1545,11 @@ mod tests {
                 "setup_window_targeting",
             ),
             (
-                ServiceResponse::LaunchApplication { pid: 4321 },
+                ServiceResponse::LaunchApplication {
+                    pid: 4321,
+                    destination_appshot: None,
+                    diagnostics: vec![],
+                },
                 "launch_application",
             ),
             (
@@ -1541,6 +1579,7 @@ mod tests {
             (
                 ServiceResponse::ActivateWindow {
                     outcome: action_outcome(),
+                    destination_appshot: None,
                 },
                 "activate_window",
             ),
@@ -1615,6 +1654,7 @@ mod tests {
                         response: BrowserOpenResponse {
                             target: BrowserTargetKind::UserChrome,
                             tab: Some(browser_tab()),
+                            destination_appshot: None,
                             diagnostics: Vec::new(),
                         },
                     },
@@ -1913,6 +1953,7 @@ mod tests {
     fn cua_requests_encode_context_and_aliases_without_wire_drift() {
         let context = CuaRequestContext {
             session_id: "session-1".to_string(),
+            appshot_id: None,
             turn_id: "turn-1".to_string(),
             deadline_ms: Some(30_000),
         };

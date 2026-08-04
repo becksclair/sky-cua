@@ -10,6 +10,14 @@ use sky_cua_platform::model::{
     browser_diagnostic_is_error_code,
 };
 
+pub(crate) fn browser_appshot_required_result(
+    rejection: sky_cua_platform::model::AppShotRequired,
+) -> anyhow::Result<Value> {
+    Ok(
+        json!({"content":[{"type":"text","text":rejection.message}],"structuredContent":rejection,"isError":true}),
+    )
+}
+
 use super::args::BrowserTabTextFilter;
 use crate::output_shapes::summary_text_field;
 

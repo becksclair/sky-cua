@@ -61,6 +61,7 @@ pub struct ServiceDaemon {
     snapshots: tokio::sync::Mutex<SnapshotManager>,
     overlay: tokio::sync::Mutex<OverlayController>,
     phone: tokio::sync::Mutex<crate::phone::PhoneManager>,
+    phone_direct: tokio::sync::Mutex<Option<crate::phone::DirectRuntime>>,
     last_phone_request_context: std::sync::Mutex<Option<PhoneRequestContext>>,
     session_presence_config: SessionPresenceConfig,
     session_presence_held: tokio::sync::Mutex<bool>,
@@ -129,12 +130,20 @@ impl ServiceDaemon {
             .copied()
             .filter(|mode| mode.uses_persistent_actor())
             .map(crate::browser::BrowserControlRuntime::new_with_mode);
+        let phone_selection = sky_cua_platform::config::resolved_phone_selection()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+        let phone_direct = crate::phone::DirectRuntime::start(&phone_selection).await?;
+        let mut phone = crate::phone::PhoneManager::new();
+        if let Some(runtime) = phone_direct.as_ref() {
+            phone.set_direct_runtime(Some(runtime.handle()));
+        }
         Ok(Self {
             backend,
             sessions: SessionStore::new(),
             snapshots: tokio::sync::Mutex::new(SnapshotManager::new(8)),
             overlay: tokio::sync::Mutex::new(OverlayController::new(&socket_path)),
-            phone: tokio::sync::Mutex::new(crate::phone::PhoneManager::new()),
+            phone: tokio::sync::Mutex::new(phone),
+            phone_direct: tokio::sync::Mutex::new(phone_direct),
             last_phone_request_context: std::sync::Mutex::new(None),
             session_presence_config: SessionPresenceConfig::from_env(),
             session_presence_held: tokio::sync::Mutex::new(false),
@@ -161,6 +170,19 @@ impl ServiceDaemon {
         if let Some(runtime) = &self.browser_control_runtime {
             runtime.shutdown().await;
         }
+    }
+
+    pub(crate) async fn shutdown_phone_direct(&self) {
+        if let Some(runtime) = self.phone_direct.lock().await.take() {
+            runtime.shutdown().await;
+        }
+    }
+
+    /// Returns whether the explicitly configured Direct listener successfully
+    /// started with this daemon. This is runtime-owned state: idle lifecycle
+    /// decisions must not re-read mutable process configuration after startup.
+    pub(crate) async fn phone_direct_listener_active(&self) -> bool {
+        self.phone_direct.lock().await.is_some()
     }
 
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -311,6 +333,7 @@ impl ServiceDaemon {
             snapshots: tokio::sync::Mutex::new(SnapshotManager::new(8)),
             overlay: tokio::sync::Mutex::new(OverlayController::new_for_tests()),
             phone: tokio::sync::Mutex::new(crate::phone::PhoneManager::new()),
+            phone_direct: tokio::sync::Mutex::new(None),
             last_phone_request_context: std::sync::Mutex::new(None),
             session_presence_config: SessionPresenceConfig::disabled(),
             session_presence_held: tokio::sync::Mutex::new(false),
@@ -541,6 +564,18 @@ impl ServiceDaemon {
             ServiceRequest::Phone { request, context } => {
                 self.handle_phone_request(request, context).await
             }
+            ServiceRequest::PhoneDirectCreateEnrollment => {
+                let runtime = self.phone_direct.lock().await;
+                match runtime.as_ref() {
+                    Some(runtime) => ServiceResponse::PhoneDirectEnrollment {
+                        payload: Box::new(runtime.create_enrollment()),
+                    },
+                    None => error_response(
+                        "PhoneDirectUnavailable",
+                        "Companion Direct enrollment requires explicitly enabled phone-control.v2 configuration",
+                    ),
+                }
+            }
             request => {
                 let _desktop_lane = self.desktop_lane.lock().await;
                 self.handle_desktop_request(request).await
@@ -566,6 +601,9 @@ impl ServiceDaemon {
                 Some(&context),
                 Some("never"),
             );
+        }
+        if let Some(response) = self.validate_cua_context_appshot(&context).await {
+            return response;
         }
         let deadline_at =
             tokio::time::Instant::now() + Duration::from_millis(u64::from(context.deadline_ms()));
@@ -701,6 +739,97 @@ impl ServiceDaemon {
             "cua action finished"
         );
         response
+    }
+
+    async fn validate_cua_context_appshot(
+        &self,
+        context: &CuaRequestContext,
+    ) -> Option<ServiceResponse> {
+        let (reason, target) = {
+            let snapshots = self.snapshots.lock().await;
+            match context
+                .appshot_id
+                .as_deref()
+                .and_then(|id| snapshots.appshot(id))
+            {
+                None if context.appshot_id.is_none() => (
+                    sky_cua_platform::model::AppShotRejectionReason::Missing,
+                    None,
+                ),
+                None => (sky_cua_platform::model::AppShotRejectionReason::Stale, None),
+                Some(appshot) => {
+                    let target = match &appshot.capture {
+                        sky_cua_platform::model::AppShotCapture::Desktop { window_id, .. } => {
+                            Some(WindowTarget {
+                                window_id: Some(window_id.clone()),
+                                ..Default::default()
+                            })
+                        }
+                        _ => None,
+                    };
+                    let session_ok = appshot
+                        .action_snapshot
+                        .session_id
+                        .as_deref()
+                        .is_none_or(|session| session == context.session_id);
+                    if snapshots.is_latest(&appshot.action_snapshot.snapshot_id) && session_ok {
+                        (
+                            sky_cua_platform::model::AppShotRejectionReason::WrongTarget,
+                            target,
+                        )
+                    } else if !session_ok {
+                        (
+                            sky_cua_platform::model::AppShotRejectionReason::WrongSession,
+                            target,
+                        )
+                    } else {
+                        (
+                            sky_cua_platform::model::AppShotRejectionReason::Stale,
+                            target,
+                        )
+                    }
+                }
+            }
+        };
+        if reason == sky_cua_platform::model::AppShotRejectionReason::WrongTarget
+            && let Some(target_id) = target
+                .as_ref()
+                .and_then(|target| target.window_id.as_deref())
+            && let Ok(Some(focused)) = self.backend.focused_window().await
+            && focused.window_id == target_id
+        {
+            return None;
+        }
+        let frontmost = target.is_none();
+        let request_id = format!("recovery-{}", sky_cua_platform::snapshot::new_snapshot_id());
+        let response = self
+            .handle_appshot_capture(request_id, target, frontmost, Default::default())
+            .await;
+        let Some(mut fresh_appshot) = (match response {
+            ServiceResponse::AppShotCapture { result } => result.appshot,
+            _ => None,
+        }) else {
+            return Some(error_response(
+                "AppShotRequired",
+                "desktop CUA action requires a fresh exact-window AppShot",
+            ));
+        };
+        fresh_appshot.trigger = sky_cua_platform::model::AppShotTrigger::Recovery;
+        fresh_appshot.action_snapshot.session_id = Some(context.session_id.clone());
+        self.snapshots
+            .lock()
+            .await
+            .store_appshot((*fresh_appshot).clone());
+        Some(ServiceResponse::AppShotRequired {
+            rejection: Box::new(sky_cua_platform::model::AppShotRequired {
+                code: "AppShotRequired".to_string(),
+                reason,
+                message:
+                    "desktop CUA actions require a present, fresh AppShot for the exact window"
+                        .to_string(),
+                fresh_appshot,
+            }),
+        })
     }
 
     async fn handle_cua_screenshot(

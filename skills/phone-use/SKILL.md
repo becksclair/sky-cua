@@ -1,6 +1,6 @@
 ---
 name: phone-use
-description: "Use for sky-cua MCP phone control: Android discovery, USB/wireless connect, screenshots, touch/text/key input, notifications, apps, and companion-backed actions."
+description: "Use for sky-cua MCP phone control through an ADB or ADB-independent direct Companion session: AppShots, Android input, clipboard/editor, camera, storage, notifications, and apps."
 ---
 
 # Phone Use
@@ -13,10 +13,10 @@ or other host UI.
 
 Every phone plan and execution must name this chain explicitly:
 
-1. Call `status(component="phone")` and discover devices without a session selector.
+1. Call `status(component="phone")` and discover devices without a session selector. Direct Companion devices use `device_id`; ADB devices use `serial`.
 2. Connect, retain the returned exact `session_id`, and pass it on every device-bound call.
-3. Observe a fresh capability profile. If `profile_refresh_state=stale`, refresh or re-observe before selecting an action.
-4. Use only `available_actions`. For pointer work, specify either screenshot-local x/y with the exact producing `phone_snapshot_id`, or accessibility/device x/y with `use_device_coordinates=true`; never pre-scale.
+3. Call `observe(surface="phone", session_id=...)` immediately after connect and retain its exact `appshot_id`. If `profile_refresh_state=stale`, refresh and re-observe.
+4. Use only `available_actions`, and pass the current `appshot_id` to every state-changing call. For pointer work, also specify either screenshot-local x/y with the exact producing `phone_snapshot_id`, or accessibility/device x/y with `use_device_coordinates=true`; never pre-scale.
 5. Inspect the operation's structured result: app management requires `success=true`; other operations require a real `backend`, and `backend=none` means no operation occurred. Preserve diagnostics when reporting refusal or failure.
 6. Re-observe after the operation and prove the requested final state.
 
@@ -28,7 +28,7 @@ For notifications, also check `can_open` and `can_dismiss`, use current event/ac
 - Check host status with `status(component="phone")`.
 - Group connect, disconnect, and refresh under `phone_connection`, setup under `phone_setup`, and app launch/intents under `phone_app_action`.
 - Call neither discovery nor status with a session or serial selector.
-- Use the discovered serial as the connect target.
+- Use the discovered `device_id` for Companion Direct or `serial` for ADB; never invent one from the other.
 - Drive only Android devices in `device` state.
 - Treat `unauthorized` as requiring the on-device USB-debugging prompt.
 - Treat `offline`, `connecting`, `bootloader`, and `recovery` as undrivable.
@@ -42,13 +42,15 @@ For notifications, also check `can_open` and `can_dismiss`, use current event/ac
 - Treat an ambiguous, missing, or unusable target as host status with `PhoneDeviceUnavailable` and no session.
 - Confirm that a session id exists before acting.
 - Reconnect an already-connected serial to refresh its session in place and re-probe its profile and companion bootstrap.
-- Treat missing `adb` as disabling phone use.
+- Missing `adb` disables only ADB sessions. An authenticated Companion Direct device remains fully usable through its advertised capability routes.
 - Treat missing companion or scrcpy as a capability reduction rather than a total failure.
 
 ## Perception, profile, and routing
 
 Use `observe(surface="phone", session_id=...)` as the default perception call.
-It returns a screenshot, fresh `phone_snapshot_id`, current app, cursor state,
+It returns a canonical AppShot containing a clean screenshot, foreground app,
+interactive accessibility windows/tree, consistency and coverage state, fresh
+`phone_snapshot_id`, current app, cursor state,
 servicing `backend`, capability-profile id and refresh state, and
 `available_actions` / `unavailable_actions`; accessibility and notifications
 are opt-in. Use `capture_screen`, `phone_accessibility_tree`, and
@@ -59,8 +61,9 @@ are opt-in. Use `capture_screen`, `phone_accessibility_tree`, and
 | Observe or screenshot | Capture through the companion first, then ADB screencap; the server chooses inline image versus `screenshot_path`; do not choose the backend. |
 | Accessibility tree or notifications | Use the companion; without a reachable companion, return `backend=none` with `PhoneCompanionRequired` and produce nothing. |
 | Tap or swipe | Use the companion gesture path only when a fresh profile, reachable RPC, and gesture capability are proven; otherwise return `backend=none` with `PhoneCompanionRequired` and never fall back to ADB. |
-| Text or key input | Use ADB in v1; there is no companion IME, so focus the field first. Preserve whitespace and reject empty text. |
-| App management or setup | Use the ADB-backed app/setup tools; app-management success is the structured `success` boolean. |
+| Text or key input | Direct sessions use accessibility/editor input, with optional Sky IME capabilities advertised separately; ADB remains a compatibility provider. Focus the intended editor first. |
+| Clipboard/editor, camera, content, or storage | Use the grouped direct-Companion tools and only operations whose capability routes are ready. IME, visible camera activity, all-files access, and SAF roots remain explicit prerequisites. |
+| App management or setup | Direct sessions support launch/intents/settings; force-stop and silent install remain ADB-only in v1. App-management success is the structured `success` boolean. |
 | scrcpy | Use only its host-visible cursor-overlay plane; it never dispatches touch, text, or key input and never supplies screenshots. |
 
 - Fail coordinate actions closed while the companion gesture lane is unproven.
@@ -68,6 +71,7 @@ are opt-in. Use `capture_screen`, `phone_accessibility_tree`, and
 - Treat the profile as invalid after reconnect, companion install/update, orientation or display-size change, RPC failure, or wireless drop.
 - Refresh after permission state may have changed because permission revocation is not auto-detected mid-session.
 - Treat a successful dispatch as input delivery only.
+- `AppShotRequired` means the requested mutation did not execute. Continue from the fresh recovery AppShot returned with the error; never blindly replay a non-idempotent action after reconnect.
 - Re-observe before typing or submitting when a first-run consent sheet, permission prompt, feature promo, browser notification dialog, keyboard promo, or cookie wall may have stolen focus.
 - Open a result URL through intent if search submission is swallowed.
 

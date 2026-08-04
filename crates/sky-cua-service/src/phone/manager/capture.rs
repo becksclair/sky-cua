@@ -377,25 +377,89 @@ impl PhoneManager {
         };
 
         let mut diagnostics = Vec::new();
+        let mut appshot = None;
+        if self.direct_identity(&ctx.session_id).is_some() {
+            match self.direct_appshot(&ctx.session_id).await {
+                Ok(value) => appshot = Some(Box::new(value)),
+                Err(diag) => diagnostics.push(diag),
+            }
+        }
         let mut phone_snapshot_id = None;
         let mut screenshot_path = None;
         let mut inline_image = None;
         let mut cursor = None;
         let mut backend = PhoneBackendKind::None;
 
-        match self
-            .capture(&ctx, request.include_image_data, request.backend)
-            .await
-        {
-            Ok(shot) => {
-                phone_snapshot_id = Some(shot.phone_snapshot_id);
-                screenshot_path = shot.screenshot_path;
-                inline_image = shot.inline_image;
-                cursor = shot.cursor;
-                backend = shot.backend;
-                diagnostics.extend(shot.diagnostics);
+        if let Some(value) = appshot.as_ref() {
+            phone_snapshot_id = Some(value.appshot_id.clone());
+            screenshot_path = Some(value.image.content_id.clone());
+            backend = PhoneBackendKind::Companion;
+            if request.include_image_data {
+                match tokio::fs::read(&value.image.content_id).await {
+                    Ok(bytes) => {
+                        let serial = ctx.serial.clone();
+                        let snapshot_id = value.appshot_id.clone();
+                        match tokio::task::spawn_blocking(move || {
+                            let image = image::load_from_memory(&bytes)
+                                .map_err(|error| error.to_string())?;
+                            let device_size = PixelSize {
+                                width: image.width(),
+                                height: image.height(),
+                            };
+                            Ok::<_, String>(assemble_capture(
+                                bytes,
+                                Some(image),
+                                None,
+                                true,
+                                device_size,
+                                &serial,
+                                &snapshot_id,
+                            ))
+                        })
+                        .await
+                        {
+                            Ok(Ok(assembly)) => {
+                                inline_image = assembly.inline_image;
+                                diagnostics.extend(assembly.diagnostics);
+                            }
+                            Ok(Err(error)) => diagnostics.push(DiagnosticEntry {
+                                code: "PhoneAppShotImageUnavailable".into(),
+                                message: format!(
+                                    "failed to decode CompanionDirect AppShot image: {error}"
+                                ),
+                                details: None,
+                            }),
+                            Err(error) => diagnostics.push(DiagnosticEntry {
+                                code: "PhoneAppShotImageUnavailable".into(),
+                                message: format!(
+                                    "failed to prepare CompanionDirect AppShot image: {error}"
+                                ),
+                                details: None,
+                            }),
+                        }
+                    }
+                    Err(error) => diagnostics.push(DiagnosticEntry {
+                        code: "PhoneAppShotImageUnavailable".into(),
+                        message: format!("failed to read CompanionDirect AppShot image: {error}"),
+                        details: None,
+                    }),
+                }
             }
-            Err(diag) => diagnostics.push(diag),
+        } else {
+            match self
+                .capture(&ctx, request.include_image_data, request.backend)
+                .await
+            {
+                Ok(shot) => {
+                    phone_snapshot_id = Some(shot.phone_snapshot_id);
+                    screenshot_path = shot.screenshot_path;
+                    inline_image = shot.inline_image;
+                    cursor = shot.cursor;
+                    backend = shot.backend;
+                    diagnostics.extend(shot.diagnostics);
+                }
+                Err(diag) => diagnostics.push(diag),
+            }
         }
 
         let current_app = match self.current_app_info(&ctx.session_id, &ctx.serial).await {
@@ -417,8 +481,13 @@ impl PhoneManager {
             Vec::new()
         };
 
+        if let Some(value) = appshot.as_ref() {
+            self.appshots
+                .insert(value.appshot_id.clone(), (**value).clone());
+        }
         PhoneObserveResponse {
             session: session.clone(),
+            appshot,
             phone_snapshot_id,
             screenshot_path,
             inline_image,
@@ -765,6 +834,7 @@ fn observe_no_session(selector: &PhoneSessionSelector) -> PhoneObserveResponse {
     let (session_id, serial) = selector_ids(selector);
     PhoneObserveResponse {
         session: empty_session(&session_id, &serial),
+        appshot: None,
         phone_snapshot_id: None,
         screenshot_path: None,
         inline_image: None,
@@ -814,10 +884,12 @@ fn empty_session(session_id: &str, serial: &str) -> sky_cua_platform::model::Pho
         device_owner: false,
         available_actions: Vec::new(),
         unavailable_actions: Vec::new(),
+        routes: Vec::new(),
     };
     sky_cua_platform::model::PhoneSession {
         session_id: session_id.to_string(),
         serial: serial.to_string(),
+        connection: None,
         connection_kind: sky_cua_platform::model::PhoneConnectionKind::Unknown,
         backend: PhoneBackendKind::None,
         capabilities: empty_backend_caps(),

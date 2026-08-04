@@ -3,6 +3,9 @@ use super::capture_reuse::reuse_unchanged_capture;
 use super::session_presence::session_presence_disabled_response;
 use super::*;
 use sky_cua_overlay_host::OverlayArrivalOutcome;
+use sky_cua_platform::model::{
+    AppShotCapture, AppShotRejectionReason, AppShotRequired, AppShotTrigger,
+};
 
 #[cfg(not(test))]
 const ACTION_VISUAL_ARRIVAL_TIMEOUT: Duration = Duration::from_secs(8);
@@ -34,7 +37,7 @@ impl ServiceDaemon {
             | ServiceRequest::BrowserClientDisconnected { .. } => {
                 unreachable!("browser lifecycle requests bypass the desktop request lane")
             }
-            ServiceRequest::Phone { .. } => {
+            ServiceRequest::Phone { .. } | ServiceRequest::PhoneDirectCreateEnrollment => {
                 unreachable!("phone requests bypass the desktop request lane")
             }
             ServiceRequest::SessionPresence { action } => match action {
@@ -108,7 +111,27 @@ impl ServiceDaemon {
                 // design and the project's non-security-hardening posture.
                 debug!(command = %command, "handling launch_application request");
                 match self.backend.launch_application(&command, &args).await {
-                    Ok(launched) => ServiceResponse::LaunchApplication { pid: launched.pid },
+                    Ok(launched) => {
+                        let destination_appshot = self
+                            .capture_destination_appshot(Some(WindowTarget {
+                                pid: Some(launched.pid),
+                                ..Default::default()
+                            }))
+                            .await;
+                        ServiceResponse::LaunchApplication {
+                            pid: launched.pid,
+                            diagnostics: if destination_appshot.is_none() {
+                                vec![DiagnosticEntry {
+                                    code: "DestinationAppShotUnavailable".into(),
+                                    message: "application launched, but the exact destination window AppShot was unavailable".into(),
+                                    details: None,
+                                }]
+                            } else {
+                                vec![]
+                            },
+                            destination_appshot,
+                        }
+                    }
                     Err(error) => error_response(error.code, error.message),
                 }
             }
@@ -209,8 +232,25 @@ impl ServiceDaemon {
                     deadline_ms = context.as_ref().map(CuaRequestContext::deadline_ms),
                     "handling activate_window request"
                 );
-                match self.backend.activate_window(target).await {
-                    Ok(outcome) => ServiceResponse::ActivateWindow { outcome },
+                match self.backend.activate_window(target.clone()).await {
+                    Ok(mut outcome) => {
+                        let destination_appshot = if outcome.success {
+                            self.capture_destination_appshot(Some(target)).await
+                        } else {
+                            None
+                        };
+                        if outcome.success && destination_appshot.is_none() {
+                            outcome.diagnostics.push(DiagnosticEntry {
+                                code: "DestinationAppShotUnavailable".to_string(),
+                                message: "window activation succeeded, but an exact-window destination AppShot could not be captured".to_string(),
+                                details: None,
+                            });
+                        }
+                        ServiceResponse::ActivateWindow {
+                            outcome,
+                            destination_appshot,
+                        }
+                    }
                     Err(error) => {
                         let diagnostic = error.diagnostic();
                         ServiceResponse::ActivateWindow {
@@ -221,6 +261,7 @@ impl ServiceDaemon {
                                 diagnostics: vec![diagnostic],
                                 agent_cursor: None,
                             },
+                            destination_appshot: None,
                         }
                     }
                 }
@@ -342,8 +383,18 @@ impl ServiceDaemon {
                 frontmost,
                 flags,
             } => {
-                self.handle_appshot_capture(request_id, target, frontmost, flags)
-                    .await
+                let response = self
+                    .handle_appshot_capture(request_id, target, frontmost, flags)
+                    .await;
+                if let ServiceResponse::AppShotCapture { result } = &response
+                    && let Some(appshot) = result.appshot.as_ref()
+                {
+                    self.snapshots
+                        .lock()
+                        .await
+                        .store_appshot((**appshot).clone());
+                }
+                response
             }
             ServiceRequest::AgentCursorStatus => {
                 let status = self.overlay.lock().await.status();
@@ -373,8 +424,20 @@ impl ServiceDaemon {
                 }
             }
             ServiceRequest::ExecuteAction { request } => {
+                let mut request = *request;
+                if request.snapshot_id.is_none() {
+                    request.snapshot_id = self
+                        .snapshots
+                        .lock()
+                        .await
+                        .appshot(request.appshot_id.as_deref().unwrap_or_default())
+                        .map(|appshot| appshot.action_snapshot.snapshot_id.clone());
+                }
+                if let Some(response) = self.validate_action_appshot(&request).await {
+                    return response;
+                }
                 let arrival_deadline = tokio::time::Instant::now() + ACTION_VISUAL_ARRIVAL_TIMEOUT;
-                let request = match self.enrich_action_request(*request).await {
+                let request = match self.enrich_action_request(request).await {
                     Ok(request) => request,
                     Err((code, message)) => return error_response(code, message),
                 };
@@ -513,6 +576,105 @@ impl ServiceDaemon {
         request.resolved_target_element = resolve_target_element(&snapshot, &request.arguments)?;
 
         Ok(request)
+    }
+
+    async fn validate_action_appshot(&self, request: &ActionRequest) -> Option<ServiceResponse> {
+        let appshot_id = request.appshot_id.as_deref();
+        let (reason, target) = {
+            let snapshots = self.snapshots.lock().await;
+            match appshot_id.and_then(|id| snapshots.appshot(id)) {
+                None if appshot_id.is_none() => (AppShotRejectionReason::Missing, None),
+                None => (AppShotRejectionReason::Stale, None),
+                Some(appshot) => {
+                    let target = match &appshot.capture {
+                        AppShotCapture::Desktop { window_id, .. } => Some(WindowTarget {
+                            window_id: Some(window_id.clone()),
+                            ..Default::default()
+                        }),
+                        _ => None,
+                    };
+                    let snapshot_ok = request
+                        .snapshot_id
+                        .as_deref()
+                        .is_some_and(|id| id == appshot.action_snapshot.snapshot_id)
+                        && snapshots.is_latest(&appshot.action_snapshot.snapshot_id);
+                    if !snapshot_ok {
+                        (AppShotRejectionReason::Stale, target)
+                    } else {
+                        (AppShotRejectionReason::WrongTarget, target)
+                    }
+                }
+            }
+        };
+
+        // A valid appshot is accepted only when its snapshot is still latest;
+        // target verification is performed against the focused window below.
+        if reason == AppShotRejectionReason::WrongTarget {
+            let target_id = target.as_ref().and_then(|t| t.window_id.as_deref());
+            if let Ok(Some(focused)) = self.backend.focused_window().await
+                && target_id == Some(focused.window_id.as_str())
+            {
+                return None;
+            }
+        }
+
+        let capture_target = target;
+        let frontmost = capture_target.is_none();
+        let request_id = format!("recovery-{}", sky_cua_platform::snapshot::new_snapshot_id());
+        let response = self
+            .handle_appshot_capture(request_id, capture_target, frontmost, Default::default())
+            .await;
+        let fresh_appshot = match response {
+            ServiceResponse::AppShotCapture { result } => {
+                let mut appshot = result.appshot?;
+                appshot.trigger = AppShotTrigger::Recovery;
+                self.snapshots
+                    .lock()
+                    .await
+                    .store_appshot((*appshot).clone());
+                Some(appshot)
+            }
+            _ => None,
+        };
+        let Some(fresh_appshot) = fresh_appshot else {
+            return Some(error_response(
+                "AppShotRequired",
+                "desktop action requires a fresh exact-window AppShot; capture was unavailable",
+            ));
+        };
+        Some(ServiceResponse::AppShotRequired {
+            rejection: Box::new(AppShotRequired {
+                code: "AppShotRequired".to_string(),
+                reason,
+                message: "desktop state-changing actions require a present, fresh AppShot for the exact window and snapshot".to_string(),
+                fresh_appshot,
+            }),
+        })
+    }
+
+    async fn capture_destination_appshot(
+        &self,
+        target: Option<WindowTarget>,
+    ) -> Option<Box<sky_cua_platform::model::AppShotEnvelope>> {
+        let request_id = format!(
+            "destination-{}",
+            sky_cua_platform::snapshot::new_snapshot_id()
+        );
+        let response = self
+            .handle_appshot_capture(request_id, target, false, Default::default())
+            .await;
+        match response {
+            ServiceResponse::AppShotCapture { result } => {
+                let mut appshot = result.appshot?;
+                appshot.trigger = AppShotTrigger::DesktopActivation;
+                self.snapshots
+                    .lock()
+                    .await
+                    .store_appshot((*appshot).clone());
+                Some(appshot)
+            }
+            _ => None,
+        }
     }
 }
 

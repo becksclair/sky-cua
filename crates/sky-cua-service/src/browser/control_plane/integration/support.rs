@@ -445,6 +445,8 @@ pub(in crate::browser::control_plane) fn append_response_diagnostic(
         | BrowserResponse::PressKey { response }
         | BrowserResponse::Scroll { response } => response.diagnostics.push(diagnostic),
         BrowserResponse::Eval { response } => response.diagnostics.push(diagnostic),
+        BrowserResponse::AppShot { response } => response.appshot.diagnostics.push(diagnostic),
+        BrowserResponse::AppShotRequired { .. } => {}
         BrowserResponse::Status { report } => report.diagnostics.push(diagnostic),
     }
 }

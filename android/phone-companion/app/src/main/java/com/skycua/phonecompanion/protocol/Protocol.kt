@@ -20,6 +20,7 @@ object Protocol {
         const val CAPABILITIES = "capabilities"
         const val ACCESSIBILITY_TREE = "accessibility_tree"
         const val SCREENSHOT = "screenshot"
+        const val APP_SHOT = "appshot"
         const val GESTURE = "gesture"
         const val CURSOR_OVERLAY = "cursor_overlay"
         const val OVERLAY_ACTIVE = "overlay_active"
@@ -29,6 +30,11 @@ object Protocol {
         const val CURRENT_APP = "current_app"
         const val APP_LIST = "app_list"
         const val APP_OP = "app_op"
+        const val CLIPBOARD = "phone_clipboard"
+        const val EDITOR = "phone_editor"
+        const val STORAGE = "phone_storage"
+        const val CAMERA = "phone_camera"
+        const val KEY = "phone_key"
 
         val ALL =
             setOf(
@@ -36,6 +42,7 @@ object Protocol {
                 CAPABILITIES,
                 ACCESSIBILITY_TREE,
                 SCREENSHOT,
+                APP_SHOT,
                 GESTURE,
                 CURSOR_OVERLAY,
                 OVERLAY_ACTIVE,
@@ -45,6 +52,11 @@ object Protocol {
                 CURRENT_APP,
                 APP_LIST,
                 APP_OP,
+                CLIPBOARD,
+                EDITOR,
+                STORAGE,
+                CAMERA,
+                KEY,
             )
     }
 

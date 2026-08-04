@@ -1,16 +1,26 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+mod appshot;
 mod browser;
 mod browser_control;
+mod content;
 mod phone;
+mod phone_capability;
+mod phone_direct;
+mod phone_features;
 mod service;
+
+pub use appshot::{
+    AppShotActionSnapshot, AppShotCapture, AppShotConsistency, AppShotCoverage, AppShotEnvelope,
+    AppShotRejectionReason, AppShotRequired, AppShotSurface, AppShotTrigger,
+};
 
 pub use browser::{
     BROWSER_EVAL_ENV, BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT, BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT,
     BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT, BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserActionResponse,
-    BrowserCallerKind, BrowserCallerProvenance, BrowserClaimTabResponse, BrowserEvalResponse,
-    BrowserListTabsResponse, BrowserLogicalIdentity, BrowserMcpClientInfo,
+    BrowserAppShotResponse, BrowserCallerKind, BrowserCallerProvenance, BrowserClaimTabResponse,
+    BrowserEvalResponse, BrowserListTabsResponse, BrowserLogicalIdentity, BrowserMcpClientInfo,
     BrowserMoveMouseResponse, BrowserNavigateResponse, BrowserOpenResponse,
     BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequest, BrowserRequestContext,
     BrowserResponse, BrowserScreenshotResponse, BrowserSessionIdentity, BrowserSnapshotResponse,
@@ -30,6 +40,13 @@ pub use browser_control::{
     BrowserControlServerFrame, BrowserHostHello, BrowserHostHelloOk, BrowserInstanceIdentity,
     BrowserInstanceStability, BrowserLeaseReference, BrowserLeaseState, BrowserMigrationMode,
     BrowserOperationClass, BrowserOperationScope, BrowserTabKey,
+};
+pub use content::{
+    APPSHOT_ARTIFACT_DEFAULT_LEASE_MS, ContentChunkHeader, ContentPersistence, ContentRef,
+    ContentSource, ContentTransferCommit, ContentTransferDeclaration,
+    PHONE_CONTENT_CHUNK_FIXED_HEADER_BYTES, PHONE_CONTENT_DEFAULT_CHUNK_BYTES,
+    PHONE_CONTENT_DEFAULT_LEASE_MS, PHONE_CONTENT_MAX_TRANSFER_ID_BYTES,
+    PHONE_CONTROL_MAX_JSON_BYTES, decode_content_chunk, encode_content_chunk,
 };
 pub use phone::{
     PhoneAccessibilityNode, PhoneAccessibilitySummary, PhoneAccessibilityTreeRequest,
@@ -52,6 +69,28 @@ pub use phone::{
     PhoneScreenshotRequest, PhoneScreenshotResponse, PhoneSession, PhoneSessionSelector,
     PhoneSettingsScreen, PhoneStatusReport, PhoneStatusRequest, PhoneSwipeRequest, PhoneTapRequest,
     PhoneTargetDeviceKind, PhoneTypeTextRequest, PhoneUnavailableAction,
+};
+pub use phone_capability::{
+    PhoneActivationClass, PhoneCapabilityAvailability, PhoneCapabilityFidelity,
+    PhoneCapabilityProfileIdentity, PhoneCapabilityRoute, PhoneConnectionIdentity,
+    PhoneOperationProvider, PhoneTransportKind,
+};
+pub use phone_direct::{
+    PHONE_CONTROL_PROTOCOL_V2, PHONE_ENROLLMENT_DEFAULT_TTL_MS, PHONE_ENROLLMENT_PENDING_TTL_MS,
+    PhoneAuthChallenge, PhoneAuthHello, PhoneAuthOk, PhoneAuthProof, PhoneDirectControlFrame,
+    PhoneDirectRole, PhoneEnrollmentAck, PhoneEnrollmentCommitted, PhoneEnrollmentPayload,
+    PhoneEnrollmentResult,
+};
+pub use phone_features::{
+    PHONE_CAMERA_V1_MAX_HEIGHT, PHONE_CAMERA_V1_MAX_VIDEO_DURATION_MS, PHONE_CAMERA_V1_MAX_WIDTH,
+    PhoneCameraControls, PhoneCameraDescriptor, PhoneCameraFacing, PhoneCameraMediaMetadata,
+    PhoneCameraOptions, PhoneCameraRequest, PhoneCameraResponse, PhoneClipboardItem,
+    PhoneClipboardPayload, PhoneClipboardRequest, PhoneClipboardResponse, PhoneContentRequest,
+    PhoneContentResponse, PhoneEditorOutcome, PhoneEditorRequest, PhoneEditorResponse,
+    PhoneFeatureCall, PhoneFeatureError, PhoneFlashMode, PhoneFpsRange, PhoneMediaSize,
+    PhoneStorageEntry, PhoneStorageEntryKind, PhoneStorageFeatures, PhoneStorageMetadata,
+    PhoneStorageRequest, PhoneStorageResponse, PhoneStorageRoot, PhoneStorageRootKind,
+    PhoneVideoProfile,
 };
 pub use service::{
     APPSHOT_CAPTURE_CAPABILITY_V1, AppShotAccessibilityStatus, AppShotApplication,
@@ -1266,6 +1305,8 @@ pub enum ActionName {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ActionRequest {
     pub action: ActionName,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appshot_id: Option<String>,
     pub snapshot_id: Option<String>,
     pub element_index: Option<usize>,
     #[serde(default)]

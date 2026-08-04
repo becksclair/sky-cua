@@ -70,6 +70,7 @@ impl PhoneManager {
             device_owner: false,
             available_actions: Vec::new(),
             unavailable_actions: Vec::new(),
+            routes: Vec::new(),
         }
     }
 
@@ -185,6 +186,7 @@ impl PhoneManager {
             device_owner: false,
             available_actions: Vec::new(),
             unavailable_actions: Vec::new(),
+            routes: Vec::new(),
         };
         let capabilities = self.backend_capabilities(&profile);
         super::routing::populate_actions(&mut profile, &capabilities);
@@ -192,6 +194,10 @@ impl PhoneManager {
         let session = PhoneSession {
             session_id: session_id.to_string(),
             serial: serial.to_string(),
+            connection: Some(PhoneConnectionIdentity::Adb {
+                serial: serial.to_string(),
+                name: profile.model.clone(),
+            }),
             connection_kind: PhoneConnectionKind::Usb,
             backend: PhoneBackendKind::Companion,
             capabilities,
@@ -274,6 +280,7 @@ impl PhoneManager {
             device_owner: false,
             available_actions: Vec::new(),
             unavailable_actions: Vec::new(),
+            routes: Vec::new(),
         };
         let capabilities = self.backend_capabilities(&profile);
         super::routing::populate_actions(&mut profile, &capabilities);
@@ -281,6 +288,10 @@ impl PhoneManager {
         let session = PhoneSession {
             session_id: session_id.clone(),
             serial: serial.to_string(),
+            connection: Some(PhoneConnectionIdentity::Adb {
+                serial: serial.to_string(),
+                name: profile.model.clone(),
+            }),
             connection_kind: PhoneConnectionKind::Usb,
             backend: PhoneBackendKind::Scrcpy,
             capabilities,
@@ -389,6 +400,7 @@ impl PhoneManager {
             device_owner: false,
             available_actions: Vec::new(),
             unavailable_actions: Vec::new(),
+            routes: Vec::new(),
         };
         let capabilities = self.backend_capabilities(&profile);
         super::routing::populate_actions(&mut profile, &capabilities);
@@ -396,6 +408,10 @@ impl PhoneManager {
         let session = PhoneSession {
             session_id: session_id.clone(),
             serial: serial.to_string(),
+            connection: Some(PhoneConnectionIdentity::Adb {
+                serial: serial.to_string(),
+                name: profile.model.clone(),
+            }),
             connection_kind: PhoneConnectionKind::Usb,
             backend: PhoneBackendKind::Scrcpy,
             capabilities,

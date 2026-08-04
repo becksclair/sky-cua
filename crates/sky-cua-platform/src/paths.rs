@@ -88,6 +88,24 @@ pub fn sky_cua_state_dir() -> io::Result<PathBuf> {
     }
 }
 
+/// Resolve the durable Companion Direct state file without depending on the
+/// daemon's current working directory. Absolute overrides remain explicit;
+/// relative overrides are names within the per-user state directory.
+pub fn phone_direct_state_path(configured: Option<&str>) -> io::Result<PathBuf> {
+    let configured = configured.map(str::trim).filter(|value| !value.is_empty());
+    Ok(match configured {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            if path.is_absolute() {
+                path
+            } else {
+                sky_cua_state_dir()?.join(path)
+            }
+        }
+        None => sky_cua_state_dir()?.join("phone-direct-state.json"),
+    })
+}
+
 pub fn portal_tokens_path() -> io::Result<PathBuf> {
     Ok(sky_cua_state_dir()?.join("portal-tokens.json"))
 }
@@ -131,7 +149,7 @@ mod tests {
 
     use super::{
         OVERLAY_HOST_TCP_ADDR_ENV, SERVICE_SOCKET_PATH_ENV, SERVICE_TCP_ADDR_ENV,
-        overlay_host_tcp_addr, service_socket_path,
+        overlay_host_tcp_addr, phone_direct_state_path, service_socket_path,
     };
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -214,5 +232,35 @@ mod tests {
         restore_env(OVERLAY_HOST_TCP_ADDR_ENV, old_overlay_addr);
 
         assert_eq!(addr, "127.0.0.1:50123");
+    }
+
+    #[test]
+    fn phone_direct_state_path_is_stable_and_cwd_independent() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let old_state = std::env::var_os("XDG_STATE_HOME");
+        let old_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("XDG_STATE_HOME", "/tmp/sky-cua-state-test");
+            std::env::remove_var("HOME");
+        }
+
+        let default_path = phone_direct_state_path(None).expect("state path");
+        let relative_path =
+            phone_direct_state_path(Some("nested/direct.json")).expect("state path");
+        let absolute_path =
+            phone_direct_state_path(Some("/var/lib/sky-cua/direct.json")).expect("state path");
+
+        restore_env("XDG_STATE_HOME", old_state);
+        restore_env("HOME", old_home);
+
+        assert_eq!(
+            default_path,
+            PathBuf::from("/tmp/sky-cua-state-test/sky-cua/phone-direct-state.json")
+        );
+        assert_eq!(
+            relative_path,
+            PathBuf::from("/tmp/sky-cua-state-test/sky-cua/nested/direct.json")
+        );
+        assert_eq!(absolute_path, PathBuf::from("/var/lib/sky-cua/direct.json"));
     }
 }

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
+use super::{AppShotEnvelope, AppShotRequired};
 use super::{BrowserIntegrationReport, DiagnosticEntry};
 
 /// Identity shared with Codex Browser Use for browser-tab ownership.
@@ -225,6 +226,8 @@ pub enum BrowserRequest {
         y: f64,
         #[serde(default = "default_wait_for_arrival")]
         wait_for_arrival: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        appshot_id: Option<String>,
     },
     Navigate {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,6 +248,20 @@ pub enum BrowserRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         element_query: Option<String>,
     },
+    ObserveAppShot {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<BrowserTargetKind>,
+        tab_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_limit: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        element_limit: Option<usize>,
+        #[serde(
+            default = "default_include_image_data",
+            skip_serializing_if = "is_true"
+        )]
+        include_image_data: bool,
+    },
     Screenshot {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<BrowserTargetKind>,
@@ -261,6 +278,8 @@ pub enum BrowserRequest {
         tab_id: String,
         x: f64,
         y: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        appshot_id: Option<String>,
     },
     /// Click an element by an opaque reference obtained from a browser
     /// snapshot, rather than by CSS-pixel coordinates. The service re-resolves
@@ -272,12 +291,16 @@ pub enum BrowserRequest {
         target: Option<BrowserTargetKind>,
         tab_id: String,
         element_ref: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        appshot_id: Option<String>,
     },
     TypeText {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<BrowserTargetKind>,
         tab_id: String,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        appshot_id: Option<String>,
     },
     /// Focus an element by an opaque snapshot reference and type into it in one
     /// step (see [`BrowserRequest::ClickElement`] for the reference contract).
@@ -287,12 +310,16 @@ pub enum BrowserRequest {
         tab_id: String,
         element_ref: String,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        appshot_id: Option<String>,
     },
     PressKey {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<BrowserTargetKind>,
         tab_id: String,
         key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        appshot_id: Option<String>,
     },
     Scroll {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -304,17 +331,25 @@ pub enum BrowserRequest {
         x: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         y: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        appshot_id: Option<String>,
     },
     Eval {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<BrowserTargetKind>,
         tab_id: String,
         expression: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        appshot_id: Option<String>,
     },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "serialized IPC response variants keep their public payload shapes inline"
+)]
 pub enum BrowserResponse {
     Status { report: BrowserStatusReport },
     ListTabs { response: BrowserListTabsResponse },
@@ -323,6 +358,8 @@ pub enum BrowserResponse {
     MoveMouse { response: BrowserMoveMouseResponse },
     Navigate { response: BrowserNavigateResponse },
     Snapshot { response: BrowserSnapshotResponse },
+    AppShot { response: BrowserAppShotResponse },
+    AppShotRequired { rejection: AppShotRequired },
     Screenshot { response: BrowserScreenshotResponse },
     Click { response: BrowserActionResponse },
     TypeText { response: BrowserActionResponse },
@@ -348,6 +385,7 @@ impl BrowserRequest {
             | Self::ListTabs { .. }
             | Self::Snapshot { .. }
             | Self::Screenshot { .. }
+            | Self::ObserveAppShot { .. }
             | Self::MoveMouse { .. } => true,
             Self::Open { .. }
             | Self::ClaimTab { .. }
@@ -427,11 +465,13 @@ pub struct BrowserListTabsResponse {
     pub diagnostics: Vec<DiagnosticEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BrowserOpenResponse {
     pub target: BrowserTargetKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab: Option<BrowserTab>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_appshot: Option<Box<AppShotEnvelope>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<DiagnosticEntry>,
 }
@@ -461,6 +501,8 @@ pub struct BrowserNavigateResponse {
     pub target: BrowserTargetKind,
     pub tab_id: String,
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_appshot: Option<Box<AppShotEnvelope>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<DiagnosticEntry>,
 }
@@ -477,6 +519,17 @@ pub struct BrowserSnapshotResponse {
     pub snapshot: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<DiagnosticEntry>,
+}
+
+/// Browser AppShot transport response. The canonical envelope is structured
+/// content; image bytes are carried only in the MCP content attachment path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BrowserAppShotResponse {
+    pub appshot: AppShotEnvelope,
+    #[serde(default)]
+    pub image_data_base64: String,
+    #[serde(default)]
+    pub image_mime_type: String,
 }
 
 /// Environment variable gating arbitrary page-JavaScript execution via
@@ -617,6 +670,7 @@ mod tests {
                 x: 10.0,
                 y: 10.0,
                 wait_for_arrival: true,
+                appshot_id: Some("shot-1".into()),
             },
         ];
         for request in idempotent {
@@ -642,16 +696,19 @@ mod tests {
                 tab_id: "123".to_string(),
                 x: 10.0,
                 y: 10.0,
+                appshot_id: Some("shot-1".into()),
             },
             BrowserRequest::TypeText {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
                 text: "hello".to_string(),
+                appshot_id: Some("shot-1".into()),
             },
             BrowserRequest::PressKey {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
                 key: "Enter".to_string(),
+                appshot_id: Some("shot-1".into()),
             },
             BrowserRequest::Scroll {
                 target: Some(BrowserTargetKind::UserChrome),
@@ -660,11 +717,13 @@ mod tests {
                 delta_y: 100.0,
                 x: None,
                 y: None,
+                appshot_id: Some("shot-1".into()),
             },
             BrowserRequest::Eval {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
                 expression: "1 + 1".to_string(),
+                appshot_id: Some("shot-1".into()),
             },
         ];
         for request in non_idempotent {
@@ -719,6 +778,7 @@ mod tests {
             target: Some(BrowserTargetKind::UserChrome),
             tab_id: "42".to_string(),
             element_ref: "opaque-token".to_string(),
+            appshot_id: Some("shot-1".into()),
         };
         let json = serde_json::to_string(&request).expect("serialize");
         assert!(
@@ -741,6 +801,7 @@ mod tests {
             tab_id: "7".to_string(),
             element_ref: "tok".to_string(),
             text: "hello".to_string(),
+            appshot_id: Some("shot-1".into()),
         };
         let json = serde_json::to_string(&request).expect("serialize");
         let back: BrowserRequest = serde_json::from_str(&json).expect("deserialize");

@@ -5,11 +5,16 @@
 
 use std::sync::Arc;
 
+use chrono::Utc;
 use sky_cua_platform::config::{PhoneConfig, resolve_phone_selection};
+use sky_cua_platform::model::PhoneDirectControlFrame;
 use sky_cua_platform::model::{
-    PhoneBackendKind, PhoneCapabilityRefreshState, PhoneConnectRequest, PhoneConnectionKind,
-    PhoneObserveRequest, PhoneRequest, PhoneResponse, PhoneScreenshotRequest, PhoneSessionSelector,
-    PhoneTapRequest, PhoneTypeTextRequest, PixelSize,
+    AppShotActionSnapshot, AppShotCapture, AppShotConsistency, AppShotCoverage, AppShotEnvelope,
+    ContentPersistence, ContentRef, ContentSource, PhoneBackendKind, PhoneCapabilityRefreshState,
+    PhoneCompanionStatusRequest, PhoneConnectRequest, PhoneConnectionKind, PhoneContentRequest,
+    PhoneFeatureCall, PhoneListDevicesRequest, PhoneObserveRequest, PhonePressKeyRequest,
+    PhoneRefreshCapabilitiesRequest, PhoneRequest, PhoneResponse, PhoneScreenshotRequest,
+    PhoneSessionSelector, PhoneTapRequest, PhoneTypeTextRequest, PixelSize,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -17,6 +22,7 @@ use tokio::sync::oneshot;
 
 use super::PhoneManager;
 use crate::phone::command::FakeCommandRunner;
+use crate::phone::direct::DirectRuntimeHandle;
 
 const SERIAL: &str = "emulator-5554";
 const COMPANION_TOKEN: &str = "app-op-token";
@@ -31,6 +37,261 @@ fn png_bytes(width: u32, height: u32) -> Vec<u8> {
         .write_to(&mut out, image::ImageFormat::Png)
         .expect("encode png");
     out.into_inner()
+}
+
+#[tokio::test]
+async fn direct_companion_status_dispatches_idempotently_at_current_epoch() {
+    let (mut manager, runner) = adb_only_manager();
+    let direct = DirectRuntimeHandle::new();
+    let (mut control, _bulk) = direct.register_fake("direct-device", 12);
+    manager.set_direct_runtime(Some(direct.clone()));
+    let responder = tokio::spawn({
+        let direct = direct.clone();
+        async move {
+            for _ in 0..2 {
+                let tokio_tungstenite::tungstenite::Message::Text(text) =
+                    control.recv().await.unwrap()
+                else {
+                    panic!("expected request frame");
+                };
+                let PhoneDirectControlFrame::Request {
+                    request_id,
+                    device_id,
+                    link_epoch,
+                    idempotent,
+                    method,
+                    ..
+                } = serde_json::from_str(&text).unwrap()
+                else {
+                    panic!("expected request");
+                };
+                assert_eq!(method, "companion.status");
+                assert_eq!(device_id, "direct-device");
+                assert_eq!(link_epoch, 12);
+                assert!(idempotent);
+                direct.respond(PhoneDirectControlFrame::Response {
+                    request_id,
+                    device_id,
+                    link_epoch,
+                    result: serde_json::json!({"ok": true}),
+                });
+            }
+        }
+    });
+    let connected = manager
+        .handle(PhoneRequest::Connect(PhoneConnectRequest {
+            serial: None,
+            device_id: Some("direct-device".into()),
+            backend: None,
+            install_companion: false,
+            start_scrcpy: false,
+        }))
+        .await;
+    let PhoneResponse::Connected(session) = connected else {
+        panic!("expected direct session");
+    };
+    let session_id = session.session_id.clone();
+    let response = manager
+        .handle(PhoneRequest::CompanionStatus(PhoneCompanionStatusRequest {
+            session: PhoneSessionSelector {
+                session_id: Some(session_id),
+                serial: None,
+                device_id: Some("direct-device".into()),
+                appshot_id: None,
+            },
+        }))
+        .await;
+    let PhoneResponse::CompanionStatus(status) = response else {
+        panic!("expected companion status");
+    };
+    assert!(status.diagnostics.is_empty());
+    assert!(runner.recorded_calls().is_empty());
+    responder.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct_capability_refresh_reprobes_companion_without_adb() {
+    let (mut manager, runner) = adb_only_manager();
+    let direct = DirectRuntimeHandle::new();
+    let (mut control, _bulk) = direct.register_fake("direct-refresh", 7);
+    manager.set_direct_runtime(Some(direct.clone()));
+    let responder = tokio::spawn({
+        let direct = direct.clone();
+        async move {
+            for enabled in [false, true] {
+                let tokio_tungstenite::tungstenite::Message::Text(text) =
+                    control.recv().await.unwrap()
+                else {
+                    panic!("expected request")
+                };
+                let PhoneDirectControlFrame::Request {
+                    request_id,
+                    device_id,
+                    link_epoch,
+                    method,
+                    ..
+                } = serde_json::from_str(&text).unwrap()
+                else {
+                    panic!("expected request frame")
+                };
+                assert_eq!(method, "companion.status");
+                direct.respond(PhoneDirectControlFrame::Response {
+                    request_id,
+                    device_id,
+                    link_epoch,
+                    result: serde_json::json!({"accessibility_enabled": enabled, "can_perform_gestures": enabled}),
+                });
+            }
+        }
+    });
+    let PhoneResponse::Connected(session) = manager
+        .handle(PhoneRequest::Connect(PhoneConnectRequest {
+            serial: None,
+            device_id: Some("direct-refresh".into()),
+            backend: None,
+            install_companion: false,
+            start_scrcpy: false,
+        }))
+        .await
+    else {
+        panic!("expected direct session")
+    };
+    direct.emit_event("direct-refresh", 7, "capability_changed");
+    manager.drain_direct_events();
+    assert!(manager.profiles.values().any(|entry| entry.profile.stale));
+    let response = manager
+        .handle(PhoneRequest::RefreshCapabilities(
+            PhoneRefreshCapabilitiesRequest {
+                session: PhoneSessionSelector {
+                    session_id: Some(session.session_id),
+                    serial: None,
+                    device_id: Some("direct-refresh".into()),
+                    appshot_id: None,
+                },
+            },
+        ))
+        .await;
+    let PhoneResponse::Capabilities(profile) = response else {
+        panic!("expected capabilities")
+    };
+    assert_eq!(
+        profile.refresh_state,
+        PhoneCapabilityRefreshState::Refreshed
+    );
+    assert!(profile.companion.can_perform_gestures);
+    assert!(runner.recorded_calls().is_empty());
+    responder.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct_phone_content_describe_and_release_dispatch_to_companion() {
+    let (mut manager, runner) = adb_only_manager();
+    let direct = DirectRuntimeHandle::new();
+    let (mut control, _bulk) = direct.register_fake("direct-content", 9);
+    manager.set_direct_runtime(Some(direct.clone()));
+    let responder = tokio::spawn({
+        let direct = direct.clone();
+        async move {
+            for expected in ["companion.status", "content.describe", "content.release"] {
+                let tokio_tungstenite::tungstenite::Message::Text(text) =
+                    control.recv().await.unwrap()
+                else {
+                    panic!("expected request")
+                };
+                let PhoneDirectControlFrame::Request {
+                    request_id,
+                    device_id,
+                    link_epoch,
+                    method,
+                    ..
+                } = serde_json::from_str(&text).unwrap()
+                else {
+                    panic!("expected request frame")
+                };
+                assert_eq!(method, expected);
+                let result = if expected == "content.describe" {
+                    serde_json::json!({"content":{"content_id":"phone-c1","device_id":"direct-content","link_epoch":9,"mime_type":"text/plain","size_bytes":5,"sha256":"00".repeat(32),"source":"companion_blob","persistence":"temporary"},"released":false})
+                } else if expected == "content.release" {
+                    serde_json::json!({"released":true})
+                } else {
+                    serde_json::json!({})
+                };
+                direct.respond(PhoneDirectControlFrame::Response {
+                    request_id,
+                    device_id,
+                    link_epoch,
+                    result,
+                });
+            }
+        }
+    });
+    let PhoneResponse::Connected(session) = manager
+        .handle(PhoneRequest::Connect(PhoneConnectRequest {
+            serial: None,
+            device_id: Some("direct-content".into()),
+            backend: None,
+            install_companion: false,
+            start_scrcpy: false,
+        }))
+        .await
+    else {
+        panic!("expected direct session")
+    };
+    let selector = PhoneSessionSelector {
+        session_id: Some(session.session_id),
+        serial: None,
+        device_id: Some("direct-content".into()),
+        appshot_id: None,
+    };
+    let described = manager
+        .phone_content(PhoneFeatureCall {
+            session: selector.clone(),
+            request: PhoneContentRequest::Describe {
+                content_id: "phone-c1".into(),
+            },
+        })
+        .await
+        .expect("describe content");
+    assert_eq!(described.content.unwrap().content_id, "phone-c1");
+    let released = manager
+        .phone_content(PhoneFeatureCall {
+            session: selector,
+            request: PhoneContentRequest::Release {
+                content_id: "phone-c1".into(),
+            },
+        })
+        .await
+        .expect("release content");
+    assert!(released.released);
+    assert!(runner.recorded_calls().is_empty());
+    responder.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct_epoch_supersession_replaces_old_manager_session() {
+    let (mut manager, _runner) = adb_only_manager();
+    let direct = DirectRuntimeHandle::new();
+    let (_control, _bulk) = direct.register_fake("direct-device", 1);
+    manager.set_direct_runtime(Some(direct.clone()));
+    let request = || {
+        PhoneRequest::Connect(PhoneConnectRequest {
+            serial: None,
+            device_id: Some("direct-device".into()),
+            backend: None,
+            install_companion: false,
+            start_scrcpy: false,
+        })
+    };
+    let PhoneResponse::Connected(first) = manager.handle(request()).await else {
+        panic!("first direct connect");
+    };
+    let (_control, _bulk) = direct.register_fake("direct-device", 2);
+    let PhoneResponse::Connected(second) = manager.handle(request()).await else {
+        panic!("superseding direct connect");
+    };
+    assert_ne!(first.session_id, second.session_id);
+    assert_eq!(manager.sessions.len(), 1);
+    assert!(manager.profiles.contains_key(&second.session_id));
 }
 
 /// A minimal [`WindowInfo`] for the window-adoption matching tests: only the
@@ -225,13 +486,744 @@ fn selector(session_id: &str) -> PhoneSessionSelector {
     PhoneSessionSelector {
         session_id: Some(session_id.to_string()),
         serial: None,
+        device_id: None,
+        appshot_id: None,
     }
+}
+
+fn direct_appshot(session_id: &str, device_id: &str, epoch: u64) -> AppShotEnvelope {
+    let content = |id: &str| ContentRef {
+        content_id: id.into(),
+        device_id: Some(device_id.into()),
+        link_epoch: Some(epoch),
+        mime_type: "application/json".into(),
+        filename: None,
+        size_bytes: 1,
+        sha256: "00".repeat(32),
+        source: ContentSource::HostPrivateArtifact,
+        expires_at_ms: None,
+        persistence: ContentPersistence::Temporary,
+    };
+    AppShotEnvelope {
+        appshot_id: "shot-valid".into(),
+        trigger: sky_cua_platform::model::AppShotTrigger::Observe,
+        captured_at: Utc::now(),
+        consistency: AppShotConsistency::Stable,
+        capture: AppShotCapture::Phone {
+            device_id: device_id.into(),
+            link_epoch: epoch,
+            package_name: None,
+            activity_name: None,
+            display_id: 0,
+            window_ids: vec![],
+            semantic_projection: serde_json::json!([]),
+            event_sequence_before: 1,
+            event_sequence_after: 1,
+            full_tree_artifact: content("tree"),
+        },
+        image: content("image"),
+        action_snapshot: AppShotActionSnapshot {
+            snapshot_id: "snap-valid".into(),
+            session_id: Some(session_id.into()),
+            subject_generation: Some(epoch),
+        },
+        coverage: AppShotCoverage {
+            pixels_complete: true,
+            semantics_complete: true,
+            secure_regions_redacted: false,
+            projection_truncated: false,
+            total_semantic_nodes: Some(0),
+            projected_semantic_nodes: Some(0),
+        },
+        capability_profile_id: "profile".into(),
+        diagnostics: vec![],
+    }
+}
+
+fn direct_appshot_wire_result(
+    direct: &DirectRuntimeHandle,
+    appshot_id: &str,
+    device_id: &str,
+    epoch: u64,
+    package: &str,
+    event_sequence: u64,
+) -> serde_json::Value {
+    let image = direct.commit_fake_content(
+        device_id,
+        epoch,
+        &format!("{appshot_id}-screen"),
+        "image/png",
+        ContentSource::Screenshot,
+        &[0],
+    );
+    serde_json::json!({
+        "appshot_id": appshot_id,
+        "captured_at_ms": 1,
+        "consistency": "stable",
+        "foreground": {"package": package, "activity": "Main"},
+        "display": {"id": 0, "width": 100, "height": 200},
+        "windows": [],
+        "event_sequence_before": event_sequence,
+        "event_sequence_after": event_sequence,
+        "coverage": {
+            "pixels_complete": true,
+            "semantics_complete": true,
+            "projection_truncated": false,
+            "secure_regions_redacted": false,
+            "total_semantic_nodes": 0,
+            "projected_semantic_nodes": 0
+        },
+        "screenshot": {"mime_type": "image/png", "width": 100, "height": 200, "content_ref": image}
+    })
+}
+
+#[tokio::test]
+async fn direct_observe_registers_its_appshot_as_an_actionable_phone_snapshot() {
+    let (mut manager, _runner) = adb_only_manager();
+    let direct = DirectRuntimeHandle::new();
+    let (mut control, _bulk) = direct.register_fake("direct-device", 9);
+    manager.set_direct_runtime(Some(direct.clone()));
+    let responder = tokio::spawn({
+        let direct = direct.clone();
+        async move {
+            for expected_method in ["companion.status", "appshot"] {
+                let Some(tokio_tungstenite::tungstenite::Message::Text(text)) =
+                    control.recv().await
+                else {
+                    panic!("expected {expected_method} request")
+                };
+                let PhoneDirectControlFrame::Request {
+                    request_id,
+                    device_id,
+                    link_epoch,
+                    method,
+                    ..
+                } = serde_json::from_str(&text).expect("request")
+                else {
+                    panic!("request frame")
+                };
+                assert_eq!(method, expected_method);
+                let result = if method == "appshot" {
+                    direct_appshot_wire_result(
+                        &direct,
+                        "actionable-shot",
+                        &device_id,
+                        link_epoch,
+                        "com.example.app",
+                        1,
+                    )
+                } else {
+                    serde_json::json!({
+                        "accessibility_enabled": true,
+                        "can_perform_gestures": true,
+                        "can_retrieve_window_content": true,
+                        "can_take_screenshot": true
+                    })
+                };
+                direct.respond(PhoneDirectControlFrame::Response {
+                    request_id,
+                    device_id,
+                    link_epoch,
+                    result,
+                });
+            }
+        }
+    });
+    let connected = manager
+        .handle(PhoneRequest::Connect(PhoneConnectRequest {
+            serial: None,
+            device_id: Some("direct-device".into()),
+            backend: None,
+            install_companion: false,
+            start_scrcpy: false,
+        }))
+        .await;
+    let PhoneResponse::Connected(session) = connected else {
+        panic!("expected direct session")
+    };
+    let observed = manager
+        .handle(PhoneRequest::Observe(PhoneObserveRequest {
+            session: selector(&session.session_id),
+            backend: None,
+            include_image_data: false,
+            include_accessibility: false,
+            include_notifications: false,
+        }))
+        .await;
+    let PhoneResponse::Observe(observed) = observed else {
+        panic!("expected direct observation")
+    };
+    let snapshot_id = observed.phone_snapshot_id.expect("phone snapshot id");
+    assert_eq!(snapshot_id, "actionable-shot");
+    let record = manager
+        .sessions
+        .get(&session.session_id)
+        .expect("session")
+        .snapshots
+        .resolve(&snapshot_id, &session.session_id, "", super::now_ms())
+        .expect("registered direct AppShot snapshot");
+    assert_eq!(
+        record.device_size,
+        PixelSize {
+            width: 100,
+            height: 200
+        }
+    );
+    assert_eq!(
+        record.screenshot_size,
+        PixelSize {
+            width: 100,
+            height: 200
+        }
+    );
+    responder.await.expect("responder");
+}
+
+#[tokio::test]
+async fn direct_list_and_connect_do_not_require_adb_or_fake_a_serial() {
+    let (mut manager, runner) = adb_only_manager();
+    let direct = DirectRuntimeHandle::new();
+    let (_control, _bulk) = direct.register_fake("direct-device", 9);
+    manager.set_direct_runtime(Some(direct));
+
+    let listed = manager
+        .handle(PhoneRequest::ListDevices(PhoneListDevicesRequest::default()))
+        .await;
+    let PhoneResponse::Devices(listed) = listed else {
+        panic!("expected device list");
+    };
+    let device = listed
+        .devices
+        .iter()
+        .find(|device| device.device_id.as_deref() == Some("direct-device"))
+        .expect("direct device listed");
+    assert!(device.serial.is_empty());
+    assert_eq!(device.link_epoch, Some(9));
+    let encoded = serde_json::to_value(device).expect("device JSON");
+    assert!(
+        encoded.get("serial").is_none(),
+        "direct device must not emit fake serial"
+    );
+    let before_connect = runner.recorded_calls().len();
+
+    let connected = manager
+        .handle(PhoneRequest::Connect(PhoneConnectRequest {
+            serial: None,
+            device_id: Some("direct-device".into()),
+            backend: None,
+            install_companion: false,
+            start_scrcpy: false,
+        }))
+        .await;
+    let PhoneResponse::Connected(session) = connected else {
+        panic!("expected direct session");
+    };
+    assert!(session.serial.is_empty());
+    assert_eq!(
+        session.connection_kind,
+        PhoneConnectionKind::CompanionDirect
+    );
+    assert_eq!(runner.recorded_calls().len(), before_connect);
+}
+
+#[tokio::test]
+async fn direct_observe_invalidation_does_not_treat_missing_adb_serial_as_disconnect() {
+    let (mut manager, runner) = adb_only_manager();
+    let direct = DirectRuntimeHandle::new();
+    let (_control, _bulk) = direct.register_fake("direct-device", 9);
+    manager.set_direct_runtime(Some(direct));
+    let connected = manager
+        .handle(PhoneRequest::Connect(PhoneConnectRequest {
+            serial: None,
+            device_id: Some("direct-device".into()),
+            backend: None,
+            install_companion: false,
+            start_scrcpy: false,
+        }))
+        .await;
+    let PhoneResponse::Connected(session) = connected else {
+        panic!("expected direct session")
+    };
+    let before = runner.recorded_calls().len();
+
+    manager
+        .invalidate_on_observe_triggers(&session.session_id, &session.serial)
+        .await;
+
+    assert!(
+        !manager
+            .profiles
+            .get(&session.session_id)
+            .expect("direct profile")
+            .profile
+            .stale
+    );
+    assert_eq!(runner.recorded_calls().len(), before);
+}
+
+#[tokio::test]
+async fn stale_direct_profile_refreshes_over_the_direct_link_without_adb() {
+    let (mut manager, runner) = adb_only_manager();
+    let direct = DirectRuntimeHandle::new();
+    let (mut control, _bulk) = direct.register_fake("direct-device", 9);
+    manager.set_direct_runtime(Some(direct.clone()));
+    let responder = tokio::spawn({
+        let direct = direct.clone();
+        async move {
+            for _ in 0..2 {
+                let Some(tokio_tungstenite::tungstenite::Message::Text(text)) =
+                    control.recv().await
+                else {
+                    panic!("expected companion status request")
+                };
+                let PhoneDirectControlFrame::Request {
+                    request_id,
+                    device_id,
+                    link_epoch,
+                    method,
+                    ..
+                } = serde_json::from_str(&text).expect("request")
+                else {
+                    panic!("request frame")
+                };
+                assert_eq!(method, "companion.status");
+                direct.respond(PhoneDirectControlFrame::Response {
+                    request_id,
+                    device_id,
+                    link_epoch,
+                    result: serde_json::json!({
+                        "accessibility_enabled": true,
+                        "can_perform_gestures": true,
+                        "can_retrieve_window_content": true,
+                        "can_take_screenshot": true
+                    }),
+                });
+            }
+        }
+    });
+    let connected = manager
+        .handle(PhoneRequest::Connect(PhoneConnectRequest {
+            serial: None,
+            device_id: Some("direct-device".into()),
+            backend: None,
+            install_companion: false,
+            start_scrcpy: false,
+        }))
+        .await;
+    let PhoneResponse::Connected(session) = connected else {
+        panic!("expected direct session")
+    };
+    manager
+        .profiles
+        .get_mut(&session.session_id)
+        .expect("direct profile")
+        .profile
+        .stale = true;
+    let before = runner.recorded_calls().len();
+
+    let context = manager
+        .fresh_action_context(&selector(&session.session_id))
+        .await
+        .expect("refreshed direct context");
+
+    assert!(!context.profile.stale);
+    assert_eq!(
+        context.profile.connection_kind,
+        PhoneConnectionKind::CompanionDirect
+    );
+    assert_eq!(runner.recorded_calls().len(), before);
+    responder.await.expect("responder task");
+}
+
+#[tokio::test]
+async fn direct_press_key_dispatches_current_epoch_without_adb_or_replay() {
+    let (mut manager, runner) = adb_only_manager();
+    let direct = DirectRuntimeHandle::new();
+    let (mut control, _bulk) = direct.register_fake("direct-device", 11);
+    manager.set_direct_runtime(Some(direct.clone()));
+    let responder = tokio::spawn({
+        let direct = direct.clone();
+        async move {
+            let Some(tokio_tungstenite::tungstenite::Message::Text(text)) = control.recv().await
+            else {
+                panic!("expected companion status request")
+            };
+            let PhoneDirectControlFrame::Request {
+                request_id,
+                device_id,
+                link_epoch,
+                method,
+                ..
+            } = serde_json::from_str(&text).expect("request")
+            else {
+                panic!("request frame")
+            };
+            assert_eq!(method, "companion.status");
+            direct.respond(PhoneDirectControlFrame::Response {
+                request_id,
+                device_id,
+                link_epoch,
+                result: serde_json::json!({
+                    "accessibility_enabled": true,
+                    "can_perform_gestures": true,
+                    "can_retrieve_window_content": true,
+                    "can_take_screenshot": true
+                }),
+            });
+
+            let Some(tokio_tungstenite::tungstenite::Message::Text(text)) = control.recv().await
+            else {
+                panic!("expected input request")
+            };
+            let PhoneDirectControlFrame::Request {
+                request_id,
+                device_id,
+                link_epoch,
+                idempotent,
+                method,
+                ..
+            } = serde_json::from_str(&text).expect("request")
+            else {
+                panic!("request frame")
+            };
+            assert_eq!(device_id, "direct-device");
+            assert_eq!(link_epoch, 11);
+            assert!(!idempotent);
+            assert_eq!(method, "input.key");
+            direct.respond(PhoneDirectControlFrame::Response {
+                request_id,
+                device_id,
+                link_epoch,
+                result: serde_json::json!({"accepted": true}),
+            });
+        }
+    });
+    let connected = manager
+        .handle(PhoneRequest::Connect(PhoneConnectRequest {
+            serial: None,
+            device_id: Some("direct-device".into()),
+            backend: None,
+            install_companion: false,
+            start_scrcpy: false,
+        }))
+        .await;
+    let PhoneResponse::Connected(session) = connected else {
+        panic!("expected direct session");
+    };
+    let session_id = session.session_id.clone();
+    manager.appshots.insert(
+        "shot-valid".into(),
+        direct_appshot(&session_id, "direct-device", 11),
+    );
+    let response = manager
+        .handle(PhoneRequest::PressKey(PhonePressKeyRequest {
+            session: PhoneSessionSelector {
+                session_id: Some(session_id),
+                serial: None,
+                device_id: Some("direct-device".into()),
+                appshot_id: Some("shot-valid".into()),
+            },
+            key: "ENTER".into(),
+        }))
+        .await;
+    let PhoneResponse::Action(action) = response else {
+        panic!("expected action response");
+    };
+    assert_eq!(action.backend, PhoneBackendKind::Companion);
+    assert!(action.diagnostics.is_empty());
+    assert!(runner.recorded_calls().is_empty());
+    responder.await.expect("responder task");
+}
+
+#[tokio::test]
+async fn direct_appshot_identity_mismatch_fence_rejects_session_device_and_epoch() {
+    let (mut manager, _runner) = adb_only_manager();
+    let direct = DirectRuntimeHandle::new();
+    let (_control, _bulk) = direct.register_fake("direct-device", 11);
+    manager.set_direct_runtime(Some(direct));
+    let connected = manager
+        .handle(PhoneRequest::Connect(PhoneConnectRequest {
+            serial: None,
+            device_id: Some("direct-device".into()),
+            backend: None,
+            install_companion: false,
+            start_scrcpy: false,
+        }))
+        .await;
+    let PhoneResponse::Connected(session) = connected else {
+        panic!("expected direct session")
+    };
+    let session_id = session.session_id;
+    manager.appshots.insert(
+        "shot-valid".into(),
+        direct_appshot(&session_id, "direct-device", 11),
+    );
+    let mut wrong_device = selector(&session_id);
+    wrong_device.device_id = Some("other-device".into());
+    wrong_device.appshot_id = Some("shot-valid".into());
+    assert!(!manager.appshot_matches(&wrong_device, &session_id));
+    let mut wrong_epoch = selector(&session_id);
+    wrong_epoch.appshot_id = Some("shot-valid".into());
+    if let Some(sky_cua_platform::model::AppShotCapture::Phone { link_epoch, .. }) = manager
+        .appshots
+        .get_mut("shot-valid")
+        .map(|s| &mut s.capture)
+    {
+        *link_epoch = 10;
+    }
+    assert!(!manager.appshot_matches(&wrong_epoch, &session_id));
+    let wrong_session = selector("missing-session");
+    assert!(!manager.appshot_matches(&wrong_session, "missing-session"));
+}
+
+#[tokio::test]
+async fn direct_missing_appshot_rejects_grouped_mutation_without_dispatch() {
+    let (mut manager, _runner) = adb_only_manager();
+    let direct = DirectRuntimeHandle::new();
+    let (mut control, _bulk) = direct.register_fake("direct-device", 11);
+    manager.set_direct_runtime(Some(direct.clone()));
+    let responder = tokio::spawn({
+        let direct = direct.clone();
+        async move {
+            let Some(tokio_tungstenite::tungstenite::Message::Text(text)) = control.recv().await
+            else {
+                panic!("expected companion status request")
+            };
+            let PhoneDirectControlFrame::Request {
+                request_id,
+                device_id,
+                link_epoch,
+                method,
+                ..
+            } = serde_json::from_str(&text).expect("request")
+            else {
+                panic!("request frame")
+            };
+            assert_eq!(method, "companion.status");
+            direct.respond(PhoneDirectControlFrame::Response {
+                request_id,
+                device_id,
+                link_epoch,
+                result: serde_json::json!({
+                    "accessibility_enabled": true,
+                    "can_perform_gestures": true,
+                    "can_retrieve_window_content": true,
+                    "can_take_screenshot": true
+                }),
+            });
+
+            let Some(tokio_tungstenite::tungstenite::Message::Text(text)) = control.recv().await
+            else {
+                panic!("expected appshot request")
+            };
+            let PhoneDirectControlFrame::Request {
+                request_id,
+                device_id,
+                link_epoch,
+                method,
+                ..
+            } = serde_json::from_str(&text).expect("request")
+            else {
+                panic!("request frame")
+            };
+            assert_eq!(method, "appshot");
+            let result =
+                direct_appshot_wire_result(&direct, "fresh-shot", &device_id, link_epoch, "pkg", 1);
+            direct.respond(PhoneDirectControlFrame::Response {
+                request_id,
+                device_id,
+                link_epoch,
+                result,
+            });
+            if let Ok(Some(tokio_tungstenite::tungstenite::Message::Text(next))) =
+                tokio::time::timeout(std::time::Duration::from_millis(50), control.recv()).await
+            {
+                let PhoneDirectControlFrame::Request { method, .. } =
+                    serde_json::from_str(&next).expect("request")
+                else {
+                    panic!("request frame")
+                };
+                assert_ne!(
+                    method, "clipboard.set",
+                    "mutation must not follow appshot capture"
+                );
+            }
+        }
+    });
+    let connected = manager
+        .handle(PhoneRequest::Connect(PhoneConnectRequest {
+            serial: None,
+            device_id: Some("direct-device".into()),
+            backend: None,
+            install_companion: false,
+            start_scrcpy: false,
+        }))
+        .await;
+    let PhoneResponse::Connected(session) = connected else {
+        panic!("expected direct session")
+    };
+    let response = manager
+        .handle(PhoneRequest::Clipboard(
+            sky_cua_platform::model::PhoneFeatureCall {
+                session: PhoneSessionSelector {
+                    session_id: Some(session.session_id),
+                    serial: None,
+                    device_id: Some("direct-device".into()),
+                    appshot_id: None,
+                },
+                request: sky_cua_platform::model::PhoneClipboardRequest::Set {
+                    payload: sky_cua_platform::model::PhoneClipboardPayload {
+                        label: Some("test".into()),
+                        items: vec![sky_cua_platform::model::PhoneClipboardItem {
+                            text: Some("hello".into()),
+                            html: None,
+                            content: None,
+                            uri: None,
+                            intent_uri: None,
+                            mime_types: vec!["text/plain".into()],
+                        }],
+                        sensitive: false,
+                        changed_at_ms: None,
+                    },
+                },
+            },
+        ))
+        .await;
+    assert!(matches!(response, PhoneResponse::AppShotRequired(_)));
+    responder.await.expect("responder");
+}
+
+#[tokio::test]
+async fn direct_app_launch_appshot_authorizes_next_fenced_action_without_adb() {
+    let (mut manager, runner) = adb_only_manager();
+    let direct = DirectRuntimeHandle::new();
+    let (mut control, _bulk) = direct.register_fake("direct-device", 11);
+    manager.set_direct_runtime(Some(direct.clone()));
+    let responder = tokio::spawn({
+        let direct = direct.clone();
+        async move {
+            for expected_method in ["companion.status", "app.launch", "appshot", "input.key"] {
+                let Some(tokio_tungstenite::tungstenite::Message::Text(text)) =
+                    control.recv().await
+                else {
+                    panic!("expected {expected_method} request")
+                };
+                let PhoneDirectControlFrame::Request {
+                    request_id,
+                    device_id,
+                    link_epoch,
+                    method,
+                    ..
+                } = serde_json::from_str(&text).expect("request")
+                else {
+                    panic!("request frame")
+                };
+                assert_eq!(method, expected_method);
+                let result = if method == "appshot" {
+                    direct_appshot_wire_result(
+                        &direct,
+                        "destination-shot",
+                        &device_id,
+                        link_epoch,
+                        "com.example.app",
+                        2,
+                    )
+                } else {
+                    serde_json::json!({"accepted": true})
+                };
+                direct.respond(PhoneDirectControlFrame::Response {
+                    request_id,
+                    device_id,
+                    link_epoch,
+                    result,
+                });
+            }
+        }
+    });
+    let connected = manager
+        .handle(PhoneRequest::Connect(PhoneConnectRequest {
+            serial: None,
+            device_id: Some("direct-device".into()),
+            backend: None,
+            install_companion: false,
+            start_scrcpy: false,
+        }))
+        .await;
+    let PhoneResponse::Connected(session) = connected else {
+        panic!("expected direct session")
+    };
+    let session_id = session.session_id.clone();
+    let response = manager
+        .handle(PhoneRequest::AppLaunch(
+            sky_cua_platform::model::PhoneAppLaunchRequest {
+                session: PhoneSessionSelector {
+                    session_id: Some(session_id.clone()),
+                    serial: None,
+                    device_id: Some("direct-device".into()),
+                    appshot_id: None,
+                },
+                package_name: "com.example.app".into(),
+            },
+        ))
+        .await;
+    let PhoneResponse::App(response) = response else {
+        panic!("expected app response")
+    };
+    assert!(response.success, "{response:?}");
+    let destination = response.destination_appshot.expect("destination appshot");
+    assert_eq!(destination.appshot_id, "destination-shot");
+    assert!(
+        matches!(destination.capture, sky_cua_platform::model::AppShotCapture::Phone { ref device_id, link_epoch: 11, .. } if device_id == "direct-device")
+    );
+    let action = manager
+        .handle(PhoneRequest::PressKey(PhonePressKeyRequest {
+            session: PhoneSessionSelector {
+                session_id: Some(session_id),
+                serial: None,
+                device_id: Some("direct-device".into()),
+                appshot_id: Some(destination.appshot_id.clone()),
+            },
+            key: "ENTER".into(),
+        }))
+        .await;
+    let PhoneResponse::Action(action) = action else {
+        panic!("expected fenced direct action")
+    };
+    assert_eq!(action.backend, PhoneBackendKind::Companion);
+    assert!(action.diagnostics.is_empty());
+    assert!(runner.recorded_calls().is_empty());
+    responder.await.expect("responder");
+}
+
+#[tokio::test]
+async fn direct_connect_rejects_serial_and_device_id_without_side_effect() {
+    let (mut manager, runner) = adb_only_manager();
+    let response = manager
+        .handle(PhoneRequest::Connect(PhoneConnectRequest {
+            serial: Some(SERIAL.into()),
+            device_id: Some("direct-device".into()),
+            backend: None,
+            install_companion: false,
+            start_scrcpy: false,
+        }))
+        .await;
+    let PhoneResponse::Status(report) = response else {
+        panic!("expected status rejection");
+    };
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("mutually exclusive"))
+    );
+    assert!(runner.recorded_calls().is_empty());
 }
 
 async fn connect(manager: &mut PhoneManager) -> sky_cua_platform::model::PhoneSession {
     match manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.to_string()),
+            device_id: None,
             backend: None,
             install_companion: false,
             start_scrcpy: false,
@@ -357,6 +1349,7 @@ async fn connect_rejects_serial_absent_from_device_list() {
     let resp = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some("phone-smoke-nonexistent-serial".to_string()),
+            device_id: None,
             backend: None,
             install_companion: false,
             start_scrcpy: false,
@@ -412,6 +1405,7 @@ async fn connect_forced_adb_bootstraps_installed_companion_but_keeps_adb_dispatc
     match manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.to_string()),
+            device_id: None,
             backend: Some(PhoneBackendKind::Adb),
             install_companion: false,
             start_scrcpy: false,
@@ -2471,6 +3465,7 @@ async fn connect_with_start_scrcpy_missing_binary_degrades_with_diagnostic() {
     let session = match manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.to_string()),
+            device_id: None,
             backend: None,
             install_companion: false,
             start_scrcpy: true,
@@ -2585,6 +3580,7 @@ async fn reconnect_with_start_scrcpy_relaunches_dead_mirror_via_adoption() {
     let reconnected = match manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.to_string()),
+            device_id: None,
             backend: None,
             install_companion: false,
             start_scrcpy: true,
@@ -2648,6 +3644,7 @@ async fn reconnect_with_start_scrcpy_surfaces_diagnostic_when_relaunch_fails() {
     let reconnected = match manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.to_string()),
+            device_id: None,
             backend: None,
             install_companion: false,
             start_scrcpy: true,
@@ -3323,6 +4320,7 @@ async fn wireless_connect_failure_surfaces_connect_failed_diagnostic() {
     match manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(WIRELESS_SERIAL.to_string()),
+            device_id: None,
             backend: None,
             install_companion: false,
             start_scrcpy: false,
@@ -4353,6 +5351,7 @@ async fn connect_auto_connects_configured_wireless_default() {
     let _ = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.to_string()),
+            device_id: None,
             backend: None,
             install_companion: false,
             start_scrcpy: false,
@@ -4390,6 +5389,7 @@ async fn connect_does_not_auto_connect_when_disabled() {
     let _ = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.to_string()),
+            device_id: None,
             backend: None,
             install_companion: false,
             start_scrcpy: false,

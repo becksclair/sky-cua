@@ -8,11 +8,12 @@
 
 use sky_cua_platform::model::{
     DiagnosticEntry, DisplayInfo, PhoneAccessibilityTreeResponse, PhoneActionResponse,
-    PhoneAppResponse, PhoneAppResponseKind, PhoneBackendKind, PhoneCapabilityRefreshState,
-    PhoneCompanionCapabilities, PhoneCompanionStatusResponse, PhoneDisconnectResponse,
-    PhoneListDevicesResponse, PhoneNotificationsResponse, PhonePairWirelessResponse, PhoneRequest,
-    PhoneResponse, PhoneSession, PhoneSessionSelector, PhoneStatusReport, PixelSize, RectF,
-    WindowInfo,
+    PhoneAppResponse, PhoneAppResponseKind, PhoneBackendKind, PhoneCameraResponse,
+    PhoneCapabilityRefreshState, PhoneClipboardResponse, PhoneCompanionCapabilities,
+    PhoneCompanionStatusResponse, PhoneContentResponse, PhoneDisconnectResponse,
+    PhoneEditorOutcome, PhoneEditorResponse, PhoneListDevicesResponse, PhoneNotificationsResponse,
+    PhonePairWirelessResponse, PhoneRequest, PhoneResponse, PhoneSession, PhoneSessionSelector,
+    PhoneStatusReport, PhoneStorageResponse, PixelSize, RectF, WindowInfo,
 };
 
 /// Platform-unsupported phone runtime. Holds no state; every request returns an
@@ -131,6 +132,36 @@ impl PhoneManager {
             PhoneRequest::InstallCompanion(request) => {
                 PhoneResponse::Action(action(&request.session, "phone_install_companion"))
             }
+            PhoneRequest::Content(_) => PhoneResponse::Content(PhoneContentResponse {
+                content: None,
+                path: None,
+                released: false,
+            }),
+            PhoneRequest::Clipboard(_) => PhoneResponse::Clipboard(PhoneClipboardResponse {
+                payload: None,
+                sequence: 0,
+                changes: Vec::new(),
+            }),
+            PhoneRequest::Editor(_) => PhoneResponse::Editor(PhoneEditorResponse {
+                outcome: PhoneEditorOutcome::NoEditableTarget,
+                surrounding_text: None,
+                selection_start: None,
+                selection_end: None,
+                accepted_mime_types: Vec::new(),
+            }),
+            PhoneRequest::Camera(_) => PhoneResponse::Camera(PhoneCameraResponse {
+                cameras: Vec::new(),
+                session_id: None,
+                content: None,
+                metadata: None,
+            }),
+            PhoneRequest::Storage(_) => PhoneResponse::Storage(PhoneStorageResponse {
+                entries: Vec::new(),
+                roots: Vec::new(),
+                content: None,
+                metadata: None,
+                result_uri: None,
+            }),
             PhoneRequest::Status(_)
             | PhoneRequest::Connect(_)
             | PhoneRequest::Observe(_)

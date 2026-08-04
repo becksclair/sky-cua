@@ -58,6 +58,7 @@ class ResultSerializationTest {
         assertEquals(34L, obj.long("screenshot_api_level"))
         assertEquals(true, obj.bool("screenshot_supported"))
         assertEquals(true, obj.bool("gesture_supported"))
+        assertEquals(false, obj.bool("process_death_autorestart"))
         // health fields carried through.
         assertEquals(true, obj.bool("accessibility_enabled"))
     }

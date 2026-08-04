@@ -1,0 +1,32 @@
+{
+  "protocol": "phone-control.v2",
+  "roles": ["companion", "saga"],
+  "control_frame_types": [
+    "enrollment_redeem", "enrollment_ok", "enrollment_ack", "enrollment_committed",
+    "auth_hello", "auth_challenge", "auth_proof", "auth_ok", "request", "response",
+    "error", "event", "content_declare", "content_commit", "content_abort",
+    "ping", "pong"
+  ],
+  "content_sources": [
+    "camera_photo", "camera_preview", "camera_video", "clipboard", "companion_blob",
+    "content_uri", "host_private_artifact", "media_store", "saf", "screenshot", "shared_path"
+  ],
+  "content_persistence": ["persisted_host_path", "persisted_media_store", "persisted_saf", "temporary"],
+  "limits": {
+    "chunk_bytes": 262144,
+    "max_json_bytes": 1048576,
+    "temporary_phone_lease_ms": 900000,
+    "appshot_artifact_lease_ms": 3600000,
+    "enrollment_ttl_ms": 300000
+  },
+  "invariants": [
+    "binary_content_never_embedded_in_json",
+    "control_frames_preempt_bulk_chunks",
+    "non_idempotent_requests_are_not_replayed",
+    "old_link_epochs_are_rejected",
+    "pending_enrollment_cannot_dispatch_control",
+    "device_activates_only_after_durable_android_proof",
+    "consumed_bootstrap_is_never_reissued",
+    "incomplete_transfers_are_not_committed"
+  ]
+}

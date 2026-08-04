@@ -23,6 +23,7 @@ dialogs, and desktop windows. Use `phone-use` for Android or phone-browser UI.
 - List tabs before opening a new tab.
 - Claim a relevant existing tab such as active/about:blank.
 - Navigate the claimed tab and keep reusing its `tab_id`.
+- `browser_open` and navigation return the destination AppShot. Before any other state-changing page input, retain the latest exact `appshot_id` for that tab/document and pass it to the action.
 - Open a fresh tab only when no existing tab can serve.
 - Never claim or drive privileged internal pages such as `chrome://*`, `devtools://*`, `view-source:*`, or the extensions page.
 - Privileged internal pages are not CDP page targets, and claiming or navigating them can hang and wedge the debugger transport.
@@ -40,16 +41,17 @@ dialogs, and desktop windows. Use `phone-use` for Android or phone-browser UI.
 
 ## Observe and finish
 
-- Prefer `observe(surface="browser", tab_id=...)` for title, URL, viewport, visible text, actionable bounds, and per-element `ref` values.
+- Prefer `observe(surface="browser", tab_id=...)` for the screenshot, title, URL, viewport, visible text, actionable bounds, per-element `ref` values, document generation, and canonical `appshot_id` captured together.
 - Defaults are compact; on dense pages use element query, offset, and limit controls, use `text_limit: 0` for controls-only snapshots, and raise text limits only when page text is the task.
-- Use `capture_screen(surface="browser", tab_id=...)` for visual layout or pixel targeting because browser `observe` does not return an image.
+- Use the image attached to browser `observe` for visual layout and pixel targeting; `capture_screen` remains a focused screenshot call but does not replace the AppShot action fence.
+- Pass the latest matching `appshot_id` to every state-changing browser input. `AppShotRequired` proves the rejected side effect did not run and includes a fresh recovery AppShot; continue from that new id.
 - Tool success means only that input was dispatched, so verify consequential changes with a fresh observation or screenshot.
 - If fresh evidence shows no intended change, re-observe, correct the current field or target state, and retry the action once; if it is still unchanged, stop and report the failure.
 - Stop only after fresh browser evidence confirms the requested page state, and report URL, text, or visual state from that evidence.
 
 ## Actions
 
-- Keep `tab_id`, `operation`, coordinates, deltas, and text as top-level tool fields; never pack JSON or action fields into an id string.
+- Keep `tab_id`, `appshot_id`, `operation`, coordinates, deltas, and text as top-level tool fields; never pack JSON or action fields into an id string.
 - `browser_input(operation="click")` moves the visible browser agent cursor before clicking; call `browser_move_mouse` first only for hover or cursor placement without a click.
 - Prefer a `ref` from the latest `observe(surface="browser")` over `x`/`y` for actionable controls.
 - `browser_input(operation="click", ref=...)` re-finds, scrolls into view, hit-tests, and dispatches a real trusted click at the element's current center.

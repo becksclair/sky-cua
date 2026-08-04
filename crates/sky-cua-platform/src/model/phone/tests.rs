@@ -1,4 +1,5 @@
 use super::*;
+use crate::{PhoneCameraRequest, PhoneFeatureCall};
 use serde_json::json;
 
 fn sample_companion() -> PhoneCompanionCapabilities {
@@ -71,6 +72,7 @@ fn sample_profile() -> PhoneCapabilityProfile {
             reason: "notification_listener_disabled".to_string(),
             detail: None,
         }],
+        routes: Vec::new(),
     }
 }
 
@@ -96,6 +98,10 @@ fn sample_session() -> PhoneSession {
     PhoneSession {
         session_id: "sess-1".to_string(),
         serial: "ABC123".to_string(),
+        connection: Some(PhoneConnectionIdentity::Adb {
+            serial: "ABC123".to_string(),
+            name: None,
+        }),
         connection_kind: PhoneConnectionKind::WirelessDebugging,
         backend: PhoneBackendKind::Companion,
         capabilities: sample_backend_caps(),
@@ -327,6 +333,7 @@ fn phone_response_variants_preserve_type_tags() {
         (
             PhoneResponse::Observe(PhoneObserveResponse {
                 session: sample_session(),
+                appshot: None,
                 phone_snapshot_id: Some("snap-1".to_string()),
                 screenshot_path: None,
                 inline_image: Some(PhoneImage {
@@ -372,6 +379,12 @@ fn phone_response_variants_preserve_type_tags() {
             PhoneResponse::Devices(PhoneListDevicesResponse {
                 devices: vec![PhoneDevice {
                     serial: "ABC123".to_string(),
+                    device_id: None,
+                    link_epoch: None,
+                    connection: Some(PhoneConnectionIdentity::Adb {
+                        serial: "ABC123".to_string(),
+                        name: Some("SM-S938B".to_string()),
+                    }),
                     state: PhoneDeviceState::Device,
                     connection_kind: PhoneConnectionKind::Usb,
                     model: Some("SM-S938B".to_string()),
@@ -492,6 +505,7 @@ fn phone_response_variants_preserve_type_tags() {
                 kind: PhoneAppResponseKind::Launch,
                 backend: PhoneBackendKind::Adb,
                 success: true,
+                destination_appshot: None,
                 current_app: None,
                 apps: Vec::new(),
                 truncated: false,
@@ -521,6 +535,41 @@ fn observe_request_flattens_session_selector() {
     assert_eq!(parsed.session.session_id.as_deref(), Some("sess-1"));
     assert!(parsed.include_notifications);
     assert!(parsed.include_image_data, "image data defaults to on");
+}
+
+#[test]
+fn camera_follow_up_keeps_phone_and_camera_session_ids_distinct() {
+    let parsed: PhoneFeatureCall<PhoneCameraRequest> = serde_json::from_value(json!({
+        "session_id": "phone-session-1",
+        "appshot_id": "shot-1",
+        "operation": "preview_stop",
+        "camera_session_id": "camera-session-1"
+    }))
+    .expect("camera follow-up should deserialize");
+    assert_eq!(
+        parsed.session.session_id.as_deref(),
+        Some("phone-session-1")
+    );
+    assert_eq!(
+        parsed.request,
+        PhoneCameraRequest::PreviewStop {
+            camera_session_id: "camera-session-1".to_string()
+        }
+    );
+
+    let rendered = serde_json::to_value(parsed).expect("camera follow-up should serialize");
+    assert_eq!(rendered["session_id"], "phone-session-1");
+    assert_eq!(rendered["camera_session_id"], "camera-session-1");
+}
+
+#[test]
+fn ambiguous_camera_follow_up_without_camera_session_id_is_rejected() {
+    let parsed = serde_json::from_value::<PhoneFeatureCall<PhoneCameraRequest>>(json!({
+        "session_id": "phone-session-1",
+        "appshot_id": "shot-1",
+        "operation": "preview_stop"
+    }));
+    assert!(parsed.is_err());
 }
 
 #[test]

@@ -53,6 +53,7 @@ pub(in crate::browser::control_plane) use actor_events::spawn_actor_event_receiv
 pub(in crate::browser::control_plane) use actor_events::{
     settle_actor_message, settle_late_response, spawn_actor_events,
 };
+pub(crate) use executor::execute_high_level;
 pub(crate) use state::BrowserControlRuntime;
 pub(super) use state::{
     ActorEntry, IntegrationExecutor, IntegrationPayload, OperationReservation, ServerRequestId,

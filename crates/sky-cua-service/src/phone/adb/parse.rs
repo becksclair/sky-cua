@@ -5,7 +5,9 @@
 //! and never touches a [`super::CommandRunner`]. This keeps the classification
 //! logic unit-testable in isolation from process execution.
 
-use sky_cua_platform::model::{PhoneConnectionKind, PhoneDevice, PhoneDeviceState};
+use sky_cua_platform::model::{
+    PhoneConnectionIdentity, PhoneConnectionKind, PhoneDevice, PhoneDeviceState,
+};
 
 /// One parsed line from `adb devices -l`, before mapping into a [`PhoneDevice`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,11 +24,19 @@ pub(in crate::phone) struct AdbDeviceLine {
 impl AdbDeviceLine {
     /// Lower into the public model type.
     pub(in crate::phone) fn into_device(self) -> PhoneDevice {
+        let serial = self.serial;
+        let model = self.model;
         PhoneDevice {
-            serial: self.serial,
+            serial: serial.clone(),
+            device_id: None,
+            link_epoch: None,
+            connection: Some(PhoneConnectionIdentity::Adb {
+                serial,
+                name: model.clone(),
+            }),
             state: self.state,
             connection_kind: self.connection_kind,
-            model: self.model,
+            model,
             product: self.product,
             device: self.device,
             transport_id: self.transport_id,

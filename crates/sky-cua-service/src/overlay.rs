@@ -1987,6 +1987,7 @@ mod tests {
     fn action_request(action: ActionName, arguments: serde_json::Value) -> ActionRequest {
         ActionRequest {
             action,
+            appshot_id: None,
             snapshot_id: Some("snap".to_string()),
             element_index: None,
             arguments,

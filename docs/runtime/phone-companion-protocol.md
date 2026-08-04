@@ -1,5 +1,9 @@
 # Phone companion RPC protocol (v1)
 
+The autonomous, phone-initiated protocol is documented separately in
+[`phone-control-v2.md`](phone-control-v2.md). v1 remains the optional
+ADB-forwarded compatibility path.
+
 This document is the authoritative wire contract between the sky-cua host
 (`crates/sky-cua-service/src/phone/companion/`) and the Android phone companion
 app. It is the source of truth for both the Rust host client and the Android app

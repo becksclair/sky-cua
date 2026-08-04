@@ -241,6 +241,7 @@ pub async fn run_service() -> Result<()> {
     // native-host stream. Idle actors acknowledge the generation-checked
     // transition to hybrid; unsettled actors remain strict and fail closed.
     daemon.shutdown_browser_control().await;
+    daemon.shutdown_phone_direct().await;
 
     // Unload this process's persistent KWin focus watcher so it does not
     // keep firing callbacks at a dead bus name after the daemon exits.
@@ -455,11 +456,19 @@ async fn service_idle_timed_out(daemon: &ServiceDaemon, connections: &Connection
         // extension then detaches the debugger from every tab; stay alive
         // while a browser session lingers (see browser/activity.rs).
         && !crate::browser::browser_session_lingering()
+        // Companion Direct is a persistent inbound listener. Once explicitly
+        // enabled it must remain available for a phone to reconnect even when
+        // no MCP client is currently connected.
+        && !daemon.phone_direct_listener_active().await
 }
 
 #[cfg(test)]
-fn idle_timed_out(idle_for: Duration, active_connections: usize) -> bool {
-    active_connections == 0 && idle_for >= IDLE_TIMEOUT
+fn idle_timed_out(
+    idle_for: Duration,
+    active_connections: usize,
+    direct_listener_active: bool,
+) -> bool {
+    active_connections == 0 && idle_for >= IDLE_TIMEOUT && !direct_listener_active
 }
 
 #[cfg(unix)]
@@ -655,8 +664,24 @@ mod tests {
 
     #[test]
     fn idle_timeout_requires_no_active_connections() {
-        assert!(!idle_timed_out(IDLE_TIMEOUT + Duration::from_secs(1), 1));
-        assert!(idle_timed_out(IDLE_TIMEOUT, 0));
+        assert!(!idle_timed_out(
+            IDLE_TIMEOUT + Duration::from_secs(1),
+            1,
+            false
+        ));
+        assert!(idle_timed_out(IDLE_TIMEOUT, 0, false));
+    }
+
+    #[test]
+    fn idle_timeout_is_disabled_while_direct_listener_is_active() {
+        // The third argument is captured runtime presence, not a fresh config
+        // lookup; later config edits or parse failures cannot change this.
+        assert!(!idle_timed_out(
+            IDLE_TIMEOUT + Duration::from_secs(1),
+            0,
+            true
+        ));
+        assert!(idle_timed_out(IDLE_TIMEOUT, 0, false));
     }
 
     #[tokio::test]

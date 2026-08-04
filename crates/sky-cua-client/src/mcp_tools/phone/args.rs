@@ -20,6 +20,8 @@ pub(crate) fn parse_phone_selector(arguments: &Value) -> Result<PhoneSessionSele
     Ok(PhoneSessionSelector {
         session_id: parse_optional_literal_string(arguments, "session_id", "session_id")?,
         serial: parse_optional_string(arguments, "serial", "serial")?,
+        device_id: parse_optional_string(arguments, "device_id", "device_id")?,
+        appshot_id: parse_optional_string(arguments, "appshot_id", "appshot_id")?,
     })
 }
 

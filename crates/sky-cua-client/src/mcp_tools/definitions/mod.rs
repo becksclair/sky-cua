@@ -122,9 +122,9 @@ fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> 
              fields, browser requires top-level `tab_id`, and phone requires \
              top-level `session_id`; do not mix fields from another surface. The \
              browser branch accepts only `surface`, `tab_id`, `target`, `text_limit`, \
-             `element_query`, `element_offset`, and `element_limit`; \
-             `capture_screen`/`screenshot_delivery` are desktop-only, so use the \
-             `capture_screen` tool for a browser-tab or phone image.",
+             `element_query`, `element_offset`, and `element_limit`. Every successful \
+             observe returns a canonical AppShot; image-capable hosts also receive \
+             its image attachment.",
         ),
         "capture_screen" => Some(
             "`capture_screen` is only for browser or phone. Browser capture requires \
@@ -494,7 +494,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
         ),
         grouped_tool_with_constraints(
             "observe",
-            "Read structured state for one surface. Desktop returns elements and snapshot_id; detail=\"compact\" controls desktop observation verbosity only. Browser requires tab_id and returns page text/elements. Phone requires session_id and can include accessibility/notifications. observe never returns an image: capture_screen/screenshot_delivery apply to the desktop surface only. For a browser tab image call the capture_screen tool (surface=\"browser\", tab_id); for a phone image call capture_screen (surface=\"phone\", session_id) or capture_desktop.",
+            "Capture one canonical AppShot for desktop, browser, or phone. The result binds surface identity, semantic state, action snapshot identity, consistency, and diagnostics; image-capable hosts also receive the same AppShot image as an attachment. Desktop supports exact window selectors and bounded semantic projection. Browser requires tab_id and binds pixels and semantics to one document generation. Phone requires session_id and can include accessibility and notifications.",
             READ_ONLY_TOOL,
             observe_properties(can_receive_images),
             json!(["surface"]),
@@ -566,7 +566,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             desktop_semantic_properties(
                 json!({"operation": {"type": "string", "enum": ["focus", "select", "expand", "collapse"]}})
             ),
-            json!(["operation"]),
+            json!(["operation", "appshot_id"]),
             desktop_selector_constraint()
         ),
         grouped_tool(
@@ -581,7 +581,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "Move the visible browser agent cursor in CSS-pixel coordinates without clicking.",
             LOCAL_NAVIGATION_ACTION,
             browser_point_properties(),
-            json!(["tab_id", "x", "y"])
+            json!(["tab_id", "x", "y", "appshot_id"])
         ),
         grouped_tool_with_constraints(
             "phone_connection",
@@ -620,15 +620,15 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
                 idempotent: true,
                 open_world: false
             },
-            with_phone_session(json!({"package_name": non_blank_string_schema()})),
-            json!(["session_id", "package_name"])
+            with_phone_selector(json!({"package_name": non_blank_string_schema()})),
+            json!(["session_id", "package_name", "appshot_id"])
         ),
         grouped_tool_with_constraints(
             "desktop_toggle",
             "Toggle a desktop element from observe(surface=\"desktop\").",
             LOCAL_STATEFUL_ACTION,
             desktop_semantic_properties(json!({})),
-            json!([]),
+            json!(["appshot_id"]),
             desktop_selector_constraint()
         ),
         grouped_tool_with_constraints(
@@ -639,7 +639,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
                 "direction": {"type": "string", "enum": ["up", "down"]},
                 "pages": {"type": "integer", "minimum": 1, "description": "Page-sized scroll steps. Defaults to 1."}
             })),
-            json!(["direction"]),
+            json!(["direction", "appshot_id"]),
             desktop_snapshot_selector_constraint()
         ),
         grouped_tool_with_constraints(
@@ -652,7 +652,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
                 open_world: true
             },
             browser_scroll_properties(),
-            json!(["tab_id"]),
+            json!(["tab_id", "appshot_id"]),
             browser_scroll_constraints()
         ),
         grouped_tool_with_constraints(
@@ -660,7 +660,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "Click, secondary-click, or drag on the desktop. Preferred: pass the snapshot_id from the same capture_desktop/observe plus x/y read off that screenshot; those pixels are translated to the screen for you and work even when no semantic elements are exposed (e.g. Wayland apps with no matched AT-SPI tree). Or pass snapshot_id plus element_index/name/text for a semantic target. Bare x/y with no snapshot_id are raw screen coordinates and should be used only when you have no snapshot. Do not call with only operation.",
             LOCAL_DESTRUCTIVE_ACTION,
             desktop_pointer_properties(),
-            json!(["operation"]),
+            json!(["operation", "appshot_id"]),
             desktop_pointer_constraints()
         ),
         grouped_tool_with_constraints(
@@ -668,7 +668,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "Type text or press a key on the desktop. Focus first; text for type_text, key for press_key, e.g. Enter, Escape, Tab, Ctrl+A, Meta+A.",
             LOCAL_DESTRUCTIVE_ACTION,
             desktop_keyboard_properties(),
-            json!(["operation"]),
+            json!(["operation", "appshot_id"]),
             desktop_keyboard_constraints()
         ),
         grouped_tool_with_constraints(
@@ -676,7 +676,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "Activate a desktop element or perform its named/indexed action from observe(surface=\"desktop\"); do not call with only operation.",
             LOCAL_DESTRUCTIVE_ACTION,
             desktop_action_properties(),
-            json!(["operation"]),
+            json!(["operation", "appshot_id"]),
             desktop_action_constraints()
         ),
         grouped_tool(
@@ -708,7 +708,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
                     "description": "Replacement value to write. The text selector still identifies the target element."
                 }
             })),
-            json!(["value"]),
+            json!(["value", "appshot_id"]),
             desktop_selector_constraint()
         ),
         grouped_tool(
@@ -740,7 +740,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "Click, type text, or press a key in a claimed browser tab. click uses x/y CSS pixels; keys look like Enter, Escape, Tab, Ctrl+K.",
             super::annotations::OPEN_WORLD_DESTRUCTIVE_ACTION,
             browser_input_properties(),
-            json!(["operation", "tab_id"]),
+            json!(["operation", "tab_id", "appshot_id"]),
             browser_input_constraints()
         ),
         grouped_tool_with_constraints(
@@ -748,7 +748,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "Tap or swipe on a connected phone. Use phone_snapshot_id for screenshot pixels or use_device_coordinates for raw pixels.",
             LOCAL_DESTRUCTIVE_ACTION,
             phone_pointer_properties(),
-            json!(["operation"]),
+            json!(["operation", "appshot_id"]),
             phone_pointer_constraints()
         ),
         grouped_tool_with_constraints(
@@ -756,7 +756,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "Type text or press a key on a connected phone. Focus first; press_key accepts KEYCODE_* names, aliases, or numeric keycodes.",
             LOCAL_DESTRUCTIVE_ACTION,
             phone_keyboard_properties(),
-            json!(["operation"]),
+            json!(["operation", "appshot_id"]),
             phone_keyboard_constraints()
         ),
         grouped_tool_with_constraints(
@@ -764,14 +764,14 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "Open, dismiss, or run an action on a connected-phone notification.",
             LOCAL_DESTRUCTIVE_ACTION,
             phone_notification_action_properties(),
-            json!(["operation"]),
+            json!(["operation", "appshot_id"]),
             phone_notification_action_constraints()
         ),
         grouped_tool(
             "phone_notification_reply",
             "Reply inline to a connected-phone notification using event_id and inline-reply action_id from the same fresh event.",
             LOCAL_DESTRUCTIVE_ACTION,
-            with_phone_session(json!({
+            with_phone_selector(json!({
                 "event_id": {
                     "type": "string",
                     "minLength": 1,
@@ -790,7 +790,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
                     "description": "Reply text."
                 }
             })),
-            json!(["session_id", "event_id", "action_id", "text"])
+            json!(["session_id", "appshot_id", "event_id", "action_id", "text"])
         ),
         grouped_tool_with_constraints(
             "phone_app_action",
@@ -805,8 +805,58 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             "Install an APK on a connected phone.",
             LOCAL_DESTRUCTIVE_ACTION,
             phone_app_install_properties(),
-            json!([]),
+            json!(["appshot_id"]),
             phone_app_install_constraints()
+        ),
+        grouped_tool_with_constraints(
+            "phone_content",
+            "Describe, explicitly transfer, export, or release Companion content. Camera capture returns a phone-local ContentRef; export_host_file is the separate operation that transfers its bytes to the host.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            phone_content_properties(),
+            json!(["operation"]),
+            phone_feature_constraints(&["describe"])
+        ),
+        grouped_tool_with_constraints(
+            "phone_clipboard",
+            "Read, replace, clear, or watch the Android clipboard.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            phone_clipboard_properties(),
+            json!(["operation"]),
+            phone_feature_constraints(&["get", "changes"])
+        ),
+        grouped_tool_with_constraints(
+            "phone_editor",
+            "Inspect or operate the focused Android editor, including selection and rich insertion when supported.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            phone_editor_properties(),
+            json!(["operation"]),
+            phone_feature_constraints(&["context"])
+        ),
+        grouped_tool_with_constraints(
+            "phone_camera",
+            "Enumerate and control Android cameras, capture bounded phone-local media, and request preview frames. V1 capture is at most 1920x1080 (or portrait 1080x1920), video auto-stops at 60 seconds, and capture never automatically transfers media to the host.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            phone_camera_properties(),
+            json!(["operation"]),
+            phone_camera_constraints()
+        ),
+        grouped_tool_with_constraints(
+            "phone_storage",
+            "Browse and mutate permitted Android virtual storage roots.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            phone_storage_properties(),
+            json!(["operation"]),
+            phone_feature_constraints(&[
+                "roots",
+                "list",
+                "stat",
+                "read",
+                "hash",
+                "search",
+                "thumbnail",
+                "metadata",
+                "list_saf_roots",
+            ])
         )
     ]);
     if browser_eval_enabled {
@@ -816,9 +866,9 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             super::annotations::OPEN_WORLD_DESTRUCTIVE_ACTION,
             merge_properties(
                 browser_tab_properties(),
-                json!({"expression": non_empty_string_schema()})
+                json!({"expression": non_empty_string_schema(), "appshot_id": non_blank_string_schema()})
             ),
-            json!(["tab_id", "expression"]),
+            json!(["tab_id", "expression", "appshot_id"]),
         ));
     }
     tools

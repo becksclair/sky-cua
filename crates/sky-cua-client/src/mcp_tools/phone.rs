@@ -12,13 +12,14 @@ use serde_json::Value;
 use sky_cua_platform::model::{
     PhoneAccessibilityTreeRequest, PhoneAppCurrentRequest, PhoneAppForceStopRequest,
     PhoneAppInstallRequest, PhoneAppLaunchRequest, PhoneAppListRequest, PhoneAppOpenIntentRequest,
-    PhoneCompanionStatusRequest, PhoneConnectRequest, PhoneDisconnectRequest,
+    PhoneCameraRequest, PhoneClipboardRequest, PhoneCompanionStatusRequest, PhoneConnectRequest,
+    PhoneContentRequest, PhoneDisconnectRequest, PhoneEditorRequest, PhoneFeatureCall,
     PhoneInstallCompanionRequest, PhoneListDevicesRequest, PhoneNotificationActionRequest,
     PhoneNotificationDismissRequest, PhoneNotificationOpenRequest, PhoneNotificationReplyRequest,
     PhoneNotificationsRequest, PhoneObserveRequest, PhoneOpenSettingsRequest,
     PhonePairWirelessRequest, PhonePressKeyRequest, PhoneRefreshCapabilitiesRequest, PhoneRequest,
-    PhoneResponse, PhoneScreenshotRequest, PhoneStatusRequest, PhoneSwipeRequest, PhoneTapRequest,
-    PhoneTypeTextRequest, ServiceRequest, ServiceResponse,
+    PhoneResponse, PhoneScreenshotRequest, PhoneStatusRequest, PhoneStorageRequest,
+    PhoneSwipeRequest, PhoneTapRequest, PhoneTypeTextRequest, ServiceRequest, ServiceResponse,
 };
 
 mod args;
@@ -68,6 +69,11 @@ pub(super) fn is_phone_tool(tool_name: &str) -> bool {
             | "phone_app_force_stop"
             | "phone_app_install"
             | "phone_open_settings"
+            | "phone_content"
+            | "phone_clipboard"
+            | "phone_editor"
+            | "phone_camera"
+            | "phone_storage"
     )
 }
 
@@ -143,6 +149,11 @@ fn build_phone_request(
         }),
         "phone_connect" => PhoneRequest::Connect(PhoneConnectRequest {
             serial: args::parse_optional_string(arguments, "serial", "phone_connect serial")?,
+            device_id: args::parse_optional_string(
+                arguments,
+                "device_id",
+                "phone_connect device_id",
+            )?,
             backend: parse_phone_backend(arguments)?,
             install_companion: parse_optional_bool(arguments, "install_companion", false)?,
             start_scrcpy: parse_optional_bool(arguments, "start_scrcpy", false)?,
@@ -331,9 +342,53 @@ fn build_phone_request(
                 "phone_open_settings package_name",
             )?,
         }),
+        "phone_content" => PhoneRequest::Content(serde_json::from_value::<
+            PhoneFeatureCall<PhoneContentRequest>,
+        >(arguments.clone())?),
+        "phone_clipboard" => PhoneRequest::Clipboard(serde_json::from_value::<
+            PhoneFeatureCall<PhoneClipboardRequest>,
+        >(arguments.clone())?),
+        "phone_editor" => PhoneRequest::Editor(serde_json::from_value::<
+            PhoneFeatureCall<PhoneEditorRequest>,
+        >(arguments.clone())?),
+        "phone_camera" => PhoneRequest::Camera(serde_json::from_value::<
+            PhoneFeatureCall<PhoneCameraRequest>,
+        >(arguments.clone())?),
+        "phone_storage" => PhoneRequest::Storage(serde_json::from_value::<
+            PhoneFeatureCall<PhoneStorageRequest>,
+        >(arguments.clone())?),
         other => return Err(anyhow!("unexpected phone tool name: {other}")),
     };
+    if matches!(
+        request,
+        PhoneRequest::Content(_)
+            | PhoneRequest::Clipboard(_)
+            | PhoneRequest::Editor(_)
+            | PhoneRequest::Camera(_)
+            | PhoneRequest::Storage(_)
+    ) && !request.is_idempotent()
+        && phone_feature_selector(&request)
+            .and_then(|selector| selector.appshot_id.as_deref())
+            .is_none()
+    {
+        return Err(anyhow!(
+            "appshot_id is required for state-changing {tool_name} operations"
+        ));
+    }
     Ok(request)
+}
+
+fn phone_feature_selector(
+    request: &PhoneRequest,
+) -> Option<&sky_cua_platform::model::PhoneSessionSelector> {
+    match request {
+        PhoneRequest::Content(call) => Some(&call.session),
+        PhoneRequest::Clipboard(call) => Some(&call.session),
+        PhoneRequest::Editor(call) => Some(&call.session),
+        PhoneRequest::Camera(call) => Some(&call.session),
+        PhoneRequest::Storage(call) => Some(&call.session),
+        _ => None,
+    }
 }
 
 /// Shape a `PhoneResponse` into the MCP result for the originating tool. The
@@ -374,6 +429,39 @@ fn shape_phone_response(
         PhoneResponse::AccessibilityTree(response) => phone_accessibility_tree_result(response),
         PhoneResponse::Notifications(response) => phone_notifications_result(response),
         PhoneResponse::App(response) => phone_app_result(response),
+        PhoneResponse::AppShotRequired(response) => Ok(serde_json::json!({
+            "content": [{"type": "text", "text": response.message}],
+            "structuredContent": response,
+            "isError": true
+        })),
+        PhoneResponse::Content(response) => {
+            feature_result("Phone content operation completed.", response)
+        }
+        PhoneResponse::Clipboard(response) => {
+            feature_result("Phone clipboard operation completed.", response)
+        }
+        PhoneResponse::Editor(response) => {
+            feature_result("Phone editor operation completed.", response)
+        }
+        PhoneResponse::Camera(response) => {
+            feature_result("Phone camera operation completed.", response)
+        }
+        PhoneResponse::Storage(response) => {
+            feature_result("Phone storage operation completed.", response)
+        }
+        PhoneResponse::FeatureError(error) => Ok(serde_json::json!({
+            "content": [{"type": "text", "text": error.message}],
+            "structuredContent": {"error": error},
+            "isError": true
+        })),
     }
     .map_err(|error| anyhow!("failed to shape {tool_name} response: {error}"))
+}
+
+fn feature_result<T: serde::Serialize>(message: &str, response: T) -> Result<Value> {
+    Ok(serde_json::json!({
+        "content": [{"type": "text", "text": message}],
+        "structuredContent": response,
+        "isError": false
+    }))
 }

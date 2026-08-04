@@ -4,7 +4,9 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
+import android.graphics.Rect
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
@@ -12,6 +14,7 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.skycua.phonecompanion.overlay.AgentOverlayController
+import com.skycua.phonecompanion.direct.DirectLinkServiceOwner
 import com.skycua.phonecompanion.overlay.OverlayMath
 import com.skycua.phonecompanion.overlay.WindowOverlayHost
 import com.skycua.phonecompanion.protocol.AccessibilityNode
@@ -25,10 +28,16 @@ import com.skycua.phonecompanion.protocol.Protocol
 import com.skycua.phonecompanion.protocol.ScreenshotParams
 import com.skycua.phonecompanion.protocol.ScreenshotResult as ProtoScreenshotResult
 import com.skycua.phonecompanion.screenshot.ScreenshotClassifier
+import com.skycua.phonecompanion.appshot.PhoneAppShot
+import com.skycua.phonecompanion.json.JsonValue
+import com.skycua.phonecompanion.json.jsonArray
+import com.skycua.phonecompanion.json.jsonObject
+import com.skycua.phonecompanion.protocol.MethodParamException
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The companion's AccessibilityService. It owns the phone-native cursor overlay,
@@ -66,16 +75,23 @@ class SkyAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instanceRef.set(this)
+        if (!DirectLinkServiceOwner.acquireAccessibility(applicationContext)) {
+            // Android may deny a background foreground-service cold start. The
+            // owner exposes START_DENIED to MainActivity, where the operator
+            // gets an explicit retry action; this service does not pretend the
+            // link is running or retry autonomously.
+        }
     }
 
     override fun onDestroy() {
         instanceRef.compareAndSet(this, null)
+        DirectLinkServiceOwner.releaseAccessibility(applicationContext)
         overlay.destroy()
         super.onDestroy()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // The companion is driven by RPC, not event streams; no per-event work.
+        accessibilityEventSequenceRef.incrementAndGet()
     }
 
     override fun onInterrupt() {
@@ -255,6 +271,145 @@ class SkyAccessibilityService : AccessibilityService() {
             null
         }
 
+    /** Monotonic fence used to detect UI changes during an AppShot capture. */
+    fun accessibilityEventSequence(): Long = accessibilityEventSequenceRef.get()
+
+    fun activePackageName(): String? = activeWindowPackage()
+
+    fun displayState(): PhoneAppShot.DisplayState {
+        val display = getSystemService(android.hardware.display.DisplayManager::class.java)
+            ?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+        val metrics = android.util.DisplayMetrics()
+        display?.getRealMetrics(metrics)
+        return PhoneAppShot.DisplayState(
+            displayId = display?.displayId ?: android.view.Display.DEFAULT_DISPLAY,
+            width = metrics.widthPixels,
+            height = metrics.heightPixels,
+            rotation = display?.rotation ?: android.view.Surface.ROTATION_0,
+            state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display?.state ?: android.view.Display.STATE_UNKNOWN else 0,
+            density = metrics.density,
+        )
+    }
+
+    /** Captures every interactive accessibility window with a bounded tree. */
+    fun interactiveWindowSnapshots(maxNodes: Int, deadlineNanos: Long = Long.MAX_VALUE): List<PhoneAppShot.PhoneWindow> {
+        if (!canRetrieveWindowContent()) return emptyList()
+        val windows = windows ?: return emptyList()
+        val nextId = AtomicLong(1)
+        var remaining = maxNodes
+        return windows.map { window ->
+            if (System.nanoTime() >= deadlineNanos) {
+                return@map PhoneAppShot.PhoneWindow(window.id, windowDisplayId(window), window.type, windowBounds(window), window.isActive, window.isFocused, windowTitle(window), null, false, "deadline_exceeded", false, emptyList())
+            }
+            if (remaining <= 0) {
+                return@map PhoneAppShot.PhoneWindow(window.id, windowDisplayId(window), window.type, windowBounds(window), window.isActive, window.isFocused, windowTitle(window), null, false, "node_budget_exhausted", true, emptyList())
+            }
+            val root = runCatching { window.root }.getOrNull()
+            if (root == null) {
+                return@map PhoneAppShot.PhoneWindow(window.id, windowDisplayId(window), window.type, windowBounds(window), window.isActive, window.isFocused, windowTitle(window), null, false, "root_unavailable", false, emptyList())
+            }
+            val nodes = ArrayList<PhoneAppShot.PhoneNode>()
+            val traversal = collectAppShotNodes(root, window.id, null, nextId, remaining, deadlineNanos, nodes)
+                ?: NodeTraversal(nodes.firstOrNull()?.id ?: -1L, truncated = true)
+            remaining -= nodes.size
+            PhoneAppShot.PhoneWindow(
+                windowId = window.id,
+                displayId = windowDisplayId(window),
+                type = window.type,
+                bounds = windowBounds(window),
+                active = window.isActive,
+                focused = window.isFocused,
+                title = windowTitle(window),
+                packageName = nodes.firstOrNull()?.packageName,
+                rootAvailable = true,
+                omissionReason = null,
+                truncated = traversal.truncated,
+                nodes = nodes,
+            )
+        }
+    }
+
+    private fun windowDisplayId(window: android.view.accessibility.AccessibilityWindowInfo): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) window.displayId else android.view.Display.DEFAULT_DISPLAY
+
+    private fun windowTitle(window: android.view.accessibility.AccessibilityWindowInfo): String? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) window.title?.toString() else null
+
+    private fun windowBounds(window: android.view.accessibility.AccessibilityWindowInfo): IntArray {
+        val bounds = Rect()
+        window.getBoundsInScreen(bounds)
+        return intArrayOf(bounds.left, bounds.top, bounds.right, bounds.bottom)
+    }
+
+    private data class NodeTraversal(val rootId: Long, val truncated: Boolean)
+
+    private fun collectAppShotNodes(
+        node: AccessibilityNodeInfo,
+        windowId: Int,
+        parentId: Long?,
+        nextId: AtomicLong,
+        remaining: Int,
+        deadlineNanos: Long,
+        out: MutableList<PhoneAppShot.PhoneNode>,
+    ): NodeTraversal? {
+        if (out.size >= remaining || System.nanoTime() >= deadlineNanos) return null
+        val id = nextId.getAndIncrement()
+        val childIds = ArrayList<Long>()
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        val result = PhoneAppShot.PhoneNode(
+            id = id,
+            parentId = parentId,
+            childIds = childIds,
+            windowId = windowId,
+            packageName = node.packageName?.toString(),
+            className = node.className?.toString(),
+            viewId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) node.viewIdResourceName else null,
+            text = node.text?.toString(),
+            hintText = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) node.hintText?.toString() else null,
+            contentDescription = node.contentDescription?.toString(),
+            bounds = intArrayOf(bounds.left, bounds.top, bounds.right, bounds.bottom),
+            enabled = node.isEnabled,
+            focused = node.isFocused,
+            clickable = node.isClickable,
+            editable = node.isEditable,
+            scrollable = node.isScrollable,
+            actions = node.actions,
+            actionList = node.actionList.map { PhoneAppShot.NodeAction(it.id, it.label?.toString()) },
+            selected = node.isSelected,
+            checked = node.isChecked,
+            checkable = node.isCheckable,
+            password = node.isPassword,
+            stateDescription = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) node.stateDescription?.toString() else null,
+            inputType = node.inputType,
+            textSelectionStart = node.textSelectionStart,
+            textSelectionEnd = node.textSelectionEnd,
+            collection = node.collectionInfo?.let { PhoneAppShot.CollectionMetadata(it.rowCount, it.columnCount, it.isHierarchical, it.selectionMode) },
+            range = node.rangeInfo?.let { PhoneAppShot.RangeMetadata(it.type, it.min, it.max, it.current) },
+        )
+        out.add(result)
+        var truncated = false
+        for (i in 0 until node.childCount) {
+            if (out.size >= remaining || System.nanoTime() >= deadlineNanos) {
+                truncated = true
+                break
+            }
+            val child = node.getChild(i)
+            if (child == null) {
+                truncated = true
+                continue
+            }
+            val childResult = collectAppShotNodes(child, windowId, id, nextId, remaining, deadlineNanos, out)
+            if (childResult != null) {
+                childIds.add(childResult.rootId)
+                truncated = truncated || childResult.truncated
+            } else {
+                truncated = true
+            }
+        }
+        return NodeTraversal(id, truncated)
+    }
+
     /** Breadth-first collection up to [max] nodes. Returns true when truncated. */
     private fun collectNodes(
         root: AccessibilityNodeInfo,
@@ -288,7 +443,7 @@ class SkyAccessibilityService : AccessibilityService() {
 
     // --- screenshot -----------------------------------------------------------
 
-    fun takePhoneScreenshot(params: ScreenshotParams): ProtoScreenshotResult {
+    fun takePhoneScreenshot(params: ScreenshotParams, deadlineNanos: Long = Long.MAX_VALUE): ProtoScreenshotResult {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             throw MethodApplicationException(
                 Protocol.ErrorCodes.UNSUPPORTED_API,
@@ -312,7 +467,7 @@ class SkyAccessibilityService : AccessibilityService() {
             overlay.hideForCapture()
         }
         try {
-            return captureScreenshot(includeOverlay = params.includeOverlay)
+            return captureScreenshot(includeOverlay = params.includeOverlay, deadlineNanos = deadlineNanos)
         } finally {
             if (hideOverlay) {
                 overlay.restoreAfterCapture()
@@ -320,7 +475,13 @@ class SkyAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun captureScreenshot(includeOverlay: Boolean): ProtoScreenshotResult {
+    private fun captureScreenshot(includeOverlay: Boolean, deadlineNanos: Long): ProtoScreenshotResult {
+        if (System.nanoTime() >= deadlineNanos) {
+            throw MethodApplicationException(
+                Protocol.ErrorCodes.TRANSIENT,
+                "screenshot deadline exceeded",
+            )
+        }
         val latch = CountDownLatch(1)
         val resultRef = AtomicReference<ProtoScreenshotResult>()
         val errorRef = AtomicReference<MethodApplicationException>()
@@ -352,11 +513,11 @@ class SkyAccessibilityService : AccessibilityService() {
                         val software = bitmap.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
                         bitmap.recycle()
                         val out = ByteArrayOutputStream()
-                        software.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                        software.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
                         val encoded = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
                         resultRef.set(
                             ProtoScreenshotResult(
-                                mimeType = "image/png",
+                                mimeType = "image/jpeg",
                                 dataBase64 = encoded,
                                 width = software.width,
                                 height = software.height,
@@ -379,7 +540,8 @@ class SkyAccessibilityService : AccessibilityService() {
             },
         )
 
-        if (!latch.await(10, TimeUnit.SECONDS)) {
+        val remainingNanos = deadlineNanos - System.nanoTime()
+        if (remainingNanos <= 0L || !latch.await(remainingNanos, TimeUnit.NANOSECONDS)) {
             throw MethodApplicationException(
                 Protocol.ErrorCodes.TRANSIENT,
                 "screenshot timed out",
@@ -393,8 +555,115 @@ class SkyAccessibilityService : AccessibilityService() {
             )
     }
 
+    /** Baseline editor control through the focused accessibility node. */
+    fun performEditorOperation(params: JsonValue.Obj): JsonValue.Obj {
+        val operation = params.string("operation") ?: throw MethodParamException(
+            Protocol.ErrorCodes.BAD_REQUEST,
+            "editor operation is required",
+        )
+        val node = editableTarget()
+            ?: return editorResult("no_editable_target", null)
+        if (operation == "context") return editorResult("applied", node)
+
+        val applied = when (operation) {
+            "set_text" -> {
+                val text = params.string("text") ?: editorBad("set_text requires text")
+                node.performAction(
+                    AccessibilityNodeInfo.ACTION_SET_TEXT,
+                    Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) },
+                )
+            }
+            "insert_text" -> {
+                val inserted = params.string("text") ?: editorBad("insert_text requires text")
+                val current = node.text?.toString().orEmpty()
+                val start = node.textSelectionStart.takeIf { it >= 0 } ?: current.length
+                val end = node.textSelectionEnd.takeIf { it >= start } ?: start
+                val updated = current.substring(0, start.coerceAtMost(current.length)) + inserted +
+                    current.substring(end.coerceAtMost(current.length))
+                node.performAction(
+                    AccessibilityNodeInfo.ACTION_SET_TEXT,
+                    Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, updated) },
+                )
+            }
+            "set_selection" -> {
+                val start = params.int("start") ?: editorBad("set_selection requires start")
+                val end = params.int("end") ?: editorBad("set_selection requires end")
+                if (start < 0 || end < start) editorBad("selection must satisfy 0 <= start <= end")
+                node.performAction(
+                    AccessibilityNodeInfo.ACTION_SET_SELECTION,
+                    Bundle().apply {
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, start)
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, end)
+                    },
+                )
+            }
+            "select_all" -> node.performAction(
+                AccessibilityNodeInfo.ACTION_SET_SELECTION,
+                Bundle().apply {
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                    putInt(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT,
+                        node.text?.length ?: 0,
+                    )
+                },
+            )
+            "copy" -> node.performAction(AccessibilityNodeInfo.ACTION_COPY)
+            "cut" -> node.performAction(AccessibilityNodeInfo.ACTION_CUT)
+            "paste" -> node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+            "insert_content" -> return editorResult("unsupported_mime_type", node)
+            else -> editorBad("unsupported editor operation '$operation'")
+        }
+        return editorResult(if (applied) "applied" else "no_editable_target", node)
+    }
+
+    fun performKey(rawKey: String): JsonValue.Obj {
+        val action = when (rawKey.uppercase()) {
+            "BACK", "KEYCODE_BACK" -> GLOBAL_ACTION_BACK
+            "HOME", "KEYCODE_HOME" -> GLOBAL_ACTION_HOME
+            "RECENTS", "APP_SWITCH", "KEYCODE_APP_SWITCH" -> GLOBAL_ACTION_RECENTS
+            "NOTIFICATIONS", "KEYCODE_NOTIFICATION" -> GLOBAL_ACTION_NOTIFICATIONS
+            "QUICK_SETTINGS" -> GLOBAL_ACTION_QUICK_SETTINGS
+            "DPAD_UP", "KEYCODE_DPAD_UP" -> GLOBAL_ACTION_DPAD_UP
+            "DPAD_DOWN", "KEYCODE_DPAD_DOWN" -> GLOBAL_ACTION_DPAD_DOWN
+            "DPAD_LEFT", "KEYCODE_DPAD_LEFT" -> GLOBAL_ACTION_DPAD_LEFT
+            "DPAD_RIGHT", "KEYCODE_DPAD_RIGHT" -> GLOBAL_ACTION_DPAD_RIGHT
+            "DPAD_CENTER", "KEYCODE_DPAD_CENTER", "ENTER", "KEYCODE_ENTER" -> GLOBAL_ACTION_DPAD_CENTER
+            else -> throw MethodApplicationException("unsupported_key", "key '$rawKey' is unavailable without the optional Sky IME")
+        }
+        if (!performGlobalAction(action)) throw MethodApplicationException(Protocol.ErrorCodes.TRANSIENT, "global key action was rejected")
+        return jsonObject { put("dispatched", true); put("provider", "accessibility_global_action") }
+    }
+
+    private fun editableTarget(): AccessibilityNodeInfo? {
+        val root = runCatching { rootInActiveWindow }.getOrNull() ?: return null
+        root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let { if (it.isEditable) return it }
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            if (node.isEditable && node.isFocused) return node
+            for (index in 0 until node.childCount) node.getChild(index)?.let(queue::add)
+        }
+        return null
+    }
+
+    private fun editorResult(outcome: String, node: AccessibilityNodeInfo?): JsonValue.Obj =
+        jsonObject {
+            put("outcome", outcome)
+            node?.text?.toString()?.let { put("surrounding_text", it) }
+            node?.textSelectionStart?.takeIf { it >= 0 }?.let { put("selection_start", it.toLong()) }
+            node?.textSelectionEnd?.takeIf { it >= 0 }?.let { put("selection_end", it.toLong()) }
+            put("accepted_mime_types", jsonArray(emptyList()))
+            put("provider", "accessibility_node")
+            put("ime_enhanced", false)
+        }
+
+    private fun editorBad(message: String): Nothing =
+        throw MethodParamException(Protocol.ErrorCodes.BAD_REQUEST, message)
+
     companion object {
         private val instanceRef = AtomicReference<SkyAccessibilityService?>()
+        private val accessibilityEventSequenceRef = AtomicLong(0)
 
         fun instance(): SkyAccessibilityService? = instanceRef.get()
 

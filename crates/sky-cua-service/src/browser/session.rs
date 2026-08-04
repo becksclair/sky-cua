@@ -98,6 +98,7 @@ pub(super) async fn open_tab_from_socket(
     Ok(BrowserOpenResponse {
         target,
         tab: Some(tab),
+        destination_appshot: None,
         diagnostics: Vec::new(),
     })
 }
@@ -770,6 +771,7 @@ fn partial_open_response(
             )),
         }],
         tab: Some(tab),
+        destination_appshot: None,
     }
 }
 

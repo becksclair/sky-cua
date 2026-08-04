@@ -11,6 +11,7 @@ import com.skycua.phonecompanion.protocol.AccessibilityTreeResult
 import com.skycua.phonecompanion.protocol.AppListParams
 import com.skycua.phonecompanion.protocol.AppListResult
 import com.skycua.phonecompanion.protocol.AppOpParams
+import com.skycua.phonecompanion.protocol.AppShotParams
 import com.skycua.phonecompanion.protocol.CapabilitiesState
 import com.skycua.phonecompanion.protocol.CurrentAppResult
 import com.skycua.phonecompanion.protocol.CursorOverlayParams
@@ -26,11 +27,15 @@ import com.skycua.phonecompanion.protocol.OverlayGestureParams
 import com.skycua.phonecompanion.protocol.Protocol
 import com.skycua.phonecompanion.protocol.ScreenshotParams
 import com.skycua.phonecompanion.protocol.ScreenshotResult
+import com.skycua.phonecompanion.appshot.AndroidPhoneAppShotSource
+import com.skycua.phonecompanion.appshot.PhoneAppShotProducer
+import com.skycua.phonecompanion.appshot.toJson
 import com.skycua.phonecompanion.protocol.cursorOverlayResult
 import com.skycua.phonecompanion.protocol.gestureDispatchedResult
 import com.skycua.phonecompanion.protocol.okResult
 import com.skycua.phonecompanion.protocol.overlayActiveResult
 import com.skycua.phonecompanion.protocol.overlayGestureResult
+import com.skycua.phonecompanion.direct.DirectContentResolver
 
 /**
  * Wires the protocol [MethodHandler] to the live Android services. Each method
@@ -38,13 +43,31 @@ import com.skycua.phonecompanion.protocol.overlayGestureResult
  * service produces a structured application error instead of a transport
  * failure.
  */
-class DeviceMethodHandler(private val context: Context) : MethodHandler {
+class DeviceMethodHandler(
+    private val context: Context,
+    private val contentResolver: DirectContentResolver? = null,
+) : MethodHandler {
     private val appManager = AppManager(context)
+    private val clipboardController = ClipboardController(context, contentResolver)
+    private val storageController = StorageController(context, contentResolver)
+    private val cameraController = CameraController(context)
 
     private fun accessibility(): SkyAccessibilityService? = SkyAccessibilityService.instance()
 
     private fun notifications(): SkyNotificationListenerService? =
         SkyNotificationListenerService.instance()
+
+    fun directCapabilityNames(): Set<String> {
+        val state = health()
+        return buildSet {
+            addAll(listOf("content", "clipboard", "editor", "camera", "storage", "app_management"))
+            if (state.accessibilityEnabled) add("accessibility")
+            if (state.canPerformGestures) add("gestures")
+            if (state.canRetrieveWindowContent) add("accessibility_tree")
+            if (state.canTakeScreenshot) add("screenshot")
+            if (state.notificationListenerEnabled) add("notifications")
+        }
+    }
 
     override fun health(): HealthState {
         val a11y = accessibility()
@@ -85,6 +108,15 @@ class DeviceMethodHandler(private val context: Context) : MethodHandler {
 
     override fun screenshot(params: ScreenshotParams): ScreenshotResult =
         requireAccessibility().takePhoneScreenshot(params)
+
+    override fun appShot(params: AppShotParams): JsonValue.Obj {
+        val service = requireAccessibility()
+        val captured = PhoneAppShotProducer(
+            AndroidPhoneAppShotSource(service),
+            maxNodes = params.maxNodes,
+        ).capture()
+        return captured.toJson()
+    }
 
     override fun gesture(params: GestureParams): JsonValue.Obj {
         requireAccessibility().dispatchPhoneGesture(params)
@@ -182,6 +214,25 @@ class DeviceMethodHandler(private val context: Context) : MethodHandler {
         appManager.perform(params)
         return okResult()
     }
+
+    override fun clipboard(params: JsonValue.Obj): JsonValue.Obj =
+        clipboardController.perform(params)
+
+    override fun editor(params: JsonValue.Obj): JsonValue.Obj =
+        if (params.string("operation") == "insert_content") {
+            SkyImeService.perform(params, contentResolver)
+        } else {
+            requireAccessibility().performEditorOperation(params)
+        }
+
+    override fun storage(params: JsonValue.Obj): JsonValue.Obj =
+        storageController.perform(params)
+
+    override fun camera(params: JsonValue.Obj): JsonValue.Obj =
+        cameraController.perform(params)
+
+    override fun key(params: JsonValue.Obj): JsonValue.Obj =
+        requireAccessibility().performKey(params.string("key") ?: "")
 
     private fun requireAccessibility(): SkyAccessibilityService =
         accessibility()

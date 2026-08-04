@@ -7,6 +7,29 @@ impl ServiceDaemon {
         identity: Option<BrowserSessionIdentity>,
         context: Option<sky_cua_platform::model::BrowserRequestContext>,
     ) -> ServiceResponse {
+        if let BrowserRequest::Snapshot {
+            text_limit,
+            element_limit,
+            ..
+        } = &request
+        {
+            if text_limit.is_some_and(|value| value > BROWSER_SNAPSHOT_MAX_TEXT_LIMIT) {
+                return error_response(
+                    "InvalidRequest",
+                    format!(
+                        "browser_snapshot text_limit must be at most {BROWSER_SNAPSHOT_MAX_TEXT_LIMIT}"
+                    ),
+                );
+            }
+            if element_limit.is_some_and(|value| value > BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT) {
+                return error_response(
+                    "InvalidRequest",
+                    format!(
+                        "browser_snapshot element_limit must be at most {BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT}"
+                    ),
+                );
+            }
+        }
         // Any browser request marks the session active so the daemon's idle
         // exit cannot kill the heartbeat keepalive (and with it every tab's
         // debugger attachment) between an agent's browser actions.
@@ -33,6 +56,25 @@ impl ServiceDaemon {
                         Err(diagnostic) => error_response(&diagnostic.code, &diagnostic.message),
                     };
                 }
+            }
+            Ok(_) if !matches!(request, BrowserRequest::Status) => {
+                let Some(context) = context else {
+                    return error_response(
+                        "BrowserRequestContextRequired",
+                        "browser mutations and captures require BrowserRequestContext",
+                    );
+                };
+                let identity = identity.unwrap_or_else(|| BrowserSessionIdentity {
+                    session_id: context.logical_identity.session_id,
+                    turn_id: context
+                        .logical_identity
+                        .turn_id
+                        .unwrap_or(context.operation_identity.operation_id),
+                    thread_id: context.logical_identity.thread_id,
+                });
+                return ServiceResponse::Browser {
+                    response: crate::browser::execute_high_level(request, identity).await,
+                };
             }
             Ok(_) => {}
         }
@@ -69,6 +111,7 @@ impl ServiceDaemon {
                 x,
                 y,
                 wait_for_arrival,
+                ..
             } => {
                 debug!(
                     ?target,
@@ -107,6 +150,25 @@ impl ServiceDaemon {
                     },
                 }
             }
+            BrowserRequest::ObserveAppShot {
+                target,
+                tab_id,
+                text_limit,
+                element_limit,
+                include_image_data,
+            } => ServiceResponse::Browser {
+                response: BrowserResponse::AppShot {
+                    response: crate::browser::observe_appshot_with_identity(
+                        target,
+                        tab_id,
+                        text_limit,
+                        element_limit,
+                        include_image_data,
+                        identity,
+                    )
+                    .await,
+                },
+            },
             BrowserRequest::Snapshot {
                 target,
                 tab_id,
@@ -115,30 +177,6 @@ impl ServiceDaemon {
                 element_limit,
                 element_query,
             } => {
-                if text_limit.is_some_and(|value| value > BROWSER_SNAPSHOT_MAX_TEXT_LIMIT) {
-                    return ServiceResponse::Error {
-                        ok: false,
-                        code: "InvalidRequest".to_string(),
-                        message: format!(
-                            "browser_snapshot text_limit must be at most {BROWSER_SNAPSHOT_MAX_TEXT_LIMIT}"
-                        ),
-                        session_id: None,
-                        turn_id: None,
-                        retry: None,
-                    };
-                }
-                if element_limit.is_some_and(|value| value > BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT) {
-                    return ServiceResponse::Error {
-                        ok: false,
-                        code: "InvalidRequest".to_string(),
-                        message: format!(
-                            "browser_snapshot element_limit must be at most {BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT}"
-                        ),
-                        session_id: None,
-                        turn_id: None,
-                        retry: None,
-                    };
-                }
                 debug!(
                     ?target,
                     ?tab_id,
@@ -191,6 +229,7 @@ impl ServiceDaemon {
                 tab_id,
                 x,
                 y,
+                ..
             } => {
                 debug!(?target, ?tab_id, x, y, "handling browser_click request");
                 ServiceResponse::Browser {
@@ -206,6 +245,7 @@ impl ServiceDaemon {
                 target,
                 tab_id,
                 element_ref,
+                ..
             } => {
                 debug!(?target, ?tab_id, "handling browser_click element request");
                 ServiceResponse::Browser {
@@ -224,6 +264,7 @@ impl ServiceDaemon {
                 target,
                 tab_id,
                 text,
+                ..
             } => {
                 debug!(?target, ?tab_id, "handling browser_type_text request");
                 ServiceResponse::Browser {
@@ -240,6 +281,7 @@ impl ServiceDaemon {
                 tab_id,
                 element_ref,
                 text,
+                ..
             } => {
                 debug!(
                     ?target,
@@ -263,6 +305,7 @@ impl ServiceDaemon {
                 target,
                 tab_id,
                 key,
+                ..
             } => {
                 debug!(?target, ?tab_id, ?key, "handling browser_press_key request");
                 ServiceResponse::Browser {
@@ -281,6 +324,7 @@ impl ServiceDaemon {
                 delta_y,
                 x,
                 y,
+                ..
             } => {
                 debug!(
                     ?target,
@@ -304,6 +348,7 @@ impl ServiceDaemon {
                 target,
                 tab_id,
                 expression,
+                ..
             } => {
                 debug!(?target, ?tab_id, "handling browser_eval request");
                 ServiceResponse::Browser {

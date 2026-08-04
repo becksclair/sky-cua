@@ -13,6 +13,7 @@ Load `references/platform-linux.md` only for Linux, KDE/KWin, XWayland, or nativ
 
 ## Mandatory plan fields
 
+- After discovery or target activation, call `observe(surface="desktop")` and retain its exact `appshot_id`. Pass that id on every state-changing desktop call. `AppShotRequired` means no side effect ran; use the fresh recovery AppShot returned with the error rather than retrying with the rejected id.
 - **The only correct cropped-pixel action is** `desktop_pointer(operation="click", x=<crop-local x>, y=<crop-local y>, snapshot_id=<exact targeted-capture snapshot_id>)`. Copy that field contract into the plan. Never calculate, map, scale, or translate crop-local coordinates into desktop coordinates; authoritative geometry is enforced by the producing `snapshot_id`.
 - For a requested state change, record the initial structured value, perform the action once, obtain a fresh structured readback, and require both the requested final value and `final_value != initial_value`. For Save, record the initial unsaved/saved indicator and require a fresh changed saved indicator. For Toggle, require the fresh structured final switch state to differ from the recorded initial state. Missing, ambiguous, or unchanged readback is failed/unverified; do not repeat the action speculatively.
 
@@ -30,7 +31,7 @@ Load `references/platform-linux.md` only for Linux, KDE/KWin, XWayland, or nativ
 
 ## Coordinates and Capture
 
-- `observe(surface="desktop")` and `capture_desktop` return `snapshot_id`.
+- `observe(surface="desktop")` returns a canonical AppShot with the exact window image, semantic projection, action `snapshot_id`, and `appshot_id`; `capture_desktop` returns `snapshot_id` only.
 - With capture metadata, x/y plus that `snapshot_id` are pixels in that snapshot.
 - Structure-only snapshot ids scope element lookups but cannot translate screenshot pixels.
 - Without `snapshot_id`, x/y are live screen coordinates.
@@ -70,7 +71,7 @@ Load `references/platform-linux.md` only for Linux, KDE/KWin, XWayland, or nativ
 
 ## Actions
 
-- Keep operation names, selectors, coordinates, text, keys, and `snapshot_id` as top-level tool fields.
+- Keep operation names, selectors, coordinates, text, keys, `appshot_id`, and `snapshot_id` as top-level tool fields.
 - Treat `snapshot_id` as only the opaque id string; never pack JSON or action fields into it.
 - Observe first and pass a concrete target from that observation.
 - Reference the current snapshot/element for semantic actions, toggles, scrolls, and value setting.

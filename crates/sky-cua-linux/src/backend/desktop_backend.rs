@@ -952,6 +952,7 @@ mod cua_coordinate_tests {
             context: CuaRequestContext {
                 session_id: "session".to_string(),
                 turn_id: "turn".to_string(),
+                appshot_id: None,
                 deadline_ms: None,
             },
             from_x: -250.0,

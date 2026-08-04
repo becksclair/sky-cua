@@ -340,6 +340,7 @@ mod tests {
     fn base_request(action: ActionName) -> ActionRequest {
         ActionRequest {
             action,
+            appshot_id: None,
             snapshot_id: Some("snap-1".to_string()),
             element_index: None,
             arguments: json!({}),

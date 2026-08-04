@@ -1714,6 +1714,7 @@ mod tests {
     fn action_request() -> sky_cua_platform::ActionRequest {
         sky_cua_platform::ActionRequest {
             action: sky_cua_platform::ActionName::Click,
+            appshot_id: None,
             snapshot_id: None,
             element_index: None,
             arguments: serde_json::json!({}),
@@ -1786,6 +1787,7 @@ mod tests {
                 tab_id: "123".to_string(),
                 x: 10.0,
                 y: 10.0,
+                appshot_id: None,
             },
         };
         let status = ServiceRequest::Browser {

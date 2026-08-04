@@ -3,16 +3,20 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use chrono::Utc;
+use sha2::{Digest, Sha256};
 use sky_cua_platform::appshot_artifacts_dir;
 use sky_cua_platform::model::{
-    AppShotAccessibilityStatus, AppShotApplication, AppShotCaptureFlags, AppShotCaptureResult,
-    AppShotImage, AppStateSnapshot, CaptureScope, CaptureScreenMode, ElementNode, ModelImageFormat,
-    SemanticBackendKind, ServiceResponse, WindowInfo, WindowTarget,
+    AppShotAccessibilityStatus, AppShotActionSnapshot, AppShotApplication, AppShotCapture,
+    AppShotCaptureFlags, AppShotCaptureResult, AppShotConsistency, AppShotCoverage,
+    AppShotEnvelope, AppShotImage, AppShotTrigger, AppStateSnapshot, CaptureScope,
+    CaptureScreenMode, ContentPersistence, ContentRef, ContentSource, ElementNode,
+    ModelImageFormat, SemanticBackendKind, ServiceResponse, WindowInfo, WindowTarget,
 };
 
 use super::*;
 
-const APPSHOT_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const APPSHOT_TTL: Duration = Duration::from_secs(60 * 60);
 const MAX_AX_TEXT_BYTES: usize = 1_000_000;
 const MAX_CLEANUP_ENTRIES: usize = 128;
 const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
@@ -143,6 +147,7 @@ impl ServiceDaemon {
             }
         }
 
+        self.snapshots.lock().await.store(snapshot.clone());
         let result_snapshot = snapshot;
         let result_request_id = request_id.clone();
         let result = self
@@ -208,12 +213,29 @@ pub(crate) fn persist_image(
         (None, Some("png")) => ("png", "image/png"),
         (Some(ModelImageFormat::Webp), _) | (None, _) => ("webp", "image/webp"),
     };
-    let destination = root.join(format!("{request_id}.{extension}"));
-    let temporary = root.join(format!(".{request_id}.tmp"));
+    // Request ids are caller-controlled and may be reused after a response is
+    // lost. Suffix every artifact with a fresh id so a live ContentRef can
+    // never be overwritten by a later capture.
+    let artifact_id = format!(
+        "{request_id}-{}",
+        sky_cua_platform::snapshot::new_snapshot_id()
+    );
+    let destination = root.join(format!("{artifact_id}.{extension}"));
+    let temporary = root.join(format!(".{artifact_id}.tmp"));
     let _ = fs::remove_file(&temporary);
-    fs::copy(source, &temporary)?;
-    let source_size = fs::metadata(source)?.len();
+    if let Err(error) = fs::copy(source, &temporary) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    let source_size = match fs::metadata(source).map(|metadata| metadata.len()) {
+        Ok(size) => size,
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+    };
     if source_size == 0 || source_size > MAX_ARTIFACT_BYTES {
+        let _ = fs::remove_file(&temporary);
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
@@ -221,7 +243,13 @@ pub(crate) fn persist_image(
             ),
         ));
     }
-    let metadata = fs::metadata(&temporary)?;
+    let metadata = match fs::metadata(&temporary) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+    };
     if metadata.len() == 0 {
         let _ = fs::remove_file(&temporary);
         return Err(io::Error::new(
@@ -229,7 +257,11 @@ pub(crate) fn persist_image(
             "captured AppShot image was empty",
         ));
     }
-    fs::rename(&temporary, &destination)?;
+    if let Err(error) = fs::rename(&temporary, &destination) {
+        let _ = fs::remove_file(&temporary);
+        let _ = fs::remove_file(&destination);
+        return Err(error);
+    }
     Ok((destination, metadata.len(), mime_type))
 }
 
@@ -286,7 +318,11 @@ fn cleanup_expired(root: &Path, now: SystemTime) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
     };
-    for entry in entries.flatten().take(MAX_CLEANUP_ENTRIES) {
+    let mut deleted = 0;
+    for entry in entries.flatten() {
+        if deleted >= MAX_CLEANUP_ENTRIES {
+            break;
+        }
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -297,8 +333,8 @@ fn cleanup_expired(root: &Path, now: SystemTime) {
             .and_then(|metadata| metadata.modified().ok())
             .and_then(|modified| now.duration_since(modified).ok())
             .is_some_and(|age| age >= APPSHOT_TTL);
-        if expired {
-            let _ = fs::remove_file(path);
+        if expired && fs::remove_file(path).is_ok() {
+            deleted += 1;
         }
     }
 }
@@ -316,31 +352,27 @@ fn appshot_result(
             "AppShot capture metadata was unavailable",
         )
     })?;
-    let source = capture
-        .screenshot_path
-        .as_deref()
-        .filter(|path| !path.trim().is_empty())
-        .ok_or_else(|| {
-            BackendError::new(
-                BackendErrorCode::Internal,
-                "AppShot capture did not produce an inspection image path",
-            )
-        })?;
     let dimensions = capture.pixel_size.clone().ok_or_else(|| {
         BackendError::new(
             BackendErrorCode::Internal,
             "AppShot capture did not report image dimensions",
         )
     })?;
-    let (path, size_bytes, mime_type) =
-        persist_image(request_id, Path::new(source), capture.model_image_format).map_err(
-            |error| {
-                BackendError::new(
-                    BackendErrorCode::Internal,
-                    format!("failed to persist the service-owned AppShot artifact: {error}"),
-                )
-            },
-        )?;
+    let appshot = desktop_appshot_envelope(
+        request_id,
+        snapshot,
+        window,
+        include_ax_text,
+        ax_read_succeeded,
+        AppShotTrigger::Observe,
+    )?;
+    let filename = appshot.image.filename.as_deref().ok_or_else(|| {
+        BackendError::new(
+            BackendErrorCode::Internal,
+            "desktop AppShot ContentRef did not include its private artifact filename",
+        )
+    })?;
+    let path = appshot_artifacts_dir().join(filename);
     let ax_text = (include_ax_text && ax_read_succeeded)
         .then(|| ax_text(&snapshot.elements))
         .flatten();
@@ -392,8 +424,8 @@ fn appshot_result(
         },
         image: AppShotImage {
             path: path.display().to_string(),
-            mime_type: mime_type.to_string(),
-            size_bytes,
+            mime_type: appshot.image.mime_type.clone(),
+            size_bytes: appshot.image.size_bytes,
             dimensions,
         },
         ax_status,
@@ -403,8 +435,8 @@ fn appshot_result(
         image_backend: capture.image_backend.clone(),
         display: capture.display.clone(),
         diagnostics: snapshot.diagnostics.clone(),
+        appshot: Some(Box::new(appshot)),
     };
-    cleanup_capture_artifacts(capture);
     Ok(result)
 }
 
@@ -421,6 +453,238 @@ fn cleanup_capture_artifacts(capture: &sky_cua_platform::model::CaptureInfo) {
         if path.parent() == Some(captures_root.as_path()) {
             let _ = fs::remove_file(path);
         }
+    }
+}
+
+/// Build the universal desktop AppShot envelope from an exact-window capture.
+/// The private artifact is persisted once and referenced by ContentRef; no
+/// second screenshot is taken, keeping pixels and semantics on one snapshot.
+pub(crate) fn desktop_appshot_envelope(
+    request_id: &str,
+    snapshot: &AppStateSnapshot,
+    window: &WindowInfo,
+    include_ax_text: bool,
+    ax_read_succeeded: bool,
+    trigger: AppShotTrigger,
+) -> Result<AppShotEnvelope, BackendError> {
+    let capture = snapshot.capture.as_ref().ok_or_else(|| {
+        BackendError::new(
+            BackendErrorCode::Internal,
+            "AppShot capture metadata was unavailable",
+        )
+    })?;
+    let _capture_artifact_guard = CaptureArtifactGuard { capture };
+    if capture.capture_scope != CaptureScope::Window {
+        return Err(BackendError::new(
+            BackendErrorCode::CaptureBackendDowngraded,
+            format!(
+                "desktop AppShot requires a target-window crop; backend returned {:?}",
+                capture.capture_scope
+            ),
+        ));
+    }
+    let source = capture
+        .screenshot_path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                "AppShot capture did not produce an inspection image path",
+            )
+        })?;
+    if capture.pixel_size.is_none() {
+        return Err(BackendError::new(
+            BackendErrorCode::Internal,
+            "AppShot capture did not report image dimensions",
+        ));
+    }
+    let (path, size_bytes, mime_type) =
+        persist_image(request_id, Path::new(source), capture.model_image_format).map_err(
+            |error| {
+                BackendError::new(
+                    BackendErrorCode::Internal,
+                    format!("failed to persist the service-owned AppShot artifact: {error}"),
+                )
+            },
+        )?;
+    let mut artifact_guard = PersistedArtifactGuard::new(path.clone());
+    let content_id = path
+        .file_stem()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| request_id.to_string());
+    let sha256 = sha256_file(&path).map_err(|error| {
+        BackendError::new(
+            BackendErrorCode::Internal,
+            format!("failed to hash the service-owned AppShot artifact: {error}"),
+        )
+    })?;
+    let expires_at_ms = SystemTime::now()
+        .checked_add(APPSHOT_TTL)
+        .and_then(|value| value.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|value| value.as_millis() as u64);
+    let image = ContentRef {
+        content_id,
+        device_id: None,
+        link_epoch: None,
+        mime_type: mime_type.to_string(),
+        filename: Some(
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        size_bytes,
+        sha256,
+        source: ContentSource::HostPrivateArtifact,
+        expires_at_ms,
+        persistence: ContentPersistence::Temporary,
+    };
+    let focused = snapshot.focused_app.as_ref();
+    let focused_is_target = focused.is_some_and(|app| {
+        window.pid.is_some() && window.pid == app.pid
+            || window.app_id.as_deref() == Some(app.app_id.as_str())
+            || window.title.is_some() && window.title.as_deref() == app.window_title.as_deref()
+    });
+    let app_id = window
+        .app_id
+        .clone()
+        .or_else(|| window.wm_class.clone())
+        .or_else(|| {
+            focused
+                .filter(|_| focused_is_target)
+                .map(|app| app.app_id.clone())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    let bounds = window
+        .bounds
+        .clone()
+        .or_else(|| capture.logical_rect.clone())
+        .ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                "desktop AppShot capture did not report exact window bounds",
+            )
+        })?;
+    let semantic_projection = serde_json::json!({
+        "elements": snapshot.elements,
+        "focused_app": focused.filter(|_| focused_is_target),
+        "accessibility": appshot_ax_status(
+            include_ax_text,
+            ax_read_succeeded,
+            snapshot.environment.semantic_backend.clone(),
+            ax_text(&snapshot.elements).is_some(),
+        ),
+    });
+    let semantics_complete = include_ax_text
+        && ax_read_succeeded
+        && snapshot.environment.semantic_backend != SemanticBackendKind::None
+        && !snapshot.diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.code.as_str(),
+                "AccessibilityUnavailable" | "AccessibilityCoverageLimited"
+            )
+        });
+    let mut diagnostics = snapshot.diagnostics.clone();
+    diagnostics.push(sky_cua_platform::model::DiagnosticEntry {
+        code: "DesktopCaptureFenceUnavailable".to_string(),
+        message: "Screenshot and accessibility semantics were sampled separately; stability was not claimed without a target-generation fence.".to_string(),
+        details: None,
+    });
+    if app_id == "unknown" {
+        diagnostics.push(sky_cua_platform::model::DiagnosticEntry {
+            code: "DesktopSubjectIdentityIncomplete".to_string(),
+            message: "The exact window had no application identifier; using unknown.".to_string(),
+            details: None,
+        });
+    }
+    let envelope = AppShotEnvelope {
+        appshot_id: request_id.to_string(),
+        trigger,
+        captured_at: Utc::now(),
+        consistency: desktop_consistency(&snapshot.diagnostics),
+        capture: AppShotCapture::Desktop {
+            app_id,
+            window_id: window.window_id.clone(),
+            title: window.title.clone(),
+            bounds,
+            semantic_projection,
+        },
+        image,
+        action_snapshot: AppShotActionSnapshot {
+            snapshot_id: snapshot.snapshot_id.clone(),
+            session_id: None,
+            subject_generation: None,
+        },
+        coverage: AppShotCoverage {
+            pixels_complete: true,
+            semantics_complete,
+            secure_regions_redacted: false,
+            projection_truncated: false,
+            total_semantic_nodes: Some(snapshot.elements.len() as u64),
+            projected_semantic_nodes: Some(snapshot.elements.len() as u64),
+        },
+        capability_profile_id: format!(
+            "desktop:{:?}:{:?}",
+            snapshot.environment.semantic_backend, capture.backend
+        ),
+        diagnostics,
+    };
+    artifact_guard.disarm();
+    Ok(envelope)
+}
+
+struct CaptureArtifactGuard<'a> {
+    capture: &'a sky_cua_platform::model::CaptureInfo,
+}
+
+impl Drop for CaptureArtifactGuard<'_> {
+    fn drop(&mut self) {
+        cleanup_capture_artifacts(self.capture);
+    }
+}
+
+struct PersistedArtifactGuard {
+    path: Option<PathBuf>,
+}
+
+impl PersistedArtifactGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+
+    fn disarm(&mut self) {
+        self.path = None;
+    }
+}
+
+impl Drop for PersistedArtifactGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn sha256_file(path: &Path) -> io::Result<String> {
+    let bytes = fs::read(path)?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn desktop_consistency(
+    diagnostics: &[sky_cua_platform::model::DiagnosticEntry],
+) -> AppShotConsistency {
+    if diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic.code.as_str(),
+            "DesktopTargetChangedDuringCapture" | "CaptureChangedDuringCapture"
+        )
+    }) {
+        AppShotConsistency::ChangedDuringCapture
+    } else {
+        // Pixels and semantics are independently sampled until a target
+        // generation fence is available; never claim a false Stable frame.
+        AppShotConsistency::Partial
     }
 }
 
@@ -453,6 +717,7 @@ fn create_private_dir(path: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
     use sky_cua_platform::model::ElementTextReadback;
+    use std::io::Write;
 
     #[test]
     fn request_ids_are_safe_path_components() {
@@ -529,5 +794,62 @@ mod tests {
             appshot_ax_status(true, true, SemanticBackendKind::None, true),
             AppShotAccessibilityStatus::Unavailable
         );
+    }
+
+    #[test]
+    fn private_appshot_artifacts_use_one_hour_leases() {
+        assert_eq!(APPSHOT_TTL, Duration::from_secs(60 * 60));
+    }
+
+    #[test]
+    fn artifact_hash_is_sha256_of_persisted_bytes() {
+        let path = std::env::temp_dir().join(format!(
+            "sky-cua-appshot-hash-{}-{}",
+            std::process::id(),
+            sky_cua_platform::snapshot::new_snapshot_id()
+        ));
+        let mut file = fs::File::create(&path).expect("create hash fixture");
+        file.write_all(b"desktop-appshot")
+            .expect("write hash fixture");
+        drop(file);
+        assert_eq!(
+            sha256_file(&path).expect("hash fixture"),
+            "e4455bd410dd0aab5284249451579d1f28052dc0fdec4e82521d27a7753ee097"
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn consistency_never_claims_stable_without_a_target_fence() {
+        assert_eq!(desktop_consistency(&[]), AppShotConsistency::Partial);
+        let changed = vec![sky_cua_platform::model::DiagnosticEntry {
+            code: "DesktopTargetChangedDuringCapture".to_string(),
+            message: "simulated target change".to_string(),
+            details: None,
+        }];
+        assert_eq!(
+            desktop_consistency(&changed),
+            AppShotConsistency::ChangedDuringCapture
+        );
+    }
+
+    #[test]
+    fn reused_request_ids_get_distinct_artifacts() {
+        let source = std::env::temp_dir().join(format!(
+            "sky-cua-appshot-source-{}-{}",
+            std::process::id(),
+            sky_cua_platform::snapshot::new_snapshot_id()
+        ));
+        fs::write(&source, b"same request, new content ref").expect("write source fixture");
+        let first = persist_image("reused-request", &source, None).expect("first artifact");
+        let second = persist_image("reused-request", &source, None).expect("second artifact");
+        assert_ne!(first.0, second.0);
+        assert_eq!(
+            fs::read(&first.0).expect("first remains"),
+            b"same request, new content ref"
+        );
+        let _ = fs::remove_file(first.0);
+        let _ = fs::remove_file(second.0);
+        let _ = fs::remove_file(source);
     }
 }

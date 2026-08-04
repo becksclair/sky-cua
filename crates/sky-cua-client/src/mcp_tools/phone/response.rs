@@ -13,9 +13,10 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
     DiagnosticEntry, PhoneAccessibilityTreeResponse, PhoneActionResponse, PhoneAppResponse,
-    PhoneAppResponseKind, PhoneBackendKind, PhoneCompanionStatusResponse, PhoneDisconnectResponse,
-    PhoneImage, PhoneListDevicesResponse, PhoneNotificationsResponse, PhoneObserveResponse,
-    PhonePairWirelessResponse, PhoneScreenshotResponse, PhoneSession, PhoneStatusReport,
+    PhoneAppResponseKind, PhoneBackendKind, PhoneCompanionStatusResponse, PhoneConnectionKind,
+    PhoneDisconnectResponse, PhoneImage, PhoneListDevicesResponse, PhoneNotificationsResponse,
+    PhoneObserveResponse, PhonePairWirelessResponse, PhoneScreenshotResponse, PhoneSession,
+    PhoneStatusReport,
 };
 
 use crate::output_shapes::summary_text_field;
@@ -182,7 +183,20 @@ pub(crate) fn phone_status_summary(report: &PhoneStatusReport) -> String {
 }
 
 pub(crate) fn phone_status_result(report: PhoneStatusReport) -> Result<Value> {
-    let is_error = phone_diagnostics_are_error(&report.diagnostics);
+    let direct_device_online = report
+        .devices
+        .iter()
+        .any(|device| device.connection_kind == PhoneConnectionKind::CompanionDirect)
+        || report
+            .sessions
+            .iter()
+            .any(|session| session.connection_kind == PhoneConnectionKind::CompanionDirect);
+    let is_error = report.diagnostics.iter().any(|diagnostic| {
+        phone_diagnostic_is_error_code(&diagnostic.code)
+            && !(direct_device_online
+                && !report.adb_available
+                && diagnostic.code == "PhoneCommandSpawnFailed")
+    });
     let text = phone_status_summary(&report);
     Ok(json!({
         "content": [{"type": "text", "text": text}],
@@ -194,10 +208,15 @@ pub(crate) fn phone_status_result(report: PhoneStatusReport) -> Result<Value> {
 pub(crate) fn phone_list_devices_summary(response: &PhoneListDevicesResponse) -> String {
     let mut summary = format!("Discovered {} Android devices.", response.devices.len());
     for device in &response.devices {
+        let identity = device
+            .device_id
+            .as_deref()
+            .or_else(|| (!device.serial.is_empty()).then_some(device.serial.as_str()))
+            .unwrap_or("unknown");
         let _ = write!(
             &mut summary,
-            " [{}] state={:?} connection={:?}",
-            device.serial, device.state, device.connection_kind
+            " [{identity}] state={:?} connection={:?}",
+            device.state, device.connection_kind
         );
         if let Some(model) = device.model.as_deref().filter(|model| !model.is_empty()) {
             let _ = write!(&mut summary, " model={model}");
@@ -282,6 +301,9 @@ pub(crate) fn phone_observe_summary(response: &PhoneObserveResponse) -> String {
         .filter(|id| !id.is_empty())
     {
         let _ = write!(&mut summary, " snapshot_id={snapshot_id}.");
+    }
+    if let Some(appshot) = response.appshot.as_ref() {
+        let _ = write!(&mut summary, " appshot_id={}.", appshot.appshot_id);
     }
     append_first_diagnostic(&mut summary, &response.diagnostics);
     summary
@@ -646,7 +668,9 @@ pub(crate) fn phone_app_result(response: PhoneAppResponse) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    use sky_cua_platform::model::{PhoneConnectionKind, PhoneDevice, PhoneDeviceState};
+    use sky_cua_platform::model::{
+        PhoneConnectionIdentity, PhoneConnectionKind, PhoneDevice, PhoneDeviceState,
+    };
 
     use super::*;
 
@@ -848,6 +872,12 @@ mod tests {
             sessions: Vec::new(),
             devices: vec![PhoneDevice {
                 serial: "R5CT30ABCDE".to_string(),
+                device_id: None,
+                link_epoch: None,
+                connection: Some(PhoneConnectionIdentity::Adb {
+                    serial: "R5CT30ABCDE".to_string(),
+                    name: None,
+                }),
                 state: PhoneDeviceState::Device,
                 connection_kind: PhoneConnectionKind::Usb,
                 model: None,
@@ -890,6 +920,51 @@ mod tests {
             summary,
             "Phone Use tools are disabled. adb=unavailable scrcpy=unavailable \
              companion=disabled sessions=0 devices=0. Diagnostic: diagnostic PhoneUseDisabled"
+        );
+    }
+
+    #[test]
+    fn status_keeps_missing_adb_informational_when_a_direct_device_is_online() {
+        let report = PhoneStatusReport {
+            enabled: true,
+            adb_available: false,
+            adb_path: None,
+            adb_version: None,
+            adb_server_running: None,
+            scrcpy_available: false,
+            scrcpy_path: None,
+            scrcpy_version: None,
+            companion_enabled: true,
+            mdns_available: false,
+            default_serial: None,
+            default_backend: PhoneBackendKind::None,
+            sessions: Vec::new(),
+            devices: vec![PhoneDevice {
+                serial: String::new(),
+                device_id: Some("489176eb-2a56-4354-afbe-2dbeaf29aa6d".to_string()),
+                link_epoch: Some(9),
+                connection: Some(PhoneConnectionIdentity::CompanionDirect {
+                    device_id: "489176eb-2a56-4354-afbe-2dbeaf29aa6d".to_string(),
+                    link_epoch: 9,
+                    name: None,
+                    endpoint: None,
+                }),
+                state: PhoneDeviceState::Device,
+                connection_kind: PhoneConnectionKind::CompanionDirect,
+                model: None,
+                product: None,
+                device: None,
+                transport_id: None,
+                primary: false,
+            }],
+            diagnostics: vec![diagnostic("PhoneCommandSpawnFailed")],
+        };
+
+        let result = phone_status_result(report).expect("status result");
+        assert_eq!(result["isError"], false);
+        assert_eq!(
+            result["structuredContent"]["diagnostics"][0]["code"],
+            "PhoneCommandSpawnFailed"
         );
     }
 }

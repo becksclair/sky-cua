@@ -1619,6 +1619,7 @@ fn action_request_for_environment(
 ) -> ActionRequest {
     ActionRequest {
         action,
+        appshot_id: None,
         snapshot_id: None,
         element_index: None,
         arguments,
@@ -2301,6 +2302,7 @@ mod tests {
     fn action_request(action: ActionName, arguments: serde_json::Value) -> ActionRequest {
         ActionRequest {
             action,
+            appshot_id: None,
             snapshot_id: None,
             element_index: None,
             arguments,
@@ -2340,6 +2342,7 @@ mod tests {
         CuaRequestContext {
             session_id: "session".to_string(),
             turn_id: "turn".to_string(),
+            appshot_id: None,
             deadline_ms: Some(30_000),
         }
     }
@@ -3307,6 +3310,7 @@ mod tests {
     fn kde_clipboard_text_backend_is_kde_portal_only() {
         let request = ActionRequest {
             action: ActionName::TypeText,
+            appshot_id: None,
             snapshot_id: None,
             element_index: None,
             arguments: json!({"text": "hello"}),

@@ -1,12 +1,13 @@
 use std::collections::{HashMap, VecDeque};
 
-use sky_cua_platform::model::AppStateSnapshot;
+use sky_cua_platform::model::{AppShotEnvelope, AppStateSnapshot};
 
 #[derive(Debug, Default)]
 pub struct SnapshotManager {
     snapshots: HashMap<String, AppStateSnapshot>,
     order: VecDeque<String>,
     max_snapshots: usize,
+    appshots: HashMap<String, AppShotEnvelope>,
 }
 
 impl SnapshotManager {
@@ -16,6 +17,7 @@ impl SnapshotManager {
             snapshots: HashMap::new(),
             order: VecDeque::new(),
             max_snapshots: max_snapshots.max(1),
+            appshots: HashMap::new(),
         }
     }
 
@@ -56,14 +58,24 @@ impl SnapshotManager {
             None
         }
     }
+
+    pub fn store_appshot(&mut self, appshot: AppShotEnvelope) {
+        self.appshots.insert(appshot.appshot_id.clone(), appshot);
+    }
+
+    pub fn appshot(&self, appshot_id: &str) -> Option<&AppShotEnvelope> {
+        self.appshots.get(appshot_id)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
     use sky_cua_platform::model::{
-        AppStateSnapshot, CaptureBackendKind, EnvironmentInfo, InputBackendKind,
-        PortalCapabilities, SemanticBackendKind, SessionKind, ToolAvailability, ToolCapabilities,
+        AppShotActionSnapshot, AppShotCapture, AppShotConsistency, AppShotCoverage,
+        AppShotEnvelope, AppShotTrigger, AppStateSnapshot, CaptureBackendKind, ContentPersistence,
+        ContentRef, ContentSource, EnvironmentInfo, InputBackendKind, PortalCapabilities,
+        SemanticBackendKind, SessionKind, ToolAvailability, ToolCapabilities,
     };
 
     use super::SnapshotManager;
@@ -78,6 +90,72 @@ mod tests {
         assert_eq!(manager.latest_snapshot_id(), Some("two"));
         assert!(manager.is_latest("two"));
         assert!(!manager.is_latest("one"));
+    }
+
+    #[test]
+    fn registers_canonical_appshot_by_id_and_replaces_previous_capture() {
+        let mut manager = SnapshotManager::new(2);
+        manager.store_appshot(appshot("shot-1", "window-a", "snapshot-a"));
+        manager.store_appshot(appshot("shot-1", "window-b", "snapshot-b"));
+
+        let stored = manager
+            .appshot("shot-1")
+            .expect("appshot should be registered");
+        let AppShotCapture::Desktop { window_id, .. } = &stored.capture else {
+            panic!("expected desktop appshot");
+        };
+        assert_eq!(window_id, "window-b");
+        assert_eq!(stored.action_snapshot.snapshot_id, "snapshot-b");
+    }
+
+    fn appshot(id: &str, window_id: &str, snapshot_id: &str) -> AppShotEnvelope {
+        let content = ContentRef {
+            content_id: format!("content-{id}"),
+            device_id: None,
+            link_epoch: None,
+            mime_type: "image/webp".to_string(),
+            filename: None,
+            size_bytes: 1,
+            sha256: "00".repeat(32),
+            source: ContentSource::Screenshot,
+            expires_at_ms: None,
+            persistence: ContentPersistence::Temporary,
+        };
+        AppShotEnvelope {
+            appshot_id: id.to_string(),
+            trigger: AppShotTrigger::Observe,
+            captured_at: Utc::now(),
+            consistency: AppShotConsistency::Stable,
+            capture: AppShotCapture::Desktop {
+                app_id: "app.test".to_string(),
+                window_id: window_id.to_string(),
+                title: Some("Test".to_string()),
+                bounds: sky_cua_platform::model::RectF {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 10.0,
+                    space: sky_cua_platform::model::CoordinateSpace::DesktopLogical,
+                },
+                semantic_projection: serde_json::json!({}),
+            },
+            image: content,
+            action_snapshot: AppShotActionSnapshot {
+                snapshot_id: snapshot_id.to_string(),
+                session_id: Some("session-1".to_string()),
+                subject_generation: None,
+            },
+            coverage: AppShotCoverage {
+                pixels_complete: true,
+                semantics_complete: true,
+                secure_regions_redacted: false,
+                projection_truncated: false,
+                total_semantic_nodes: Some(0),
+                projected_semantic_nodes: Some(0),
+            },
+            capability_profile_id: "desktop:test".to_string(),
+            diagnostics: Vec::new(),
+        }
     }
 
     fn snapshot(id: &str) -> AppStateSnapshot {

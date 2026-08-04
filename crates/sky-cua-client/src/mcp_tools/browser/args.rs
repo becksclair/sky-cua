@@ -104,6 +104,10 @@ pub(crate) fn parse_browser_tab_id(arguments: &Value) -> Result<String> {
     optional_non_empty_string(raw_tab_id).ok_or_else(|| anyhow!("browser tab_id is required"))
 }
 
+pub(crate) fn parse_required_appshot_id(arguments: &Value, tool_name: &str) -> Result<String> {
+    parse_required_string(arguments, "appshot_id", &format!("{tool_name} appshot_id"))
+}
+
 pub(crate) fn parse_browser_point(arguments: &Value, label: &str) -> Result<(f64, f64)> {
     let x = parse_non_negative_finite_number(arguments, "x", label)?;
     let y = parse_non_negative_finite_number(arguments, "y", label)?;

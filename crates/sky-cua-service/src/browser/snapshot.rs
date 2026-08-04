@@ -102,6 +102,13 @@ pub(super) const BROWSER_SNAPSHOT_EXPRESSION_TEMPLATE: &str = r#"
   return {
     title: document.title || '',
     url: location.href,
+    // Navigation identity is stable across reads of one document, including
+    // same-document DOM churn, and changes when the browser creates a new
+    // document/navigation entry.
+    documentGeneration: (() => {
+      const nav = performance.getEntriesByType('navigation')[0];
+      return `${performance.timeOrigin}:${nav?.startTime || 0}:${location.href}`;
+    })(),
     viewport: { width: innerWidth, height: innerHeight, devicePixelRatio: devicePixelRatio || 1 },
     text,
     textCharCount,

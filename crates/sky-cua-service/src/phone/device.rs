@@ -424,6 +424,7 @@ pub(super) async fn detect_profile_with_path(
         device_owner: privileged.device_owner,
         available_actions: Vec::new(),
         unavailable_actions: Vec::new(),
+        routes: Vec::new(),
     }
 }
 

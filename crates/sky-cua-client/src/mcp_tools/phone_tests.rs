@@ -11,11 +11,12 @@ use sky_cua_platform::model::{
     CoordinateSpace, DiagnosticEntry, PhoneActionResponse, PhoneAppInfo, PhoneAppInstallMode,
     PhoneAppResponse, PhoneAppResponseKind, PhoneBackendCapabilities, PhoneBackendKind,
     PhoneCallerProvenance, PhoneCapabilityProfile, PhoneCapabilityRefreshState,
-    PhoneCompanionCapabilities, PhoneConnectionKind, PhoneCoordinateMapping, PhoneImage,
-    PhoneListDevicesResponse, PhoneMcpClientInfo, PhoneNotificationsResponse, PhoneObserveResponse,
-    PhonePairWirelessRequest, PhoneRequest, PhoneRequestContext, PhoneResponse,
-    PhoneScrcpyCapabilities, PhoneScreenshotResponse, PhoneSession, PhoneStatusReport,
-    PhoneTargetDeviceKind, PixelSize, RectF, ServiceRequest, ServiceResponse,
+    PhoneCompanionCapabilities, PhoneConnectionIdentity, PhoneConnectionKind,
+    PhoneCoordinateMapping, PhoneImage, PhoneListDevicesResponse, PhoneMcpClientInfo,
+    PhoneNotificationsResponse, PhoneObserveResponse, PhonePairWirelessRequest, PhoneRequest,
+    PhoneRequestContext, PhoneResponse, PhoneScrcpyCapabilities, PhoneScreenshotResponse,
+    PhoneSession, PhoneStatusReport, PhoneTargetDeviceKind, PixelSize, RectF, ServiceRequest,
+    ServiceResponse,
 };
 
 use crate::heuristics::HeuristicsRegistry;
@@ -218,7 +219,10 @@ fn phone_action_schemas_pin_required_fields() {
     };
 
     let pointer = find_tool(&definitions, "phone_pointer");
-    assert_eq!(pointer["inputSchema"]["required"], json!(["operation"]));
+    assert_eq!(
+        pointer["inputSchema"]["required"],
+        json!(["operation", "appshot_id"])
+    );
     assert!(
         pointer["inputSchema"]["properties"]
             .get("phone_snapshot_id")
@@ -226,10 +230,14 @@ fn phone_action_schemas_pin_required_fields() {
     );
 
     let tap_branch = operation_branch(&pointer["inputSchema"], "tap");
-    assert_eq!(
-        tap_branch["required"],
-        json!(["operation", "session_id", "x", "y"])
-    );
+    assert!(tap_branch["required"].is_null());
+    assert!(tap_branch["oneOf"].as_array().is_some_and(|selectors| {
+        selectors.iter().any(|branch| {
+            branch["required"] == json!(["session_id", "operation", "appshot_id", "x", "y"])
+        }) && selectors.iter().any(|branch| {
+            branch["required"] == json!(["device_id", "operation", "appshot_id", "x", "y"])
+        })
+    }));
     assert_eq!(tap_branch["additionalProperties"], json!(false));
     assert!(
         tap_branch["anyOf"].as_array().is_some_and(|any_of| {
@@ -245,11 +253,21 @@ fn phone_action_schemas_pin_required_fields() {
     );
 
     let keyboard = find_tool(&definitions, "phone_keyboard");
-    assert_eq!(keyboard["inputSchema"]["required"], json!(["operation"]));
-    let type_text_branch = operation_branch(&keyboard["inputSchema"], "type_text");
     assert_eq!(
-        type_text_branch["required"],
-        json!(["operation", "session_id", "text"])
+        keyboard["inputSchema"]["required"],
+        json!(["operation", "appshot_id"])
+    );
+    let type_text_branch = operation_branch(&keyboard["inputSchema"], "type_text");
+    assert!(
+        type_text_branch["oneOf"]
+            .as_array()
+            .is_some_and(|selectors| {
+                selectors.iter().any(|branch| {
+                    branch["required"] == json!(["session_id", "operation", "appshot_id", "text"])
+                }) && selectors.iter().any(|branch| {
+                    branch["required"] == json!(["device_id", "operation", "appshot_id", "text"])
+                })
+            })
     );
     assert_eq!(type_text_branch["additionalProperties"], json!(false));
 
@@ -267,9 +285,18 @@ fn phone_action_schemas_pin_required_fields() {
     );
 
     let install = find_tool(&definitions, "phone_app_install");
-    assert_eq!(
-        install["inputSchema"]["required"],
-        json!(["session_id", "apk_paths"])
+    assert!(
+        install["inputSchema"]["allOf"]
+            .as_array()
+            .and_then(|all_of| all_of.first())
+            .and_then(|branch| branch["oneOf"].as_array())
+            .is_some_and(|selectors| {
+                selectors.iter().any(|branch| {
+                    branch["required"] == json!(["session_id", "appshot_id", "apk_paths"])
+                }) && selectors.iter().any(|branch| {
+                    branch["required"] == json!(["device_id", "appshot_id", "apk_paths"])
+                })
+            })
     );
     assert!(
         install["inputSchema"]["properties"]
@@ -286,6 +313,82 @@ fn phone_action_schemas_pin_required_fields() {
 
     let setup = find_tool(&definitions, "phone_setup");
     assert_eq!(setup["inputSchema"]["required"], json!(["operation"]));
+}
+
+#[test]
+fn grouped_phone_feature_schemas_require_appshots_only_for_mutations() {
+    fn mutation_conditional(schema: &serde_json::Value) -> Option<&serde_json::Value> {
+        if schema
+            .pointer("/if/properties/operation/not/enum")
+            .is_some()
+        {
+            return Some(schema);
+        }
+        schema
+            .get("allOf")?
+            .as_array()?
+            .iter()
+            .find_map(mutation_conditional)
+    }
+
+    let definitions = validation_tool_definitions(false, false);
+    for (name, reads) in [
+        ("phone_content", vec!["describe"]),
+        ("phone_clipboard", vec!["get", "changes"]),
+        ("phone_editor", vec!["context"]),
+        (
+            "phone_camera",
+            vec!["enumerate", "capabilities", "preview_frame"],
+        ),
+        (
+            "phone_storage",
+            vec![
+                "roots",
+                "list",
+                "stat",
+                "read",
+                "hash",
+                "search",
+                "thumbnail",
+                "metadata",
+                "list_saf_roots",
+            ],
+        ),
+    ] {
+        let schema = &find_tool(&definitions, name)["inputSchema"];
+        let conditional =
+            mutation_conditional(schema).unwrap_or_else(|| panic!("{name} mutation conditional"));
+        assert_eq!(
+            conditional["if"]["properties"]["operation"]["not"]["enum"],
+            json!(reads)
+        );
+        assert_eq!(conditional["then"]["required"], json!(["appshot_id"]));
+    }
+}
+
+#[test]
+fn grouped_phone_mutation_without_appshot_fails_before_service_dispatch() {
+    let service = FakeService::default();
+    let result = handle_tool_call(
+        &service,
+        &heuristics(),
+        &image_model(),
+        "phone_clipboard",
+        json!({
+            "session_id": "sess-1",
+            "operation": "set",
+            "payload": {"items": [{"text": "hello"}], "sensitive": false}
+        }),
+    )
+    .expect("invalid request is returned as a structured MCP result");
+    assert_eq!(result["isError"], true);
+    assert_eq!(result["structuredContent"]["code"], "InvalidRequest");
+    assert!(
+        result["structuredContent"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("appshot_id is required"))
+    );
+    assert!(service.take_requests().is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -939,6 +1042,7 @@ fn app_response(kind: PhoneAppResponseKind) -> PhoneAppResponse {
         kind,
         backend: PhoneBackendKind::None,
         success: false,
+        destination_appshot: None,
         current_app: Some(PhoneAppInfo {
             package_name: "com.android.settings".to_string(),
             label: None,
@@ -996,6 +1100,10 @@ fn phone_session() -> PhoneSession {
     PhoneSession {
         session_id: "sess-1".to_string(),
         serial: "ABC".to_string(),
+        connection: Some(PhoneConnectionIdentity::Adb {
+            serial: "ABC".to_string(),
+            name: None,
+        }),
         connection_kind: PhoneConnectionKind::Usb,
         backend: PhoneBackendKind::Adb,
         capabilities: PhoneBackendCapabilities {
@@ -1040,6 +1148,7 @@ fn phone_session() -> PhoneSession {
             device_owner: false,
             available_actions: Vec::new(),
             unavailable_actions: Vec::new(),
+            routes: Vec::new(),
         },
         companion: None,
         managed_process: false,
@@ -1057,6 +1166,7 @@ fn observe_response(
 ) -> PhoneObserveResponse {
     PhoneObserveResponse {
         session: phone_session(),
+        appshot: None,
         phone_snapshot_id: Some("snap-1".to_string()),
         screenshot_path: None,
         inline_image: None,

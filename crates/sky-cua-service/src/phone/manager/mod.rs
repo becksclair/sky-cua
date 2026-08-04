@@ -22,8 +22,10 @@
 //!   and settings.
 
 mod apps;
+mod appshot;
 mod capture;
 mod companion_lane;
+mod features;
 mod routing;
 mod scrcpy_lane;
 mod signals;
@@ -38,10 +40,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sky_cua_platform::config::{ResolvedPhoneSelection, resolved_phone_selection};
 use sky_cua_platform::model::{
     DiagnosticEntry, PhoneBackendCapabilities, PhoneBackendKind, PhoneCapabilityProfile,
-    PhoneCapabilityRefreshState, PhoneConnectRequest, PhoneConnectionKind, PhoneDisconnectRequest,
-    PhoneDisconnectResponse, PhoneListDevicesResponse, PhonePairWirelessRequest,
-    PhonePairWirelessResponse, PhoneRequest, PhoneResponse, PhoneSession, PhoneSessionSelector,
-    PhoneStatusReport, PixelSize,
+    PhoneCapabilityRefreshState, PhoneCompanionCapabilities, PhoneConnectRequest,
+    PhoneConnectionIdentity, PhoneConnectionKind, PhoneDeviceState, PhoneDisconnectRequest,
+    PhoneDisconnectResponse, PhoneListDevicesResponse, PhoneObserveRequest,
+    PhonePairWirelessRequest, PhonePairWirelessResponse, PhoneRequest, PhoneResponse,
+    PhoneScrcpyCapabilities, PhoneSession, PhoneSessionSelector, PhoneStatusReport,
+    PhoneTargetDeviceKind, PixelSize,
 };
 
 use super::adb;
@@ -51,6 +55,8 @@ use super::companion::client::CompanionClient;
 use super::companion::identity::CompanionBootstrapOptions;
 use super::cursor::PhoneCursorTracker;
 use super::device;
+use super::direct::DirectRuntimeHandle;
+use super::direct::provider::CompanionDirectProvider;
 use super::scrcpy;
 use super::snapshot::{DEFAULT_SNAPSHOT_CAPACITY, PhoneSnapshotRegistry};
 
@@ -159,6 +165,11 @@ pub(crate) struct PhoneManager {
     /// this candidate; the connect path consumes it for the matching serial.
     /// `None` means no adoptable window was found, so connect launches fresh.
     scrcpy_adoption_candidate: Option<ScrcpyAdoptionCandidate>,
+    /// Optional ADB-independent CompanionDirect seam. It is kept separate
+    /// from serial-keyed sessions until the public projection is promoted.
+    direct_provider: Option<CompanionDirectProvider>,
+    direct_events: Option<tokio::sync::broadcast::Receiver<super::direct::DirectDeviceEvent>>,
+    appshots: HashMap<String, sky_cua_platform::model::AppShotEnvelope>,
 }
 
 /// A pre-existing scrcpy desktop window the daemon discovered for a serial, primed
@@ -198,6 +209,123 @@ impl PhoneManager {
             sessions: HashMap::new(),
             scrcpy_host_size_default: None,
             scrcpy_adoption_candidate: None,
+            direct_provider: None,
+            direct_events: None,
+            appshots: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn set_direct_runtime(&mut self, runtime: Option<DirectRuntimeHandle>) {
+        self.direct_provider = runtime.map(CompanionDirectProvider::new);
+        self.direct_events = self
+            .direct_provider
+            .as_ref()
+            .map(CompanionDirectProvider::subscribe);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn direct_provider(&self) -> Option<CompanionDirectProvider> {
+        self.direct_provider.clone()
+    }
+
+    fn drain_direct_events(&mut self) {
+        let Some(events) = &mut self.direct_events else {
+            return;
+        };
+        let mut changed = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if event.event == "capability_changed" {
+                changed.push((event.device_id, event.link_epoch));
+            }
+        }
+        for (device_id, epoch) in changed {
+            let sessions: Vec<String> = self.sessions.iter().filter_map(|(session_id, entry)| {
+                matches!(entry.session.connection, Some(PhoneConnectionIdentity::CompanionDirect { device_id: ref id, link_epoch, .. }) if id == &device_id && link_epoch == epoch)
+                    .then_some(session_id.clone())
+            }).collect();
+            for session_id in sessions {
+                if let Some(cached) = self.profiles.get_mut(&session_id) {
+                    cached.profile.stale = true;
+                    cached.profile.refresh_state = PhoneCapabilityRefreshState::Stale;
+                }
+                if let Some(entry) = self.sessions.get_mut(&session_id) {
+                    entry.session.capability_profile.stale = true;
+                    entry.session.capability_profile.refresh_state =
+                        PhoneCapabilityRefreshState::Stale;
+                }
+            }
+        }
+    }
+
+    fn appshot_rejection_reason(
+        &self,
+        selector: &PhoneSessionSelector,
+        session_id: &str,
+    ) -> Option<sky_cua_platform::model::AppShotRejectionReason> {
+        use sky_cua_platform::model::{AppShotCapture, AppShotRejectionReason};
+
+        let Some(id) = selector.appshot_id.as_deref() else {
+            return Some(AppShotRejectionReason::Missing);
+        };
+        let Some(shot) = self.appshots.get(id) else {
+            return Some(AppShotRejectionReason::Stale);
+        };
+        let Some((device_id, epoch)) = self.direct_identity(session_id) else {
+            return Some(AppShotRejectionReason::WrongSession);
+        };
+        if selector
+            .device_id
+            .as_deref()
+            .is_some_and(|value| value != device_id)
+        {
+            return Some(AppShotRejectionReason::WrongTarget);
+        }
+        if selector
+            .serial
+            .as_deref()
+            .is_some_and(|value| value != self.serial_of(session_id))
+        {
+            return Some(AppShotRejectionReason::WrongTarget);
+        }
+        match &shot.capture {
+            AppShotCapture::Phone {
+                device_id: shot_device,
+                ..
+            } if shot_device != &device_id => Some(AppShotRejectionReason::WrongTarget),
+            AppShotCapture::Phone { link_epoch, .. } if *link_epoch != epoch => {
+                Some(AppShotRejectionReason::WrongEpoch)
+            }
+            AppShotCapture::Phone { .. }
+                if shot.action_snapshot.session_id.as_deref() != Some(session_id) =>
+            {
+                Some(AppShotRejectionReason::WrongSession)
+            }
+            AppShotCapture::Phone { .. } => None,
+            _ => Some(AppShotRejectionReason::WrongSurface),
+        }
+    }
+
+    #[cfg_attr(not(test), expect(dead_code))]
+    fn appshot_matches(&self, selector: &PhoneSessionSelector, session_id: &str) -> bool {
+        self.appshot_rejection_reason(selector, session_id)
+            .is_none()
+    }
+
+    async fn attach_destination_appshot(
+        &mut self,
+        selector: &PhoneSessionSelector,
+        response: &mut sky_cua_platform::model::PhoneAppResponse,
+    ) {
+        if !response.success {
+            return;
+        }
+        if let Some(session_id) = self.resolve_session_id(selector)
+            && self.direct_identity(&session_id).is_some()
+            && let Ok(appshot) = self.direct_appshot(&session_id).await
+        {
+            self.appshots
+                .insert(appshot.appshot_id.clone(), appshot.clone());
+            response.destination_appshot = Some(Box::new(appshot));
         }
     }
 
@@ -295,6 +423,38 @@ impl PhoneManager {
     /// with [`PhoneRequest`]; every arm returns the contractually-correct
     /// [`PhoneResponse`] variant.
     pub(crate) async fn handle(&mut self, request: PhoneRequest) -> PhoneResponse {
+        self.drain_direct_events();
+        self.reconcile_direct_sessions();
+        if let Some(selector) = mutation_selector(&request)
+            && let Some(session_id) = self.resolve_session_id(selector)
+            && self.direct_identity(&session_id).is_some()
+            && let Some(reason) = self.appshot_rejection_reason(selector, &session_id)
+        {
+            let fresh = self
+                .observe(PhoneObserveRequest {
+                    session: selector.clone(),
+                    ..PhoneObserveRequest::default()
+                })
+                .await;
+            if let Some(appshot) = fresh.appshot.clone() {
+                self.appshots
+                    .insert(appshot.appshot_id.clone(), (*appshot.clone()).clone());
+                return PhoneResponse::AppShotRequired(Box::new(
+                    sky_cua_platform::model::AppShotRequired {
+                        code: "AppShotRequired".into(),
+                        reason,
+                        message: "capture a fresh phone AppShot and retry; no device mutation was performed".into(),
+                        fresh_appshot: appshot,
+                    },
+                ));
+            }
+            return PhoneResponse::FeatureError(sky_cua_platform::model::PhoneFeatureError {
+                code: "AppShotCaptureFailed".into(),
+                message:
+                    "a fresh phone AppShot could not be captured; no device mutation was performed"
+                        .into(),
+            });
+        }
         if let Some(selector) = phone_request_activity_selector(&request) {
             self.touch_companion_overlay_activity(selector, now_ms())
                 .await;
@@ -353,9 +513,19 @@ impl PhoneManager {
                 PhoneResponse::App(self.app_current(&request.session).await)
             }
             PhoneRequest::AppList(request) => PhoneResponse::App(self.app_list(request).await),
-            PhoneRequest::AppLaunch(request) => PhoneResponse::App(self.app_launch(request).await),
+            PhoneRequest::AppLaunch(request) => {
+                let selector = request.session.clone();
+                let mut response = self.app_launch(request).await;
+                self.attach_destination_appshot(&selector, &mut response)
+                    .await;
+                PhoneResponse::App(response)
+            }
             PhoneRequest::AppOpenIntent(request) => {
-                PhoneResponse::App(self.app_open_intent(request).await)
+                let selector = request.session.clone();
+                let mut response = self.app_open_intent(request).await;
+                self.attach_destination_appshot(&selector, &mut response)
+                    .await;
+                PhoneResponse::App(response)
             }
             PhoneRequest::AppForceStop(request) => {
                 PhoneResponse::App(self.app_force_stop(request).await)
@@ -364,8 +534,66 @@ impl PhoneManager {
                 PhoneResponse::App(self.app_install(request).await)
             }
             PhoneRequest::OpenSettings(request) => {
-                PhoneResponse::App(self.open_settings(request).await)
+                let selector = request.session.clone();
+                let mut response = self.open_settings(request).await;
+                self.attach_destination_appshot(&selector, &mut response)
+                    .await;
+                PhoneResponse::App(response)
             }
+            PhoneRequest::Content(call) => self
+                .phone_content(call)
+                .await
+                .map(PhoneResponse::Content)
+                .unwrap_or_else(PhoneResponse::FeatureError),
+            PhoneRequest::Clipboard(call) => self
+                .phone_clipboard(call)
+                .await
+                .map(PhoneResponse::Clipboard)
+                .unwrap_or_else(PhoneResponse::FeatureError),
+            PhoneRequest::Editor(call) => self
+                .phone_editor(call)
+                .await
+                .map(PhoneResponse::Editor)
+                .unwrap_or_else(PhoneResponse::FeatureError),
+            PhoneRequest::Camera(call) => self
+                .phone_camera(call)
+                .await
+                .map(PhoneResponse::Camera)
+                .unwrap_or_else(PhoneResponse::FeatureError),
+            PhoneRequest::Storage(call) => self
+                .phone_storage(call)
+                .await
+                .map(PhoneResponse::Storage)
+                .unwrap_or_else(PhoneResponse::FeatureError),
+        }
+    }
+
+    fn reconcile_direct_sessions(&mut self) {
+        let Some(provider) = &self.direct_provider else {
+            return;
+        };
+        let stale: Vec<String> = self
+            .sessions
+            .iter()
+            .filter_map(|(id, entry)| {
+                let PhoneConnectionIdentity::CompanionDirect {
+                    device_id,
+                    link_epoch,
+                    ..
+                } = entry.session.connection.as_ref()?
+                else {
+                    return None;
+                };
+                let current = provider.device(device_id);
+                (current.is_none_or(|snapshot| snapshot.link_epoch != *link_epoch))
+                    .then_some(id.clone())
+            })
+            .collect();
+        for id in &stale {
+            self.appshots
+                .retain(|_, shot| shot.action_snapshot.session_id.as_deref() != Some(id));
+            self.sessions.remove(id);
+            self.profiles.remove(id);
         }
     }
 
@@ -440,6 +668,28 @@ impl PhoneManager {
             include_mdns,
         )
         .await;
+        if let Some(provider) = &self.direct_provider {
+            for direct in provider.list_devices() {
+                response.devices.push(sky_cua_platform::model::PhoneDevice {
+                    serial: String::new(),
+                    device_id: Some(direct.device_id.clone()),
+                    link_epoch: Some(direct.link_epoch),
+                    connection: Some(PhoneConnectionIdentity::CompanionDirect {
+                        device_id: direct.device_id,
+                        link_epoch: direct.link_epoch,
+                        name: None,
+                        endpoint: None,
+                    }),
+                    state: PhoneDeviceState::Device,
+                    connection_kind: PhoneConnectionKind::CompanionDirect,
+                    model: None,
+                    product: None,
+                    device: None,
+                    transport_id: None,
+                    primary: false,
+                });
+            }
+        }
         self.mark_primary_targets(&mut response.devices);
         response
     }
@@ -517,6 +767,36 @@ impl PhoneManager {
     /// list, and registers the session. On a fatal resolution failure the honest
     /// host-status view is returned rather than a fabricated session.
     async fn connect(&mut self, request: PhoneConnectRequest) -> PhoneResponse {
+        if request.serial.is_some() && request.device_id.is_some() {
+            return PhoneResponse::Status(PhoneStatusReport {
+                enabled: true,
+                adb_available: false,
+                adb_path: None,
+                adb_version: None,
+                adb_server_running: None,
+                scrcpy_available: false,
+                scrcpy_path: None,
+                scrcpy_version: None,
+                companion_enabled: self.selection.companion_enabled,
+                mdns_available: false,
+                default_serial: None,
+                default_backend: PhoneBackendKind::None,
+                sessions: self
+                    .sessions
+                    .values()
+                    .map(|entry| entry.session.clone())
+                    .collect(),
+                devices: Vec::new(),
+                diagnostics: vec![DiagnosticEntry {
+                    code: "PhoneActionRejected".into(),
+                    message: "phone_connect serial and device_id are mutually exclusive".into(),
+                    details: None,
+                }],
+            });
+        }
+        if let Some(device_id) = request.device_id.as_deref() {
+            return self.connect_direct(device_id).await;
+        }
         // Wireless auto-connect: when enabled, `adb connect` the configured
         // wireless `default_serial` (a `host:port` form) before resolution, so a
         // wireless link the operator pre-configured is brought up and the device
@@ -687,6 +967,10 @@ impl PhoneManager {
         let session = PhoneSession {
             session_id: session_id.clone(),
             serial: serial.clone(),
+            connection: Some(PhoneConnectionIdentity::Adb {
+                serial: serial.clone(),
+                name: profile.model.clone(),
+            }),
             connection_kind,
             backend: session_backend,
             capabilities,
@@ -729,6 +1013,131 @@ impl PhoneManager {
             self.set_companion_overlay_active(&session_id, true).await;
         }
 
+        PhoneResponse::Connected(session)
+    }
+
+    async fn connect_direct(&mut self, device_id: &str) -> PhoneResponse {
+        let Some(provider) = &self.direct_provider else {
+            return PhoneResponse::Status(self.status(false).await);
+        };
+        let Some(snapshot) = provider.device(device_id) else {
+            return PhoneResponse::Status(self.status(false).await);
+        };
+        if let Some(existing) = self.sessions.values().find(|entry| {
+            matches!(entry.session.connection, Some(PhoneConnectionIdentity::CompanionDirect { device_id: ref id, link_epoch, .. }) if id == device_id && link_epoch == snapshot.link_epoch)
+        }) {
+            return PhoneResponse::Connected(existing.session.clone());
+        }
+        // A newly authenticated epoch supersedes the old direct session. Drop
+        // its cached profile/snapshot state so selectors cannot route work to a
+        // fenced link after the device reconnects.
+        let superseded: Vec<String> = self
+            .sessions
+            .iter()
+            .filter_map(|(id, entry)| {
+                matches!(
+                    entry.session.connection,
+                    Some(PhoneConnectionIdentity::CompanionDirect {
+                        device_id: ref id0,
+                        ..
+                    }) if id0 == device_id
+                )
+                .then_some(id.clone())
+            })
+            .collect();
+        for id in superseded {
+            self.sessions.remove(&id);
+            self.profiles.remove(&id);
+        }
+        let now = now_ms();
+        let health = provider
+            .dispatch(
+                device_id,
+                snapshot.link_epoch,
+                "companion.status",
+                serde_json::json!({}),
+                true,
+                std::time::Duration::from_secs(5),
+            )
+            .await
+            .ok();
+        let companion = companion_from_direct_health(health.as_ref());
+        let session_id = format!("direct-{device_id}-{}", snapshot.link_epoch);
+        let mut profile = PhoneCapabilityProfile {
+            profile_id: format!("{session_id}-profile"),
+            session_id: session_id.clone(),
+            serial: String::new(),
+            detected_at_ms: now,
+            stale: false,
+            refresh_state: PhoneCapabilityRefreshState::Detected,
+            manufacturer: None,
+            brand: None,
+            model: None,
+            device: None,
+            target_device_kind: PhoneTargetDeviceKind::UnknownAndroid,
+            hyperos_version: None,
+            android_sdk: None,
+            android_release: None,
+            display_size: None,
+            density_dpi: None,
+            orientation: None,
+            display_rotation_degrees: None,
+            connection_kind: PhoneConnectionKind::CompanionDirect,
+            companion,
+            scrcpy: PhoneScrcpyCapabilities::absent(),
+            root_available: false,
+            shizuku_available: false,
+            device_owner: false,
+            available_actions: Vec::new(),
+            unavailable_actions: Vec::new(),
+            routes: Vec::new(),
+        };
+        let capabilities = self.backend_capabilities(&profile);
+        routing::populate_actions(&mut profile, &capabilities);
+        for route in &mut profile.routes {
+            route.link_epoch = Some(snapshot.link_epoch);
+        }
+        let session = PhoneSession {
+            session_id: session_id.clone(),
+            serial: String::new(),
+            connection: Some(PhoneConnectionIdentity::CompanionDirect {
+                device_id: device_id.to_owned(),
+                link_epoch: snapshot.link_epoch,
+                name: None,
+                endpoint: None,
+            }),
+            connection_kind: PhoneConnectionKind::CompanionDirect,
+            backend: PhoneBackendKind::Companion,
+            capabilities,
+            capability_profile: profile.clone(),
+            companion: Some(profile.companion.clone()),
+            managed_process: false,
+            window_title: None,
+            created_at_ms: now,
+        };
+        self.profiles.insert(
+            session_id.clone(),
+            CachedProfile {
+                profile,
+                detected_at_ms: now,
+            },
+        );
+        self.sessions.insert(
+            session_id.clone(),
+            SessionEntry {
+                session: session.clone(),
+                snapshots: PhoneSnapshotRegistry::new(
+                    DEFAULT_SNAPSHOT_CAPACITY,
+                    self.selection.capability_cache_ttl_ms,
+                ),
+                cursor: PhoneCursorTracker::new(&session_id, ""),
+                companion: None,
+                companion_diagnostics: Vec::new(),
+                last_overlay_activity_ms: now,
+                overlay_active: false,
+                scrcpy: None,
+            },
+        );
         PhoneResponse::Connected(session)
     }
 
@@ -797,6 +1206,52 @@ impl PhoneManager {
         let Some(session_id) = self.resolve_session_id(selector) else {
             return PhoneResponse::Status(self.status(false).await);
         };
+        if let Some((device_id, epoch)) = self.direct_identity(&session_id) {
+            let health = match &self.direct_provider {
+                Some(provider) => provider
+                    .dispatch(
+                        &device_id,
+                        epoch,
+                        "companion.status",
+                        serde_json::json!({}),
+                        true,
+                        std::time::Duration::from_secs(5),
+                    )
+                    .await
+                    .ok(),
+                None => None,
+            };
+            let Some(mut profile) = self
+                .profiles
+                .get(&session_id)
+                .map(|cached| cached.profile.clone())
+            else {
+                return PhoneResponse::Status(self.status(false).await);
+            };
+            let now = now_ms();
+            profile.detected_at_ms = now;
+            profile.stale = false;
+            profile.refresh_state = PhoneCapabilityRefreshState::Refreshed;
+            profile.companion = companion_from_direct_health(health.as_ref());
+            let capabilities = self.backend_capabilities(&profile);
+            routing::populate_actions(&mut profile, &capabilities);
+            for route in &mut profile.routes {
+                route.link_epoch = Some(epoch);
+            }
+            self.profiles.insert(
+                session_id.clone(),
+                CachedProfile {
+                    profile: profile.clone(),
+                    detected_at_ms: now,
+                },
+            );
+            if let Some(entry) = self.sessions.get_mut(&session_id) {
+                entry.session.capabilities = capabilities;
+                entry.session.capability_profile = profile.clone();
+                entry.session.companion = Some(profile.companion.clone());
+            }
+            return PhoneResponse::Capabilities(profile);
+        }
         // `phone_refresh_capabilities` is a silent re-probe, so its install
         // convenience is gated by operator mode (no explicit install request here).
         let allow_install = self.operator_auto_install();
@@ -1070,7 +1525,18 @@ impl PhoneManager {
         {
             return Some(session_id);
         }
-        if selector.session_id.is_none() && selector.serial.is_none() && self.sessions.len() == 1 {
+        if let Some(device_id) = selector.device_id.as_deref()
+            && let Some((session_id, _)) = self.sessions.iter().find(|(_, entry)| {
+                matches!(entry.session.connection, Some(PhoneConnectionIdentity::CompanionDirect { device_id: ref id, .. }) if id == device_id)
+            })
+        {
+            return Some(session_id.clone());
+        }
+        if selector.session_id.is_none()
+            && selector.serial.is_none()
+            && selector.device_id.is_none()
+            && self.sessions.len() == 1
+        {
             return self.sessions.keys().next().cloned();
         }
         None
@@ -1093,6 +1559,18 @@ impl PhoneManager {
             .get(session_id)
             .map(|entry| entry.session.serial.clone())
             .unwrap_or_default()
+    }
+
+    pub(super) fn direct_identity(&self, session_id: &str) -> Option<(String, u64)> {
+        let entry = self.sessions.get(session_id)?;
+        match entry.session.connection.as_ref()? {
+            PhoneConnectionIdentity::CompanionDirect {
+                device_id,
+                link_epoch,
+                ..
+            } => Some((device_id.clone(), *link_epoch)),
+            _ => None,
+        }
     }
 
     /// Resolve a selector into an [`ActionContext`], pulling the cached profile and
@@ -1122,6 +1600,22 @@ impl PhoneManager {
         let serial = self.sessions.get(&session_id)?.session.serial.clone();
         let profile = self.cached_profile(&session_id, now_ms())?;
         if !profile.stale {
+            return Some(ActionContext {
+                session_id,
+                serial,
+                profile,
+            });
+        }
+
+        if profile.connection_kind == PhoneConnectionKind::CompanionDirect {
+            if !matches!(
+                self.refresh_capabilities(selector).await,
+                PhoneResponse::Capabilities(_)
+            ) {
+                return None;
+            }
+            let mut profile = self.profiles.get(&session_id)?.profile.clone();
+            profile.refresh_state = PhoneCapabilityRefreshState::Reused;
             return Some(ActionContext {
                 session_id,
                 serial,
@@ -1290,6 +1784,14 @@ impl PhoneManager {
     /// a dedicated change rather than bolted on as a fragile half-measure. The
     /// wireless-drop trigger below is implemented in full.
     async fn invalidate_on_observe_triggers(&mut self, session_id: &str, serial: &str) {
+        // Direct sessions are fenced by their authenticated link epoch and have
+        // no ADB serial. An empty serial is therefore not an ADB disconnect and
+        // must not force the direct profile through the ADB rebuild path.
+        if self.sessions.get(session_id).is_some_and(|entry| {
+            entry.session.connection_kind == PhoneConnectionKind::CompanionDirect
+        }) {
+            return;
+        }
         if !self.serial_is_authorized_device(serial).await
             && let Some(cached) = self.profiles.get_mut(session_id)
         {
@@ -1319,17 +1821,19 @@ impl PhoneManager {
         let companion_up = !profile.stale && companion.rpc_reachable;
         let companion_gestures = companion_up && companion.gesture_dispatch;
         let scrcpy_up = !profile.stale && profile.scrcpy.active;
+        let adb_up = profile.connection_kind != PhoneConnectionKind::CompanionDirect
+            && !profile.serial.is_empty();
         PhoneBackendCapabilities {
-            adb: true,
+            adb: adb_up,
             companion: companion_up,
             scrcpy: scrcpy_up,
-            screenshot: true,
+            screenshot: (adb_up || (companion_up && companion.screenshot)),
             gestures: companion_gestures,
-            text_input: true,
-            key_input: true,
+            text_input: adb_up || companion_up,
+            key_input: adb_up || companion_up,
             accessibility_tree: companion_up && companion.accessibility_tree,
             notifications: companion_up && companion.notifications,
-            app_management: true,
+            app_management: adb_up || companion_up,
             // Host-visible only when the companion overlay is reachable to draw
             // it AND a scrcpy mirror is mapped to display the device overlay on
             // the host; the host no longer draws the phone cursor itself. The
@@ -1388,7 +1892,11 @@ fn default_selection() -> ResolvedPhoneSelection {
 pub(super) fn selector_ids(selector: &PhoneSessionSelector) -> (String, String) {
     (
         selector.session_id.clone().unwrap_or_default(),
-        selector.serial.clone().unwrap_or_default(),
+        selector
+            .serial
+            .clone()
+            .or_else(|| selector.device_id.clone())
+            .unwrap_or_default(),
     )
 }
 
@@ -1423,6 +1931,36 @@ pub(super) fn no_companion_diagnostic() -> DiagnosticEntry {
     }
 }
 
+fn companion_from_direct_health(health: Option<&serde_json::Value>) -> PhoneCompanionCapabilities {
+    let string = |key| health?.get(key)?.as_str().map(str::to_owned);
+    let boolean = |key| {
+        health
+            .and_then(|value| value.get(key))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    };
+    let mut companion = PhoneCompanionCapabilities::absent(
+        string("package")
+            .as_deref()
+            .unwrap_or("com.skycua.phonecompanion"),
+    );
+    companion.installed = true;
+    companion.rpc_reachable = health.is_some();
+    companion.installed_version = string("version");
+    companion.accessibility_enabled = boolean("accessibility_enabled");
+    companion.can_perform_gestures = boolean("can_perform_gestures");
+    companion.can_retrieve_window_content = boolean("can_retrieve_window_content");
+    companion.can_take_screenshot = boolean("can_take_screenshot");
+    companion.notification_listener_enabled = boolean("notification_listener_enabled");
+    companion.native_overlay = boolean("native_overlay");
+    companion.native_overlay_pass_through = boolean("native_overlay_pass_through");
+    companion.gesture_dispatch = companion.can_perform_gestures;
+    companion.screenshot = companion.can_take_screenshot;
+    companion.accessibility_tree = companion.can_retrieve_window_content;
+    companion.notifications = companion.notification_listener_enabled;
+    companion
+}
+
 fn phone_request_activity_selector(request: &PhoneRequest) -> Option<&PhoneSessionSelector> {
     match request {
         PhoneRequest::Status(_)
@@ -1452,6 +1990,21 @@ fn phone_request_activity_selector(request: &PhoneRequest) -> Option<&PhoneSessi
         PhoneRequest::AppForceStop(request) => Some(&request.session),
         PhoneRequest::AppInstall(request) => Some(&request.session),
         PhoneRequest::OpenSettings(request) => Some(&request.session),
+        PhoneRequest::Content(call) => Some(&call.session),
+        PhoneRequest::Clipboard(call) => Some(&call.session),
+        PhoneRequest::Editor(call) => Some(&call.session),
+        PhoneRequest::Camera(call) => Some(&call.session),
+        PhoneRequest::Storage(call) => Some(&call.session),
+    }
+}
+
+fn mutation_selector(request: &PhoneRequest) -> Option<&PhoneSessionSelector> {
+    match request {
+        PhoneRequest::AppLaunch(_)
+        | PhoneRequest::AppOpenIntent(_)
+        | PhoneRequest::OpenSettings(_) => None,
+        _ if request.is_idempotent() => None,
+        _ => phone_request_activity_selector(request),
     }
 }
 

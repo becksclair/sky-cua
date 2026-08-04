@@ -140,6 +140,7 @@ pub(super) fn request_should_hold_presence(request: &ServiceRequest) -> bool {
         ServiceRequest::Health
         | ServiceRequest::Doctor
         | ServiceRequest::AgentCursorStatus
+        | ServiceRequest::PhoneDirectCreateEnrollment
         | ServiceRequest::SessionPresence { .. }
         | ServiceRequest::CancelTurn { .. } => false,
         ServiceRequest::Browser { request, .. } => !matches!(

@@ -11,18 +11,20 @@ use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
     ActionName, ActionOutcome, ActionRequest, AgentCursorPoint, AgentCursorState, AppInfo,
-    AppSelector, AppStateSnapshot, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
-    BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserCallerKind, BrowserCallerProvenance,
-    BrowserLogicalIdentity, BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequest,
-    BrowserRequestContext, BrowserResponse, BrowserTargetKind, CaptureBackendKind, CaptureInfo,
-    CaptureScope, CaptureScreenMode, CoordinateSpace, CuaActionRequest, CuaBackendResponse,
-    CuaCancellation, CuaRequestContext, DiagnosticEntry, DisplayTarget, ElementNode,
-    EnvironmentInfo, InputBackendKind, ModelImageFormat, PhoneAppListRequest, PhoneAppResponseKind,
-    PhoneCallerProvenance, PhoneConnectRequest, PhoneListDevicesRequest, PhoneMcpClientInfo,
-    PhoneRequest, PhoneRequestContext, PhoneResponse, PhoneStatusRequest, PhoneTapRequest,
-    PixelSize, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest, ServiceResponse,
-    SessionKind, SessionPresenceAction, SessionPresenceIntent, SessionPresenceStatus,
-    ToolAvailability, ToolCapabilities, WindowInfo, WindowTarget,
+    AppSelector, AppShotActionSnapshot, AppShotCapture, AppShotCaptureFlags, AppShotConsistency,
+    AppShotCoverage, AppShotEnvelope, AppShotTrigger, AppStateSnapshot,
+    BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT, BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserCallerKind,
+    BrowserCallerProvenance, BrowserLogicalIdentity, BrowserOperationIdentity,
+    BrowserProvenanceSource, BrowserRequest, BrowserRequestContext, BrowserResponse,
+    BrowserTargetKind, CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode,
+    ContentPersistence, ContentRef, ContentSource, CoordinateSpace, CuaActionRequest,
+    CuaBackendResponse, CuaCancellation, CuaRequestContext, DiagnosticEntry, DisplayTarget,
+    ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat, PhoneAppListRequest,
+    PhoneAppResponseKind, PhoneCallerProvenance, PhoneConnectRequest, PhoneListDevicesRequest,
+    PhoneMcpClientInfo, PhoneRequest, PhoneRequestContext, PhoneResponse, PhoneStatusRequest,
+    PhoneTapRequest, PixelSize, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest,
+    ServiceResponse, SessionKind, SessionPresenceAction, SessionPresenceIntent,
+    SessionPresenceStatus, ToolAvailability, ToolCapabilities, WindowInfo, WindowTarget,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -85,10 +87,45 @@ impl DesktopBackend for FakeBackend {
         Ok(Vec::new())
     }
 
+    async fn list_windows(&self) -> Result<Vec<WindowInfo>, BackendError> {
+        Ok(vec![fake_window()])
+    }
+
+    async fn resolve_window_target(
+        &self,
+        target: &WindowTarget,
+    ) -> Result<WindowInfo, BackendError> {
+        let window = fake_window();
+        if target.window_id.as_deref() == Some(window.window_id.as_str()) {
+            Ok(window)
+        } else {
+            Err(BackendError::new(
+                BackendErrorCode::InvalidRequest,
+                "unknown fake window",
+            ))
+        }
+    }
+
     async fn get_app_state(
         &self,
         _selector: Option<AppSelector>,
         _capture_screen: CaptureScreenMode,
+    ) -> Result<AppStateSnapshot, BackendError> {
+        Ok(self.snapshot.clone())
+    }
+
+    async fn get_app_state_for_window(
+        &self,
+        _window: &WindowInfo,
+        _capture_screen: CaptureScreenMode,
+    ) -> Result<AppStateSnapshot, BackendError> {
+        Ok(self.snapshot.clone())
+    }
+
+    async fn screenshot(
+        &self,
+        _target: Option<WindowTarget>,
+        _display_target: Option<DisplayTarget>,
     ) -> Result<AppStateSnapshot, BackendError> {
         Ok(self.snapshot.clone())
     }
@@ -144,6 +181,10 @@ impl DesktopBackend for CuaBlockingBackend {
         Ok(Vec::new())
     }
 
+    async fn focused_window(&self) -> Result<Option<WindowInfo>, BackendError> {
+        Ok(Some(fake_window()))
+    }
+
     async fn get_app_state(
         &self,
         _selector: Option<AppSelector>,
@@ -182,6 +223,10 @@ impl DesktopBackend for CuaCleanupBackend {
 
     async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {
         Ok(Vec::new())
+    }
+
+    async fn focused_window(&self) -> Result<Option<WindowInfo>, BackendError> {
+        Ok(Some(fake_window()))
     }
 
     async fn get_app_state(
@@ -224,6 +269,10 @@ impl DesktopBackend for BlockingBackend {
         Ok(Vec::new())
     }
 
+    async fn focused_window(&self) -> Result<Option<WindowInfo>, BackendError> {
+        Ok(Some(fake_window()))
+    }
+
     async fn get_app_state(
         &self,
         _selector: Option<AppSelector>,
@@ -252,6 +301,10 @@ impl DesktopBackend for ArrivalCheckingBackend {
 
     async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {
         Ok(Vec::new())
+    }
+
+    async fn focused_window(&self) -> Result<Option<WindowInfo>, BackendError> {
+        Ok(Some(fake_window()))
     }
 
     async fn get_app_state(
@@ -315,6 +368,7 @@ impl DesktopBackend for HangingBackend {
 fn request(action: ActionName, arguments: serde_json::Value) -> ActionRequest {
     ActionRequest {
         action,
+        appshot_id: None,
         snapshot_id: None,
         element_index: None,
         arguments,
@@ -324,6 +378,113 @@ fn request(action: ActionName, arguments: serde_json::Value) -> ActionRequest {
         resolved_focused_app: None,
         environment: None,
     }
+}
+
+async fn authorize_desktop_appshot(daemon: &ServiceDaemon, session_id: Option<&str>) -> String {
+    let appshot_id = format!(
+        "test-appshot-{}",
+        sky_cua_platform::snapshot::new_snapshot_id()
+    );
+    let snapshot = snapshot(Some(capture_with_rect()), Vec::new());
+    let appshot = AppShotEnvelope {
+        appshot_id: appshot_id.clone(),
+        trigger: AppShotTrigger::Observe,
+        captured_at: chrono::Utc::now(),
+        consistency: AppShotConsistency::Stable,
+        capture: AppShotCapture::Desktop {
+            app_id: "fake.app".to_string(),
+            window_id: "fake-window".to_string(),
+            title: Some("Fake window".to_string()),
+            bounds: fake_window().bounds.expect("fake window bounds"),
+            semantic_projection: json!({}),
+        },
+        image: ContentRef {
+            content_id: format!("content-{appshot_id}"),
+            device_id: None,
+            link_epoch: None,
+            mime_type: "image/png".to_string(),
+            filename: None,
+            size_bytes: 0,
+            sha256: "00".repeat(32),
+            source: ContentSource::Screenshot,
+            expires_at_ms: None,
+            persistence: ContentPersistence::Temporary,
+        },
+        action_snapshot: AppShotActionSnapshot {
+            snapshot_id: snapshot.snapshot_id.clone(),
+            session_id: session_id.map(str::to_string),
+            subject_generation: None,
+        },
+        coverage: AppShotCoverage {
+            pixels_complete: true,
+            semantics_complete: true,
+            secure_regions_redacted: false,
+            projection_truncated: false,
+            total_semantic_nodes: Some(0),
+            projected_semantic_nodes: Some(0),
+        },
+        capability_profile_id: "desktop:test".to_string(),
+        diagnostics: Vec::new(),
+    };
+    let mut snapshots = daemon.snapshots.lock().await;
+    snapshots.store(snapshot);
+    snapshots.store_appshot(appshot);
+    appshot_id
+}
+
+async fn authorized_action_request(
+    daemon: &ServiceDaemon,
+    action: ActionName,
+    arguments: serde_json::Value,
+) -> ActionRequest {
+    let mut request = request(action, arguments);
+    request.appshot_id = Some(authorize_desktop_appshot(daemon, None).await);
+    request.snapshot_id = Some("snap".to_string());
+    request
+}
+
+#[tokio::test]
+async fn desktop_observe_registers_appshot_for_the_next_action() {
+    let dir = unique_temp_dir("desktop-observe-action-fence");
+    let source = dir.join("window.png");
+    std::fs::write(&source, b"deterministic-window-image").expect("write source image");
+    let mut capture = capture_with_path(&source);
+    capture.capture_scope = CaptureScope::Window;
+    let daemon = daemon_with(snapshot(Some(capture), Vec::new()), success_outcome());
+
+    let observed = daemon
+        .handle(ServiceRequest::AppShotCapture {
+            request_id: "desktop-observe-1".to_string(),
+            target: Some(WindowTarget {
+                window_id: Some("fake-window".to_string()),
+                ..Default::default()
+            }),
+            frontmost: false,
+            flags: AppShotCaptureFlags::default(),
+        })
+        .await;
+    let (appshot_id, artifact_path) = match observed {
+        ServiceResponse::AppShotCapture { result } => {
+            let appshot = result.appshot.expect("canonical AppShot");
+            (appshot.appshot_id, result.image.path)
+        }
+        other => panic!("expected AppShot capture, got {other:?}"),
+    };
+
+    let mut action = request(ActionName::Click, json!({"x": 12.0, "y": 18.0}));
+    action.appshot_id = Some(appshot_id);
+    let response = daemon
+        .handle(ServiceRequest::ExecuteAction {
+            request: Box::new(action),
+        })
+        .await;
+    match response {
+        ServiceResponse::ExecuteAction { outcome } => assert!(outcome.success),
+        other => panic!("registered AppShot should authorize action, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_file(artifact_path);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -344,6 +505,7 @@ fn only_activity_requests_trigger_automatic_session_presence() {
         request: BrowserRequest::Click {
             target: Some(BrowserTargetKind::UserChrome),
             tab_id: "tab".to_string(),
+            appshot_id: None,
             x: 1.0,
             y: 2.0,
         },
@@ -390,6 +552,7 @@ async fn activate_window_rejects_invalid_optional_request_context() {
             },
             context: Some(CuaRequestContext {
                 session_id: "window-session".to_string(),
+                appshot_id: None,
                 turn_id: "window-turn".to_string(),
                 deadline_ms: Some(0),
             }),
@@ -418,8 +581,10 @@ async fn cua_cancel_turn_interrupts_an_action_over_the_control_path() {
         snapshot: snapshot(None, Vec::new()),
         started: started.clone(),
     })));
+    let appshot_id = authorize_desktop_appshot(&daemon, Some("session-cancel")).await;
     let context = CuaRequestContext {
         session_id: "session-cancel".to_string(),
+        appshot_id: Some(appshot_id),
         turn_id: "turn-cancel".to_string(),
         deadline_ms: Some(30_000),
     };
@@ -486,8 +651,10 @@ async fn cua_duplicate_active_turn_is_rejected_without_sharing_cancellation() {
         snapshot: snapshot(None, Vec::new()),
         started: started.clone(),
     })));
+    let appshot_id = authorize_desktop_appshot(&daemon, Some("duplicate-session")).await;
     let context = CuaRequestContext {
         session_id: "duplicate-session".to_string(),
+        appshot_id: Some(appshot_id),
         turn_id: "duplicate-turn".to_string(),
         deadline_ms: Some(30_000),
     };
@@ -541,11 +708,14 @@ async fn cua_action_and_screenshot_deadlines_include_desktop_queue_wait() {
     let started = backend.first_execute_started.clone();
     let release = backend.release_first_execute.clone();
     let daemon = Arc::new(daemon_with_backend(Box::new(backend)));
+    let blocker_request =
+        authorized_action_request(&daemon, ActionName::Click, json!({"x": 1.0, "y": 2.0})).await;
+    let queued_appshot = authorize_desktop_appshot(&daemon, Some("queued-action")).await;
     let blocking_daemon = daemon.clone();
     let blocker = tokio::spawn(async move {
         blocking_daemon
             .handle(ServiceRequest::ExecuteAction {
-                request: Box::new(request(ActionName::Click, json!({"x": 1.0, "y": 2.0}))),
+                request: Box::new(blocker_request),
             })
             .await
     });
@@ -555,6 +725,7 @@ async fn cua_action_and_screenshot_deadlines_include_desktop_queue_wait() {
         .handle(ServiceRequest::Move {
             context: CuaRequestContext {
                 session_id: "queued-action".to_string(),
+                appshot_id: Some(queued_appshot),
                 turn_id: "turn".to_string(),
                 deadline_ms: Some(5),
             },
@@ -573,6 +744,7 @@ async fn cua_action_and_screenshot_deadlines_include_desktop_queue_wait() {
         .handle(ServiceRequest::GetScreenshot {
             context: Some(CuaRequestContext {
                 session_id: "queued-shot".to_string(),
+                appshot_id: None,
                 turn_id: "turn".to_string(),
                 deadline_ms: Some(5),
             }),
@@ -597,12 +769,14 @@ async fn cua_cancel_waits_for_backend_release_after_input_down() {
         input_down: input_down.clone(),
         released: released.clone(),
     })));
+    let appshot_id = authorize_desktop_appshot(&daemon, Some("cleanup-session")).await;
     let action_daemon = daemon.clone();
     let action = tokio::spawn(async move {
         action_daemon
             .handle(ServiceRequest::Drag {
                 context: CuaRequestContext {
                     session_id: "cleanup-session".to_string(),
+                    appshot_id: Some(appshot_id),
                     turn_id: "cleanup-turn".to_string(),
                     deadline_ms: Some(30_000),
                 },
@@ -639,10 +813,12 @@ async fn cua_deadline_waits_for_backend_release_after_input_down() {
         input_down: Arc::new(Notify::new()),
         released: released.clone(),
     }));
+    let appshot_id = authorize_desktop_appshot(&daemon, Some("deadline-session")).await;
     let response = daemon
         .handle(ServiceRequest::Click {
             context: CuaRequestContext {
                 session_id: "deadline-session".to_string(),
+                appshot_id: Some(appshot_id),
                 turn_id: "deadline-turn".to_string(),
                 deadline_ms: Some(1),
             },
@@ -691,6 +867,7 @@ async fn cua_invalid_empty_context_is_omitted_from_error_serialization() {
         .handle(ServiceRequest::Click {
             context: CuaRequestContext {
                 session_id: "  ".to_string(),
+                appshot_id: None,
                 turn_id: String::new(),
                 deadline_ms: None,
             },
@@ -720,10 +897,8 @@ async fn cua_invalid_empty_context_is_omitted_from_error_serialization() {
 }
 
 #[tokio::test]
-async fn phone_requests_route_through_manager_to_matching_response_variants() {
+async fn phone_status_routes_through_manager_to_status_response() {
     let daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
-
-    // status -> Status, never a fabricated session.
     match daemon
         .handle(ServiceRequest::Phone {
             request: PhoneRequest::Status(PhoneStatusRequest::default()),
@@ -739,8 +914,11 @@ async fn phone_requests_route_through_manager_to_matching_response_variants() {
         }
         other => panic!("unexpected response: {other:?}"),
     }
+}
 
-    // list_devices -> Devices with an honest diagnostic.
+#[tokio::test]
+async fn phone_list_devices_routes_through_manager_to_devices_response() {
+    let daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
     match daemon
         .handle(ServiceRequest::Phone {
             request: PhoneRequest::ListDevices(PhoneListDevicesRequest::default()),
@@ -756,8 +934,11 @@ async fn phone_requests_route_through_manager_to_matching_response_variants() {
         }
         other => panic!("unexpected response: {other:?}"),
     }
+}
 
-    // connect -> Status (no live device in Phase 1; never a Connected session).
+#[tokio::test]
+async fn phone_connect_without_device_does_not_fabricate_session() {
+    let daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
     match daemon
         .handle(ServiceRequest::Phone {
             request: PhoneRequest::Connect(PhoneConnectRequest::default()),
@@ -770,9 +951,11 @@ async fn phone_requests_route_through_manager_to_matching_response_variants() {
         } => assert!(report.sessions.is_empty()),
         other => panic!("connect must not fabricate a session: {other:?}"),
     }
+}
 
-    // tap with no active session -> Action with no backend and a structured
-    // no-session diagnostic (connect must run first).
+#[tokio::test]
+async fn phone_tap_without_session_returns_structured_action_failure() {
+    let daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
     match daemon
         .handle(ServiceRequest::Phone {
             request: PhoneRequest::Tap(PhoneTapRequest {
@@ -803,8 +986,11 @@ async fn phone_requests_route_through_manager_to_matching_response_variants() {
         }
         other => panic!("unexpected response: {other:?}"),
     }
+}
 
-    // app_list -> App with kind List.
+#[tokio::test]
+async fn phone_app_list_routes_through_manager_to_app_response() {
+    let daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
     match daemon
         .handle(ServiceRequest::Phone {
             request: PhoneRequest::AppList(PhoneAppListRequest::default()),
@@ -1097,8 +1283,8 @@ async fn execute_action_updates_cursor_state_for_explicit_click() {
         })
         .await;
 
-    let mut click = request(ActionName::Click, json!({"x": 42.0, "y": 24.0}));
-    click.snapshot_id = Some("snap".to_string());
+    let click =
+        authorized_action_request(&daemon, ActionName::Click, json!({"x": 42.0, "y": 24.0})).await;
 
     match daemon
         .handle(ServiceRequest::ExecuteAction {
@@ -1150,7 +1336,8 @@ async fn execute_action_waits_for_cursor_arrival_before_backend_dispatch() {
         Box::new(backend),
         OverlayController::new_for_tests_with_host(host_path, socket_path),
     );
-    let click = request(ActionName::Click, json!({"x": 42.0, "y": 24.0}));
+    let click =
+        authorized_action_request(&daemon, ActionName::Click, json!({"x": 42.0, "y": 24.0})).await;
 
     let outcome = match daemon
         .handle(ServiceRequest::ExecuteAction {
@@ -1201,7 +1388,8 @@ async fn stalled_arrival_wait_fails_open_within_absolute_deadline() {
         Box::new(backend),
         OverlayController::new_for_tests_with_host(host_path, socket_path),
     );
-    let click = request(ActionName::Click, json!({"x": 42.0, "y": 24.0}));
+    let click =
+        authorized_action_request(&daemon, ActionName::Click, json!({"x": 42.0, "y": 24.0})).await;
 
     let started = tokio::time::Instant::now();
     let outcome = match daemon
@@ -1241,10 +1429,11 @@ async fn service_runtime_health_bypasses_blocked_desktop_request() {
     let first_started = backend.first_execute_started.clone();
     let release_first = backend.release_first_execute.clone();
     let daemon = Arc::new(daemon_with_backend(Box::new(backend)));
+    let action =
+        authorized_action_request(&daemon, ActionName::Click, json!({"x": 42.0, "y": 24.0})).await;
 
     let action_daemon = daemon.clone();
     let action_task = tokio::spawn(async move {
-        let action = request(ActionName::Click, json!({"x": 42.0, "y": 24.0}));
         action_daemon
             .handle(ServiceRequest::ExecuteAction {
                 request: Box::new(action),
@@ -1275,10 +1464,11 @@ async fn service_runtime_browser_open_bypasses_blocked_desktop_request() {
     let first_started = backend.first_execute_started.clone();
     let release_first = backend.release_first_execute.clone();
     let daemon = Arc::new(daemon_with_backend(Box::new(backend)));
+    let action =
+        authorized_action_request(&daemon, ActionName::Click, json!({"x": 42.0, "y": 24.0})).await;
 
     let action_daemon = daemon.clone();
     let action_task = tokio::spawn(async move {
-        let action = request(ActionName::Click, json!({"x": 42.0, "y": 24.0}));
         action_daemon
             .handle(ServiceRequest::ExecuteAction {
                 request: Box::new(action),
@@ -1291,7 +1481,24 @@ async fn service_runtime_browser_open_bypasses_blocked_desktop_request() {
         daemon
             .handle(ServiceRequest::Browser {
                 identity: None,
-                context: None,
+                context: Some(BrowserRequestContext {
+                    provenance: BrowserCallerProvenance {
+                        caller: BrowserCallerKind::DirectMcp,
+                        source: BrowserProvenanceSource::ClientInfoInference,
+                        connection_id: "blocked-desktop-browser-open".to_string(),
+                        declared_caller: None,
+                        client_info: None,
+                    },
+                    logical_identity: BrowserLogicalIdentity {
+                        session_id: "blocked-desktop-browser-open".to_string(),
+                        thread_id: None,
+                        turn_id: None,
+                    },
+                    operation_identity: BrowserOperationIdentity {
+                        operation_id: "blocked-desktop-browser-open".to_string(),
+                        request_id_fingerprint: "blocked-desktop-browser-open".to_string(),
+                    },
+                }),
                 request: BrowserRequest::Open {
                     target: Some(BrowserTargetKind::UserChrome),
                     url: Some("file:///etc/passwd".to_string()),
@@ -1330,10 +1537,11 @@ async fn service_runtime_browser_status_bypasses_blocked_desktop_request() {
     let first_started = backend.first_execute_started.clone();
     let release_first = backend.release_first_execute.clone();
     let daemon = Arc::new(daemon_with_backend(Box::new(backend)));
+    let action =
+        authorized_action_request(&daemon, ActionName::Click, json!({"x": 42.0, "y": 24.0})).await;
 
     let action_daemon = daemon.clone();
     let action_task = tokio::spawn(async move {
-        let action = request(ActionName::Click, json!({"x": 42.0, "y": 24.0}));
         action_daemon
             .handle(ServiceRequest::ExecuteAction {
                 request: Box::new(action),
@@ -1501,13 +1709,16 @@ async fn service_runtime_serializes_desktop_lane_requests() {
     let second_started = backend.second_execute_started.clone();
     let release_first = backend.release_first_execute.clone();
     let daemon = Arc::new(daemon_with_backend(Box::new(backend)));
+    let first_action =
+        authorized_action_request(&daemon, ActionName::Click, json!({"x": 1.0, "y": 2.0})).await;
+    let second_action =
+        authorized_action_request(&daemon, ActionName::Click, json!({"x": 3.0, "y": 4.0})).await;
 
     let first_daemon = daemon.clone();
     let first_task = tokio::spawn(async move {
-        let action = request(ActionName::Click, json!({"x": 1.0, "y": 2.0}));
         first_daemon
             .handle(ServiceRequest::ExecuteAction {
-                request: Box::new(action),
+                request: Box::new(first_action),
             })
             .await
     });
@@ -1515,10 +1726,9 @@ async fn service_runtime_serializes_desktop_lane_requests() {
 
     let second_daemon = daemon.clone();
     let second_task = tokio::spawn(async move {
-        let action = request(ActionName::Click, json!({"x": 3.0, "y": 4.0}));
         second_daemon
             .handle(ServiceRequest::ExecuteAction {
-                request: Box::new(action),
+                request: Box::new(second_action),
             })
             .await
     });
@@ -1624,7 +1834,9 @@ async fn automatic_session_presence_acquires_once_and_releases_after_idle() {
     );
 
     for _ in 0..2 {
-        let action = request(ActionName::Click, json!({"x": 1.0, "y": 2.0}));
+        let action =
+            authorized_action_request(&daemon, ActionName::Click, json!({"x": 1.0, "y": 2.0}))
+                .await;
         match daemon
             .handle(ServiceRequest::ExecuteAction {
                 request: Box::new(action),
@@ -1654,7 +1866,8 @@ async fn automatic_session_presence_acquires_once_and_releases_after_idle() {
     assert_eq!(presence.release_calls(), 1);
     assert_eq!(presence.last_relock(), Some(true));
 
-    let action = request(ActionName::Click, json!({"x": 3.0, "y": 4.0}));
+    let action =
+        authorized_action_request(&daemon, ActionName::Click, json!({"x": 3.0, "y": 4.0})).await;
     let _ = daemon
         .handle(ServiceRequest::ExecuteAction {
             request: Box::new(action),
@@ -1825,6 +2038,31 @@ fn window_info(window_id: &str, title: Option<&str>, pid: Option<u32>) -> Window
     }
 }
 
+fn fake_window() -> WindowInfo {
+    WindowInfo {
+        window_id: "fake-window".to_string(),
+        title: Some("Fake window".to_string()),
+        app_id: Some("fake.app".to_string()),
+        wm_class: Some("FakeApp".to_string()),
+        pid: Some(42),
+        bounds: Some(RectF {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 200.0,
+            space: CoordinateSpace::DesktopLogical,
+        }),
+        display: None,
+        display_intersections: Vec::new(),
+        workspace: None,
+        focused: true,
+        hidden: false,
+        client_type: None,
+        backend: "test".to_string(),
+        terminal: None,
+    }
+}
+
 #[test]
 fn select_scrcpy_window_prefers_pid_over_title() {
     let windows = vec![
@@ -1916,6 +2154,7 @@ fn daemon_with_phone_and_overlay(
         snapshots: tokio::sync::Mutex::new(SnapshotManager::new(8)),
         overlay: tokio::sync::Mutex::new(overlay),
         phone: tokio::sync::Mutex::new(phone),
+        phone_direct: tokio::sync::Mutex::new(None),
         last_phone_request_context: std::sync::Mutex::new(None),
         session_presence_config,
         session_presence_held: tokio::sync::Mutex::new(false),
@@ -2104,4 +2343,20 @@ fn unique_temp_dir(name: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir
+}
+
+#[tokio::test]
+async fn daemon_phone_manager_exposes_installed_direct_runtime_provider() {
+    let mut phone = test_phone_manager();
+    phone.set_direct_runtime(Some(crate::phone::DirectRuntimeHandle::new()));
+    let daemon = daemon_with_phone(
+        Box::new(FakeBackend {
+            snapshot: snapshot(None, Vec::new()),
+            outcome: success_outcome(),
+            presence: None,
+        }),
+        SessionPresenceConfig::disabled(),
+        phone,
+    );
+    assert!(daemon.phone.lock().await.direct_provider().is_some());
 }

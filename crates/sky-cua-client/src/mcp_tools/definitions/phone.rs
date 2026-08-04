@@ -22,6 +22,73 @@ pub(super) fn phone_serial_schema() -> Value {
     })
 }
 
+pub(super) fn phone_device_id_schema() -> Value {
+    json!({
+        "type": "string",
+        "minLength": 1,
+        "description": "Stable CompanionDirect device id; direct links do not have an ADB serial."
+    })
+}
+
+/// Replace post-connect `session_id` requirements with an explicit typed
+/// selector alternative. Serial remains accepted for legacy callers, while a
+/// direct Companion link can validate using only `device_id`.
+fn phone_selector_alternatives(mut schema: Value) -> Value {
+    let device_schema = schema
+        .get("properties")
+        .and_then(|properties| properties.get("device_id"))
+        .cloned()
+        .unwrap_or_else(phone_device_id_schema);
+
+    fn visit(value: &mut Value, device_schema: &Value) {
+        match value {
+            Value::Array(items) => items.iter_mut().for_each(|item| visit(item, device_schema)),
+            Value::Object(object) => {
+                object
+                    .values_mut()
+                    .for_each(|item| visit(item, device_schema));
+                let Some(Value::Array(required)) = object.remove("required") else {
+                    return;
+                };
+                let names: Vec<String> = required
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect();
+                if !names.iter().any(|name| name == "session_id") {
+                    object.insert(
+                        "required".to_string(),
+                        Value::Array(names.into_iter().map(Value::String).collect()),
+                    );
+                    return;
+                }
+                let rest: Vec<Value> = names
+                    .into_iter()
+                    .filter(|name| name != "session_id")
+                    .map(Value::String)
+                    .collect();
+                let mut session_required = vec![Value::String("session_id".into())];
+                session_required.extend(rest.clone());
+                let mut device_required = vec![Value::String("device_id".into())];
+                device_required.extend(rest);
+                if let Some(Value::Object(properties)) = object.get_mut("properties") {
+                    properties.insert("device_id".into(), device_schema.clone());
+                }
+                object.insert(
+                    "oneOf".to_string(),
+                    Value::Array(vec![
+                        json!({"required": session_required}),
+                        json!({"required": device_required}),
+                    ]),
+                );
+            }
+            _ => {}
+        }
+    }
+    visit(&mut schema, &device_schema);
+    schema
+}
+
 pub(super) fn phone_connect_backend_schema() -> Value {
     json!({
         "type": "string",
@@ -41,7 +108,9 @@ pub(super) fn phone_observe_backend_schema() -> Value {
 pub(super) fn phone_selector_properties() -> Value {
     json!({
         "session_id": phone_session_id_schema(),
-        "serial": optional_absent_string_schema(phone_serial_schema())
+        "serial": optional_absent_string_schema(phone_serial_schema()),
+        "device_id": optional_absent_string_schema(phone_device_id_schema()),
+        "appshot_id": optional_absent_string_schema(json!({"type":"string", "minLength":1, "description":"Canonical phone AppShot id returned by phone_observe; required for state-changing phone actions."}))
     })
 }
 
@@ -49,9 +118,21 @@ pub(super) fn with_phone_selector(properties: Value) -> Value {
     merge_properties(properties, phone_selector_properties())
 }
 
+fn with_phone_action_selector(properties: Value) -> Value {
+    merge_properties(
+        properties,
+        json!({
+            "session_id": phone_session_id_schema(),
+            "device_id": optional_absent_string_schema(phone_device_id_schema()),
+            "appshot_id": optional_absent_string_schema(json!({"type":"string", "minLength":1}))
+        }),
+    )
+}
+
 pub(super) fn phone_session_properties() -> Value {
     json!({
-        "session_id": phone_session_id_schema()
+        "session_id": phone_session_id_schema(),
+        "device_id": optional_absent_string_schema(phone_device_id_schema())
     })
 }
 
@@ -73,7 +154,7 @@ pub(super) fn phone_connection_properties() -> Value {
 }
 
 pub(super) fn phone_connection_constraints() -> Value {
-    exact_branch_constraints(
+    phone_selector_alternatives(exact_branch_constraints(
         &phone_connection_properties(),
         "operation",
         &[
@@ -83,6 +164,7 @@ pub(super) fn phone_connection_constraints() -> Value {
                 &[
                     "operation",
                     "serial",
+                    "device_id",
                     "backend",
                     "install_companion",
                     "start_scrcpy",
@@ -99,12 +181,12 @@ pub(super) fn phone_connection_constraints() -> Value {
                 &["operation", "session_id"][..],
             ),
         ],
-    )
+    ))
 }
 
 pub(super) fn phone_setup_properties() -> Value {
     with_phone_session(json!({
-        "operation": {"type": "string", "enum": ["install_companion", "open_settings"]},
+        "operation": {"type": "string", "enum": ["create_enrollment", "install_companion", "open_settings"]},
         "force_reinstall": optional_bool_schema(json!({"type": "boolean"})),
         "allow_downgrade": optional_bool_schema(json!({"type": "boolean"})),
         "screen": {
@@ -131,6 +213,12 @@ pub(super) fn phone_setup_constraints() -> Value {
     let branches = vec![
         exact_branch_schema(
             &properties,
+            &[("operation", "create_enrollment")],
+            &[],
+            &["operation"],
+        ),
+        exact_branch_schema(
+            &properties,
             &[("operation", "install_companion")],
             &["session_id"],
             &[
@@ -147,7 +235,7 @@ pub(super) fn phone_setup_constraints() -> Value {
             &["operation", "session_id", "screen", "package_name"],
         ),
     ];
-    json!({
+    phone_selector_alternatives(json!({
         "allOf": [
             {"oneOf": branches},
             {
@@ -170,11 +258,11 @@ pub(super) fn phone_setup_constraints() -> Value {
                 }
             }
         ]
-    })
+    }))
 }
 
 pub(super) fn phone_pointer_properties() -> Value {
-    with_phone_session(json!({
+    with_phone_action_selector(json!({
         "operation": {"type": "string", "enum": ["tap", "swipe"]},
         "phone_snapshot_id": {
             "type": "string",
@@ -199,10 +287,11 @@ pub(super) fn phone_pointer_constraints() -> Value {
         exact_branch_schema_with_constraints(
             &properties,
             &[("operation", "tap")],
-            &["session_id", "x", "y"],
+            &["session_id", "appshot_id", "x", "y"],
             &[
                 "operation",
                 "session_id",
+                "appshot_id",
                 "phone_snapshot_id",
                 "x",
                 "y",
@@ -218,10 +307,18 @@ pub(super) fn phone_pointer_constraints() -> Value {
         exact_branch_schema_with_constraints(
             &properties,
             &[("operation", "swipe")],
-            &["session_id", "start_x", "start_y", "end_x", "end_y"],
+            &[
+                "session_id",
+                "appshot_id",
+                "start_x",
+                "start_y",
+                "end_x",
+                "end_y",
+            ],
             &[
                 "operation",
                 "session_id",
+                "appshot_id",
                 "phone_snapshot_id",
                 "start_x",
                 "start_y",
@@ -238,13 +335,13 @@ pub(super) fn phone_pointer_constraints() -> Value {
             }),
         ),
     ];
-    json!({
+    phone_selector_alternatives(json!({
         "allOf": [{"oneOf": branches}]
-    })
+    }))
 }
 
 pub(super) fn phone_keyboard_properties() -> Value {
-    with_phone_session(json!({
+    with_phone_action_selector(json!({
         "operation": {"type": "string", "enum": ["type_text", "press_key"]},
         "text": non_empty_string_schema(),
         "key": non_blank_string_schema()
@@ -252,26 +349,26 @@ pub(super) fn phone_keyboard_properties() -> Value {
 }
 
 pub(super) fn phone_keyboard_constraints() -> Value {
-    exact_branch_constraints(
+    phone_selector_alternatives(exact_branch_constraints(
         &phone_keyboard_properties(),
         "operation",
         &[
             (
                 "type_text",
-                &["session_id", "text"][..],
-                &["operation", "session_id", "text"][..],
+                &["session_id", "appshot_id", "text"][..],
+                &["operation", "session_id", "device_id", "appshot_id", "text"][..],
             ),
             (
                 "press_key",
-                &["session_id", "key"][..],
-                &["operation", "session_id", "key"][..],
+                &["session_id", "appshot_id", "key"][..],
+                &["operation", "session_id", "device_id", "appshot_id", "key"][..],
             ),
         ],
-    )
+    ))
 }
 
 pub(super) fn phone_notification_action_properties() -> Value {
-    with_phone_session(json!({
+    with_phone_action_selector(json!({
         "operation": {"type": "string", "enum": ["open", "dismiss", "action"]},
         "event_id": {
             "type": "string",
@@ -289,27 +386,46 @@ pub(super) fn phone_notification_action_properties() -> Value {
 }
 
 pub(super) fn phone_notification_action_constraints() -> Value {
-    exact_branch_constraints(
+    phone_selector_alternatives(exact_branch_constraints(
         &phone_notification_action_properties(),
         "operation",
         &[
             (
                 "open",
-                &["session_id", "event_id"][..],
-                &["operation", "session_id", "event_id"][..],
+                &["session_id", "appshot_id", "event_id"][..],
+                &[
+                    "operation",
+                    "session_id",
+                    "device_id",
+                    "appshot_id",
+                    "event_id",
+                ][..],
             ),
             (
                 "dismiss",
-                &["session_id", "event_id"][..],
-                &["operation", "session_id", "event_id"][..],
+                &["session_id", "appshot_id", "event_id"][..],
+                &[
+                    "operation",
+                    "session_id",
+                    "device_id",
+                    "appshot_id",
+                    "event_id",
+                ][..],
             ),
             (
                 "action",
-                &["session_id", "event_id", "action_id"][..],
-                &["operation", "session_id", "event_id", "action_id"][..],
+                &["session_id", "appshot_id", "event_id", "action_id"][..],
+                &[
+                    "operation",
+                    "session_id",
+                    "device_id",
+                    "appshot_id",
+                    "event_id",
+                    "action_id",
+                ][..],
             ),
         ],
-    )
+    ))
 }
 
 pub(super) fn phone_app_action_properties() -> Value {
@@ -358,13 +474,13 @@ pub(super) fn phone_app_action_constraints() -> Value {
             &["operation", "session_id", "intent_uri", "package_name"],
         ),
     ];
-    json!({
+    phone_selector_alternatives(json!({
         "allOf": [{"oneOf": branches}]
-    })
+    }))
 }
 
 pub(super) fn phone_app_install_properties() -> Value {
-    with_phone_session(json!({
+    with_phone_action_selector(json!({
         "apk_paths": {
             "type": "array",
             "minItems": 1,
@@ -380,7 +496,178 @@ pub(super) fn phone_app_install_properties() -> Value {
 }
 
 pub(super) fn phone_app_install_constraints() -> Value {
+    phone_selector_alternatives(json!({
+        "required": ["session_id", "appshot_id", "apk_paths"]
+    }))
+}
+
+fn feature_properties(operations: &[&str]) -> Value {
+    with_phone_action_selector(json!({
+        "operation": {"type": "string", "enum": operations},
+        "content_id": optional_absent_string_schema(json!({"type":"string", "minLength":1})),
+        "path": optional_absent_string_schema(json!({"type":"string", "minLength":1})),
+        "mime_type": optional_absent_string_schema(json!({"type":"string", "minLength":1})),
+        "payload": optional_null_schema(json!({"type":"object"})),
+        "since_sequence": optional_null_schema(json!({"type":"integer", "minimum":0})),
+        "limit": optional_null_schema(json!({"type":"integer", "minimum":1, "maximum":1000})),
+        "text": optional_absent_string_schema(json!({"type":"string"})),
+        "start": optional_null_schema(json!({"type":"integer", "minimum":0})),
+        "end": optional_null_schema(json!({"type":"integer", "minimum":0})),
+        "content": optional_null_schema(json!({"type":"object"})),
+        "camera_id": optional_absent_string_schema(json!({"type":"string", "minLength":1})),
+        "options": optional_null_schema(json!({"type":"object"})),
+        "controls": optional_null_schema(json!({"type":"object"})),
+        "uri": optional_absent_string_schema(json!({"type":"string", "minLength":1})),
+        "source": optional_absent_string_schema(json!({"type":"string", "minLength":1})),
+        "destination": optional_absent_string_schema(json!({"type":"string", "minLength":1})),
+        "name": optional_absent_string_schema(json!({"type":"string", "minLength":1})),
+        "algorithm": optional_absent_string_schema(json!({"type":"string", "enum":["sha256"]})),
+        "root": optional_absent_string_schema(json!({"type":"string", "minLength":1})),
+        "query": optional_absent_string_schema(json!({"type":"string"})),
+        "max_width": optional_null_schema(json!({"type":"integer", "minimum":1})),
+        "max_height": optional_null_schema(json!({"type":"integer", "minimum":1})),
+        "root_id": optional_absent_string_schema(json!({"type":"string", "minLength":1}))
+    }))
+}
+
+pub(super) fn phone_content_properties() -> Value {
+    feature_properties(&[
+        "describe",
+        "import_host_file",
+        "export_host_file",
+        "release",
+    ])
+}
+pub(super) fn phone_clipboard_properties() -> Value {
+    feature_properties(&["get", "set", "clear", "changes"])
+}
+pub(super) fn phone_editor_properties() -> Value {
+    feature_properties(&[
+        "context",
+        "set_text",
+        "insert_text",
+        "set_selection",
+        "select_all",
+        "copy",
+        "cut",
+        "paste",
+        "insert_content",
+    ])
+}
+pub(super) fn phone_camera_properties() -> Value {
+    let mut properties = feature_properties(&[
+        "enumerate",
+        "capabilities",
+        "photo",
+        "video_start",
+        "video_pause",
+        "video_resume",
+        "video_stop",
+        "preview_start",
+        "preview_frame",
+        "preview_stop",
+        "controls",
+    ]);
+    if let Some(properties) = properties.as_object_mut() {
+        properties.insert(
+            "camera_session_id".into(),
+            optional_absent_string_schema(json!({
+                "type": "string",
+                "minLength": 1,
+                "description": "Opaque preview/video session handle returned by phone_camera preview_start or video_start."
+            })),
+        );
+        properties.insert(
+            "options".into(),
+            optional_null_schema(json!({
+                "type": "object",
+                "description": "Capture options. V1 rejects image dimensions above 1920x1080 or portrait 1080x1920; video stops after 60000 ms.",
+                "properties": {
+                    "size": {
+                        "type": "object",
+                        "properties": {
+                            "width": {"type": "integer", "minimum": 1, "maximum": 1920},
+                            "height": {"type": "integer", "minimum": 1, "maximum": 1920}
+                        },
+                        "required": ["width", "height"],
+                        "additionalProperties": false,
+                        "anyOf": [
+                            {"properties": {"width": {"maximum": 1920}, "height": {"maximum": 1080}}},
+                            {"properties": {"width": {"maximum": 1080}, "height": {"maximum": 1920}}}
+                        ]
+                    },
+                    "fps": {"type": "integer", "minimum": 1},
+                    "flash": {"type": "string", "enum": ["off", "on", "auto", "screen"]},
+                    "include_audio": {"type": "boolean"},
+                    "mime_type": {"type": "string", "minLength": 1}
+                },
+                "additionalProperties": false
+            })),
+        );
+    }
+    properties
+}
+
+pub(super) fn phone_camera_constraints() -> Value {
     json!({
-        "required": ["session_id", "apk_paths"]
+        "allOf": [
+            phone_feature_constraints(&["enumerate", "capabilities", "preview_frame"]),
+            {
+                "if": {
+                    "required": ["operation"],
+                    "properties": {
+                        "operation": {
+                            "enum": [
+                                "video_pause", "video_resume", "video_stop",
+                                "preview_frame", "preview_stop", "controls"
+                            ]
+                        }
+                    }
+                },
+                "then": {"required": ["camera_session_id"]}
+            }
+        ]
+    })
+}
+pub(super) fn phone_storage_properties() -> Value {
+    feature_properties(&[
+        "roots",
+        "list",
+        "stat",
+        "read",
+        "write",
+        "mkdir",
+        "copy",
+        "move",
+        "rename",
+        "delete",
+        "trash",
+        "hash",
+        "search",
+        "thumbnail",
+        "metadata",
+        "add_saf_root",
+        "remove_saf_root",
+        "list_saf_roots",
+    ])
+}
+
+pub(super) fn phone_feature_constraints(read_operations: &[&str]) -> Value {
+    let selector = phone_selector_alternatives(json!({
+        "required": ["session_id", "operation"]
+    }));
+    json!({
+        "allOf": [
+            selector,
+            {
+                "if": {
+                    "required": ["operation"],
+                    "properties": {
+                        "operation": {"not": {"enum": read_operations}}
+                    }
+                },
+                "then": {"required": ["appshot_id"]}
+            }
+        ]
     })
 }

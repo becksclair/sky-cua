@@ -4,7 +4,7 @@ export type DiagnosticEntry = { code: string; message: string; details?: string 
 export type PixelSize = { width: number; height: number };
 export type RectF = { x: number; y: number; width: number; height: number };
 export type PhoneBackendKind = "auto" | "adb" | "companion" | "scrcpy" | "none";
-export type PhoneConnectionKind = "usb" | "emulator" | "legacy_tcpip" | "wireless_debugging" | "unknown";
+export type PhoneConnectionKind = "usb" | "emulator" | "legacy_tcpip" | "wireless_debugging" | "companion_direct" | "unknown";
 export type PhoneTargetDeviceKind = "galaxy_s26_ultra" | "redmi_tablet" | "emulator" | "unknown_android";
 export type PhoneCapabilityRefreshState = "detected" | "reused" | "refreshed" | "stale";
 export type PhoneDeviceState = "device" | "unauthorized" | "offline" | "no_permissions" | "connecting" | "bootloader" | "recovery" | "unknown";
@@ -44,29 +44,36 @@ export type PhoneCapabilityProfile = {
   shizuku_available: boolean; device_owner: boolean; available_actions?: PhoneAvailableAction[];
   unavailable_actions?: PhoneUnavailableAction[];
 };
+export type PhoneConnectionIdentity = 
+  { kind: "adb"; serial: string; name?: string }
+  | { kind: "companion_direct"; device_id: string; link_epoch: number; name?: string }
+  | { kind: "companion_v1"; serial: string }
+  | { kind: "scrcpy"; serial: string };
+
 export type PhoneSession = {
   session_id: string; serial: string; connection_kind: PhoneConnectionKind; backend: PhoneBackendKind;
   capabilities: PhoneBackendCapabilities; capability_profile: PhoneCapabilityProfile;
   companion?: PhoneCompanionCapabilities; managed_process: boolean; window_title?: string; created_at_ms: number;
+  connection?: PhoneConnectionIdentity;
 };
 export type PhonePoint = { x: number; y: number };
 export type PhoneCursorCapabilities = { host_visible_overlay: boolean; screenshot_synthetic_cursor: boolean; phone_native_overlay: boolean; visible_overlay_reason?: string };
 export type PhoneCursorState = { visible: boolean; sequence: number; device_point?: PhonePoint; screenshot_point?: PhonePoint; snapshot_id?: string; source_action?: string; updated_at_ms: number };
 export type PhoneCoordinateMapping = { mapping_id: string; session_id: string; serial: string; device_rect: RectF; screenshot_rect: RectF; host_window_rect?: RectF; host_content_rect?: RectF; rotation_degrees: number; captured_at_ms: number };
-export type PhoneDevice = { serial: string; state: PhoneDeviceState; connection_kind: PhoneConnectionKind; model?: string; product?: string; device?: string; transport_id?: string; primary?: boolean };
+export type PhoneDevice = { serial: string; state: PhoneDeviceState; connection_kind: PhoneConnectionKind; model?: string; product?: string; device?: string; transport_id?: string; primary?: boolean; device_id?: string; link_epoch?: number; connection?: PhoneConnectionIdentity };
 export type PhoneAccessibilitySummary = { package_name?: string; activity?: string; node_count: number; headline_texts?: string[]; truncated: boolean; redacted: boolean };
 export type PhoneAccessibilityNode = { node_index: number; parent_index?: number; class_name?: string; package_name?: string; text?: string; content_description?: string; bounds?: RectF; clickable: boolean; focusable: boolean; enabled: boolean; redacted: boolean };
 export type PhoneNotificationAction = { action_id: string; title?: string; supports_inline_reply: boolean };
 export type PhoneNotificationEvent = { event_id: string; key?: string; package_name: string; channel?: string; title?: string; body?: string; redaction: PhoneNotificationRedaction; rank?: number; ongoing: boolean; can_open: boolean; can_dismiss: boolean; actions?: PhoneNotificationAction[]; posted_at_ms: number };
 export type PhoneAppInfo = { package_name: string; label?: string; activity?: string; version_name?: string; version_code?: number; launchable: boolean; system_app: boolean };
 
-export type PhoneSessionSelector = { session_id?: string; serial?: string };
+export type PhoneSessionSelector = { session_id?: string; serial?: string; device_id?: string; appshot_id?: string };
 export type PhoneObserveRequest = { type: "observe"; session_id?: string; serial?: string; backend?: PhoneBackendKind; include_image_data?: boolean; include_accessibility?: boolean; include_notifications?: boolean };
 export type PhoneStatusRequest = { type: "status"; refresh_devices?: boolean };
 export type PhoneListDevicesRequest = { type: "list_devices"; include_mdns?: boolean };
 export type PhoneRefreshCapabilitiesRequest = { type: "refresh_capabilities" } & PhoneSessionSelector;
 export type PhonePairWirelessRequest = { type: "pair_wireless"; host_port: string; pairing_code: string };
-export type PhoneConnectRequest = { type: "connect"; serial?: string; backend?: PhoneBackendKind; install_companion?: boolean; start_scrcpy?: boolean };
+export type PhoneConnectRequest = { type: "connect"; serial?: string; device_id?: string; backend?: PhoneBackendKind; install_companion?: boolean; start_scrcpy?: boolean };
 export type PhoneDisconnectRequest = { type: "disconnect"; keep_wireless?: boolean } & PhoneSessionSelector;
 export type PhoneScreenshotRequest = { type: "screenshot"; backend?: PhoneBackendKind; include_image_data?: boolean } & PhoneSessionSelector;
 export type PhoneTapRequest = { type: "tap"; phone_snapshot_id?: string; x: number; y: number; use_device_coordinates?: boolean } & PhoneSessionSelector;
@@ -102,8 +109,15 @@ export type PhoneActionResponse = { type: "action"; session_id: string; serial: 
 export type PhoneCompanionStatusResponse = { type: "companion_status"; session_id: string; serial: string; companion: PhoneCompanionCapabilities; diagnostics?: DiagnosticEntry[] };
 export type PhoneAccessibilityTreeResponse = { type: "accessibility_tree"; session_id: string; serial: string; backend: PhoneBackendKind; package_name?: string; activity?: string; nodes?: PhoneAccessibilityNode[]; truncated: boolean; redacted: boolean; diagnostics?: DiagnosticEntry[] };
 export type PhoneNotificationsResponse = { type: "notifications"; session_id: string; serial: string; backend: PhoneBackendKind; listener_enabled: boolean; events?: PhoneNotificationEvent[]; truncated: boolean; diagnostics?: DiagnosticEntry[] };
-export type PhoneAppResponse = { type: "app"; session_id: string; serial: string; kind: PhoneAppResponseKind; backend: PhoneBackendKind; success: boolean; current_app?: PhoneAppInfo; apps?: PhoneAppInfo[]; truncated: boolean; install_strategy?: PhoneInstallStrategy; diagnostics?: DiagnosticEntry[] };
-export type PhoneResponse = PhoneObserveResponse | PhoneStatusReport | PhoneListDevicesResponse | PhoneCapabilitiesResponse | PhonePairWirelessResponse | PhoneConnectedResponse | PhoneDisconnectResponse | PhoneScreenshotResponse | PhoneActionResponse | PhoneCompanionStatusResponse | PhoneAccessibilityTreeResponse | PhoneNotificationsResponse | PhoneAppResponse;
+export type PhoneAppResponse = { type: "app"; session_id: string; serial: string; kind: PhoneAppResponseKind; backend: PhoneBackendKind; success: boolean; current_app?: PhoneAppInfo; apps?: PhoneAppInfo[]; truncated: boolean; install_strategy?: PhoneInstallStrategy; destination_appshot?: { appshot_id: string; action_snapshot: { session_id?: string } } & Record<string, unknown>; diagnostics?: DiagnosticEntry[] };
+export type PhoneAppShotRequiredResponse = { type: "appshot_required"; code: string; reason: string; message: string; fresh_appshot?: { appshot_id: string } & Record<string, unknown> };
+export type PhoneFeatureErrorResponse = { type: "feature_error"; code: string; message: string };
+export type PhoneContentResponse = { type: "content"; result: { success: boolean; diagnostics?: DiagnosticEntry[] } };
+export type PhoneClipboardResponse = { type: "clipboard"; result: { success: boolean; diagnostics?: DiagnosticEntry[] } };
+export type PhoneEditorResponse = { type: "editor"; result: { success: boolean; diagnostics?: DiagnosticEntry[] } };
+export type PhoneCameraResponse = { type: "camera"; result: { success: boolean; diagnostics?: DiagnosticEntry[] } };
+export type PhoneStorageResponse = { type: "storage"; result: { success: boolean; diagnostics?: DiagnosticEntry[] } };
+export type PhoneResponse = PhoneObserveResponse | PhoneStatusReport | PhoneListDevicesResponse | PhoneCapabilitiesResponse | PhonePairWirelessResponse | PhoneConnectedResponse | PhoneDisconnectResponse | PhoneScreenshotResponse | PhoneActionResponse | PhoneCompanionStatusResponse | PhoneAccessibilityTreeResponse | PhoneNotificationsResponse | PhoneAppResponse | PhoneAppShotRequiredResponse | PhoneFeatureErrorResponse | PhoneContentResponse | PhoneClipboardResponse | PhoneEditorResponse | PhoneCameraResponse | PhoneStorageResponse;
 
 export type PhoneServiceRequest = { type: "phone"; request: PhoneRequest; context?: PhoneRequestContext };
 export type PhoneServiceResponse = { type: "phone"; response: PhoneResponse };

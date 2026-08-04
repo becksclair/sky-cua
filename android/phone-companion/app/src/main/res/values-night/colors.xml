@@ -21,6 +21,10 @@
     <color name="sky_text">#FFF0DDF4</color>
     <color name="sky_muted">#FFA888A0</color>
 
+    <!-- Enrollment-only accessibility roles; preserve the shared Companion palette. -->
+    <color name="enrollment_muted">#FFB99AAF</color>
+    <color name="enrollment_on_primary">#FF1A0E1E</color>
+
     <color name="sky_ok">#FF6EE7B7</color>
     <color name="sky_ok_bg">#FF14392C</color>
     <color name="sky_off">#FFF0A0C0</color>

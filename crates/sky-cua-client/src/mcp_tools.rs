@@ -171,8 +171,8 @@ fn grouped_handler_call(tool_name: &str, arguments: Value) -> Result<GroupedHand
             }
         }
         "observe" => match take_required_branch(&mut arguments, "surface")?.as_str() {
-            "desktop" => ("get_app_state", "desktop".to_string()),
-            "browser" => ("browser_snapshot", "browser".to_string()),
+            "desktop" => ("desktop_observe_appshot", "desktop".to_string()),
+            "browser" => ("browser_appshot", "browser".to_string()),
             "phone" => ("phone_observe", "phone".to_string()),
             surface => return Err(anyhow!("unsupported observe surface: {surface}")),
         },
@@ -261,6 +261,10 @@ fn grouped_handler_call(tool_name: &str, arguments: Value) -> Result<GroupedHand
         },
         "phone_pair_wireless" => ("phone_pair_wireless", "default".to_string()),
         "phone_setup" => match take_required_branch(&mut arguments, "operation")?.as_str() {
+            "create_enrollment" => (
+                "phone_direct_create_enrollment",
+                "create_enrollment".to_string(),
+            ),
             "install_companion" => ("phone_install_companion", "install_companion".to_string()),
             "open_settings" => ("phone_open_settings", "open_settings".to_string()),
             operation => return Err(anyhow!("unsupported phone_setup operation: {operation}")),
@@ -299,6 +303,11 @@ fn grouped_handler_call(tool_name: &str, arguments: Value) -> Result<GroupedHand
             }
         },
         "phone_app_install" => ("phone_app_install", "default".to_string()),
+        "phone_content" => preserve_operation(&mut arguments, "phone_content")?,
+        "phone_clipboard" => preserve_operation(&mut arguments, "phone_clipboard")?,
+        "phone_editor" => preserve_operation(&mut arguments, "phone_editor")?,
+        "phone_camera" => preserve_operation(&mut arguments, "phone_camera")?,
+        "phone_storage" => preserve_operation(&mut arguments, "phone_storage")?,
         "phone_accessibility_tree" => ("phone_accessibility_tree", "default".to_string()),
         "phone_notifications" => ("phone_notifications", "default".to_string()),
         name => return Err(anyhow!("unknown tool: {name}")),
@@ -308,6 +317,72 @@ fn grouped_handler_call(tool_name: &str, arguments: Value) -> Result<GroupedHand
         branch,
         arguments: Value::Object(arguments),
     })
+}
+
+fn preserve_operation(
+    arguments: &mut serde_json::Map<String, Value>,
+    handler: &'static str,
+) -> Result<(&'static str, String)> {
+    let operation = take_required_branch(arguments, "operation")?;
+    arguments.insert("operation".into(), Value::String(operation.clone()));
+    Ok((handler, operation))
+}
+
+fn handle_phone_direct_create_enrollment(service: &impl McpService) -> Result<Value> {
+    let payload = match service.call(&ServiceRequest::PhoneDirectCreateEnrollment)? {
+        ServiceResponse::PhoneDirectEnrollment { payload } => *payload,
+        ServiceResponse::Error { code, message, .. } => return tool_error(code, message),
+        other => {
+            return Err(anyhow!(
+                "unexpected response for Companion Direct enrollment: {other:?}"
+            ));
+        }
+    };
+    let mut uri = url::Url::parse("skycua://enroll")?;
+    uri.query_pairs_mut()
+        .append_pair("protocol", &payload.protocol)
+        .append_pair("endpoint", &payload.endpoint)
+        .append_pair("enrollment_id", &payload.enrollment_id)
+        .append_pair("bootstrap_credential", &payload.bootstrap_credential)
+        .append_pair("expires_at_ms", &payload.expires_at_ms.to_string());
+    let enrollment_uri = uri.to_string();
+    let manual_code = format!(
+        "{}\n{}\n{}\n{}",
+        payload.endpoint,
+        payload.enrollment_id,
+        payload.bootstrap_credential,
+        payload.expires_at_ms
+    );
+    let code = qrcode::QrCode::new(enrollment_uri.as_bytes())?;
+    let image = code
+        .render::<image::Luma<u8>>()
+        .min_dimensions(512, 512)
+        .build();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageLuma8(image).write_to(&mut png, image::ImageFormat::Png)?;
+    use base64::Engine as _;
+    let png_base64 = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    Ok(json!({
+        "content": [
+            {
+                "type": "text",
+                "text": format!(
+                    "Scan this single-use Companion Direct enrollment QR for {}. It expires at {} ms since Unix epoch.",
+                    payload.endpoint, payload.expires_at_ms
+                )
+            },
+            {"type": "image", "data": png_base64, "mimeType": "image/png"}
+        ],
+        "structuredContent": {
+            "protocol": payload.protocol,
+            "endpoint": payload.endpoint,
+            "enrollment_id": payload.enrollment_id,
+            "enrollment_uri": enrollment_uri,
+            "manual_code": manual_code,
+            "expires_at_ms": payload.expires_at_ms
+        },
+        "isError": false
+    }))
 }
 
 fn grouped_tool_result(tool_name: &str, call: &GroupedHandlerCall, handler_result: Value) -> Value {
@@ -515,12 +590,16 @@ fn handle_tool_call_with_browser_eval_policy(
                 command: command.clone(),
                 args,
             })? {
-                ServiceResponse::LaunchApplication { pid } => Ok(json!({
+                ServiceResponse::LaunchApplication {
+                    pid,
+                    destination_appshot,
+                    diagnostics,
+                } => Ok(json!({
                     "content": [{
                         "type": "text",
                         "text": format!("Launched '{command}' in the isolated desktop (pid {pid}).")
                     }],
-                    "structuredContent": { "pid": pid },
+                    "structuredContent": { "pid": pid, "destination_appshot": destination_appshot, "diagnostics": diagnostics },
                     "isError": false
                 })),
                 ServiceResponse::Error { code, message, .. } => tool_error(code, message),
@@ -638,12 +717,15 @@ fn handle_tool_call_with_browser_eval_policy(
                 target,
                 context: None,
             })? {
-                ServiceResponse::ActivateWindow { outcome } => Ok(json!({
+                ServiceResponse::ActivateWindow {
+                    outcome,
+                    destination_appshot,
+                } => Ok(json!({
                     "content": [{
                         "type": "text",
                         "text": action_summary(&outcome)
                     }],
-                    "structuredContent": outcome,
+                    "structuredContent": { "outcome": outcome, "destination_appshot": destination_appshot },
                     "isError": !outcome.success
                 })),
                 ServiceResponse::Error { code, message, .. } => tool_error(code, message),
@@ -695,6 +777,10 @@ fn handle_tool_call_with_browser_eval_policy(
             }
         }
         "get_app_state" => app_state::handle_get_app_state(service, heuristics, arguments, model),
+        "desktop_observe_appshot" => {
+            app_state::handle_desktop_observe_appshot(service, arguments, model)
+        }
+        "phone_direct_create_enrollment" => handle_phone_direct_create_enrollment(service),
         name if browser::is_browser_tool(name) => browser::handle_tool_call(
             service,
             name,
@@ -784,6 +870,11 @@ fn handle_action_call(
     action: ActionName,
     mut arguments: Value,
 ) -> Result<Value> {
+    let appshot_id = arguments
+        .get("appshot_id")
+        .and_then(Value::as_str)
+        .and_then(optional_non_empty_string)
+        .ok_or_else(|| anyhow!("appshot_id is required for desktop state-changing actions"))?;
     let snapshot_id = arguments
         .get("snapshot_id")
         .and_then(Value::as_str)
@@ -794,6 +885,7 @@ fn handle_action_call(
         .filter(|index| snapshot_id.is_some() || *index != 0);
     let request = ActionRequest {
         action,
+        appshot_id: Some(appshot_id.to_string()),
         snapshot_id,
         element_index,
         arguments,
@@ -813,6 +905,14 @@ fn handle_action_call(
             }],
             "structuredContent": outcome,
             "isError": !outcome.success
+        })),
+        ServiceResponse::AppShotRequired { rejection } => Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": rejection.message
+            }],
+            "structuredContent": rejection,
+            "isError": true
         })),
         ServiceResponse::Error { code, message, .. } => tool_error(code, message),
         other => Err(anyhow!("unexpected response for action call: {other:?}")),
@@ -1351,10 +1451,11 @@ mod tests {
         CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorCheck,
         DoctorDisplayTopologyReport, DoctorReadiness, DoctorReport, ElementNode,
         ElementNumericValueReadback, ElementTextReadback, EnvironmentInfo, FocusedApp,
-        InputBackendKind, PhoneAppInstallMode, PhoneRequest, PortalCapabilities, RectF,
-        ScrollDirection, SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind,
-        SessionPresenceAction, SessionPresenceIntent, SessionPresenceStatus, SetupCommandReport,
-        ToolAvailability, ToolCapabilities, WindowTargetingSetupReport,
+        InputBackendKind, PhoneAppInstallMode, PhoneEnrollmentPayload, PhoneRequest,
+        PortalCapabilities, RectF, ScrollDirection, SemanticBackendKind, ServiceRequest,
+        ServiceResponse, SessionKind, SessionPresenceAction, SessionPresenceIntent,
+        SessionPresenceStatus, SetupCommandReport, ToolAvailability, ToolCapabilities,
+        WindowTargetingSetupReport,
     };
 
     use crate::app_state::{
@@ -1426,6 +1527,67 @@ mod tests {
         }
     }
 
+    #[test]
+    fn phone_setup_create_enrollment_returns_scannable_single_use_payload() {
+        let service = FakeService::with_response(ServiceResponse::PhoneDirectEnrollment {
+            payload: Box::new(PhoneEnrollmentPayload {
+                protocol: "phone-control.v2".to_string(),
+                endpoint: "wss://saga.example.ts.net:43117/phone-control/v2".to_string(),
+                enrollment_id: "00000000-0000-4000-8000-000000000001".to_string(),
+                bootstrap_credential: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+                expires_at_ms: 1_900_000_000_000,
+            }),
+        });
+        let result =
+            super::handle_phone_direct_create_enrollment(&service).expect("create enrollment");
+
+        assert_eq!(
+            service.take_requests(),
+            [ServiceRequest::PhoneDirectCreateEnrollment]
+        );
+        assert_eq!(result["isError"], false);
+        let image = result["content"]
+            .as_array()
+            .expect("content array")
+            .iter()
+            .find(|item| item["type"] == "image")
+            .expect("QR image attachment");
+        assert_eq!(image["mimeType"], "image/png");
+        use base64::Engine as _;
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(image["data"].as_str().expect("base64 image"))
+            .expect("valid base64");
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+        let enrollment_uri = result["structuredContent"]["enrollment_uri"]
+            .as_str()
+            .expect("enrollment URI");
+        let uri = url::Url::parse(enrollment_uri).expect("valid deep link");
+        assert_eq!(uri.scheme(), "skycua");
+        assert_eq!(uri.host_str(), Some("enroll"));
+        let query = uri
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            query.get("protocol").map(|value| value.as_ref()),
+            Some("phone-control.v2")
+        );
+        assert_eq!(
+            query.get("endpoint").map(|value| value.as_ref()),
+            Some("wss://saga.example.ts.net:43117/phone-control/v2")
+        );
+        assert_eq!(
+            query
+                .get("bootstrap_credential")
+                .map(|value| value.as_ref()),
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        );
+        assert_eq!(
+            result["structuredContent"]["manual_code"],
+            "wss://saga.example.ts.net:43117/phone-control/v2\n00000000-0000-4000-8000-000000000001\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n1900000000000"
+        );
+    }
+
     fn captured_action_request(action: ActionName, arguments: serde_json::Value) -> ActionRequest {
         let service = FakeService::with_response(ServiceResponse::ExecuteAction {
             outcome: ActionOutcome {
@@ -1437,6 +1599,11 @@ mod tests {
             },
         });
 
+        let mut arguments = arguments;
+        arguments
+            .as_object_mut()
+            .expect("test action arguments object")
+            .insert("appshot_id".to_string(), serde_json::json!("shot-test"));
         handle_action_call(&service, action, arguments).unwrap();
 
         let mut requests = service.take_requests();
@@ -1445,6 +1612,71 @@ mod tests {
             ServiceRequest::ExecuteAction { request } => *request,
             other => panic!("expected one ExecuteAction request: {other:?}"),
         }
+    }
+
+    #[test]
+    fn desktop_mutation_without_appshot_is_rejected_before_service_dispatch() {
+        let service = FakeService::default();
+        let error = handle_action_call(
+            &service,
+            ActionName::Click,
+            serde_json::json!({"x": 10.0, "y": 20.0}),
+        )
+        .expect_err("missing appshot_id must fail closed");
+        assert!(error.to_string().contains("appshot_id is required"));
+        assert!(service.take_requests().is_empty());
+    }
+
+    #[test]
+    fn desktop_appshot_required_preserves_fresh_recovery_envelope() {
+        let response: ServiceResponse = serde_json::from_value(serde_json::json!({
+            "type": "app_shot_required",
+            "rejection": {
+                "code": "AppShotRequired",
+                "reason": "stale",
+                "message": "capture again",
+                "fresh_appshot": {
+                    "appshot_id": "fresh-shot",
+                    "trigger": "recovery",
+                    "captured_at": "2026-08-03T00:00:00Z",
+                    "consistency": "stable",
+                    "surface": "desktop",
+                    "app_id": "org.example.App",
+                    "window_id": "window-1",
+                    "bounds": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0, "space": "desktop_logical"},
+                    "semantic_projection": {},
+                    "image": {
+                        "content_id": "image-1",
+                        "mime_type": "image/png",
+                        "size_bytes": 1,
+                        "sha256": "00".repeat(32),
+                        "source": "screenshot",
+                        "persistence": "temporary"
+                    },
+                    "action_snapshot": {"snapshot_id": "snapshot-1", "session_id": "session-1"},
+                    "coverage": {
+                        "pixels_complete": true,
+                        "semantics_complete": true,
+                        "secure_regions_redacted": false,
+                        "projection_truncated": false
+                    },
+                    "capability_profile_id": "desktop-v1"
+                }
+            }
+        }))
+        .expect("valid AppShotRequired response");
+        let service = FakeService::with_response(response);
+        let result = handle_action_call(
+            &service,
+            ActionName::Click,
+            serde_json::json!({"appshot_id": "stale-shot", "x": 10.0, "y": 20.0}),
+        )
+        .expect("structured recovery response");
+        assert_eq!(result["isError"], true);
+        assert_eq!(
+            result["structuredContent"]["fresh_appshot"]["appshot_id"],
+            "fresh-shot"
+        );
     }
 
     fn process_config(browser_eval_enabled: bool) -> McpProcessConfig {
@@ -1509,8 +1741,16 @@ mod tests {
 
     #[test]
     fn desktop_launch_app_dispatches_when_isolated() {
-        let service =
-            FakeService::with_response(ServiceResponse::LaunchApplication { pid: 4242 }).isolated();
+        let service = FakeService::with_response(ServiceResponse::LaunchApplication {
+            pid: 4242,
+            destination_appshot: None,
+            diagnostics: vec![DiagnosticEntry {
+                code: "DestinationAppShotUnavailable".into(),
+                message: "capture unavailable".into(),
+                details: None,
+            }],
+        })
+        .isolated();
         let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
         let model = ModelSessionInfo::default();
         let registry = build_tool_registry(&process_config(false), &model);
@@ -1527,6 +1767,15 @@ mod tests {
 
         assert_eq!(result["isError"], false);
         assert_eq!(result["structuredContent"]["result"]["pid"], 4242);
+        assert!(
+            result["structuredContent"]["result"]
+                .get("destination_appshot")
+                .is_some()
+        );
+        assert_eq!(
+            result["structuredContent"]["result"]["diagnostics"][0]["code"],
+            "DestinationAppShotUnavailable"
+        );
 
         let requests = service.take_requests();
         assert_eq!(requests.len(), 1);
@@ -1537,6 +1786,36 @@ mod tests {
             }
             other => panic!("expected a LaunchApplication request, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn activate_window_preserves_unavailable_destination_appshot() {
+        let service = FakeService::with_response(ServiceResponse::ActivateWindow {
+            outcome: ActionOutcome {
+                success: true,
+                message: "activated".to_string(),
+                code: "WindowActivated".to_string(),
+                diagnostics: vec![DiagnosticEntry {
+                    code: "DestinationAppShotUnavailable".to_string(),
+                    message: "capture unavailable".to_string(),
+                    details: None,
+                }],
+                agent_cursor: None,
+            },
+            destination_appshot: None,
+        });
+        let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
+        let model = ModelSessionInfo::default();
+        let result = handle_tool_call(
+            &service,
+            &heuristics,
+            &model,
+            "activate_window",
+            json!({"window_id": "window-1"}),
+        )
+        .expect("activate response");
+        assert_eq!(result["isError"], false);
+        assert!(result["structuredContent"]["destination_appshot"].is_null());
     }
 
     #[test]
@@ -1562,7 +1841,7 @@ mod tests {
             &model,
             &registry,
             "browser_eval",
-            json!({"tab_id": "tab-1", "expression": "document.title"}),
+            json!({"tab_id": "tab-1", "appshot_id": "appshot-1", "expression": "document.title"}),
         )
         .expect("frozen eval policy should permit dispatch");
 
@@ -1602,7 +1881,7 @@ mod tests {
             (
                 "observe",
                 json!({"surface": "browser", "tab_id": "tab-1"}),
-                "browser_snapshot",
+                "browser_appshot",
                 json!({"tab_id": "tab-1"}),
             ),
             (
@@ -1677,7 +1956,7 @@ mod tests {
             &model,
             &registry,
             "desktop_keyboard",
-            json!({"operation": "press_key", "key": "Enter"}),
+            json!({"operation": "press_key", "key": "Enter", "appshot_id": "desktop-shot-1"}),
         )
         .expect("desktop keyboard call");
         assert_eq!(result["isError"], false);
@@ -2091,6 +2370,7 @@ mod tests {
             "browser_scroll",
             json!({
                 "tab_id": "tab-1",
+                "appshot_id": "browser-shot-1",
                 "delta_y": 500,
                 "x": null,
                 "y": null
@@ -2139,6 +2419,7 @@ mod tests {
             "browser_scroll",
             json!({
                 "tab_id": "tab-1",
+                "appshot_id": "browser-shot-1",
                 "delta_y": 500,
                 "x": null
             }),
@@ -2159,6 +2440,7 @@ mod tests {
             "browser_scroll",
             json!({
                 "tab_id": "tab-1",
+                "appshot_id": "browser-shot-1",
                 "delta_y": 500,
                 "x": 10
             }),
@@ -2198,9 +2480,7 @@ mod tests {
             "observe",
             json!({
                 "surface": "desktop",
-                "detail": null,
-                "capture_screen": null,
-                "screenshot_delivery": null
+                "detail": null
             }),
         )
         .expect("desktop observe sentinels should pass grouped schema validation");
@@ -2211,10 +2491,12 @@ mod tests {
             "desktop observe should dispatch, got result: {result}"
         );
         match requests.remove(0) {
-            ServiceRequest::GetAppState {
-                selector: None,
-                capture_screen,
-            } => assert_eq!(capture_screen, CaptureScreenMode::IfChanged),
+            ServiceRequest::AppShotCapture {
+                target: None,
+                frontmost: true,
+                flags,
+                ..
+            } => assert!(flags.include_ax_text),
             other => panic!("expected default desktop observe request: {other:?}"),
         }
 
@@ -2235,6 +2517,7 @@ mod tests {
             "desktop_pointer",
             json!({
                 "operation": "click",
+                "appshot_id": "desktop-shot-1",
                 "snapshot_id": "",
                 "element_index": 0,
                 "x": 12.5,
@@ -2275,6 +2558,7 @@ mod tests {
             "phone_app_install",
             json!({
                 "session_id": "phone-1",
+                "appshot_id": "phone-shot-1",
                 "apk_paths": ["/tmp/base.apk"],
                 "mode": null,
                 "reinstall": null,
@@ -3154,44 +3438,50 @@ mod tests {
         let pointer = find_tool("desktop_pointer");
         let schema = &pointer["inputSchema"];
         assert_eq!(schema["additionalProperties"], false);
-        assert_eq!(schema["required"], json!(["operation"]));
+        assert_eq!(schema["required"], json!(["operation", "appshot_id"]));
         assert!(schema["properties"].get("snapshot_id").is_some());
         assert!(schema.get("allOf").is_some());
         assert!(
             schema_accepts(
                 schema,
-                &json!({"operation": "drag", "snapshot_id": "snap-1", "element_index": 3, "to_x": 500, "to_y": 20})
+                &json!({"operation": "drag", "appshot_id":"appshot-1", "snapshot_id": "snap-1", "element_index": 3, "to_x": 500, "to_y": 20})
             ),
             "desktop_pointer drag must allow an observed source element dragged to explicit coordinates"
         );
         assert!(
             schema_accepts(
                 schema,
-                &json!({"operation": "drag", "snapshot_id": "snap-1", "from_x": 1, "from_y": 2, "to_element_index": 3})
+                &json!({"operation": "drag", "appshot_id":"appshot-1", "snapshot_id": "snap-1", "from_x": 1, "from_y": 2, "to_element_index": 3})
             ),
             "desktop_pointer drag must allow explicit source coordinates dragged to an observed target element"
         );
         assert!(
             schema_accepts(
                 schema,
-                &json!({"operation": "drag", "from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4, "duration_ms": 500})
+                &json!({"operation": "drag", "appshot_id":"appshot-1", "from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4, "duration_ms": 500})
             ),
             "desktop_pointer drag must accept an optional duration_ms that paces the gesture"
         );
         assert!(
-            schema_accepts(schema, &json!({"operation": "click", "x": 1, "y": 2})),
+            schema_accepts(
+                schema,
+                &json!({"operation": "click", "appshot_id":"appshot-1", "x": 1, "y": 2})
+            ),
             "desktop_pointer click must accept a bare coordinate pair"
         );
         assert!(
             !schema_accepts(
                 schema,
-                &json!({"operation": "click", "x": 1, "y": 2, "duration_ms": 500})
+                &json!({"operation": "click", "appshot_id":"appshot-1", "x": 1, "y": 2, "duration_ms": 500})
             ),
             "duration_ms is drag-only; click must still reject it"
         );
 
         let activate = find_tool("desktop_action");
-        assert_eq!(activate["inputSchema"]["required"], json!(["operation"]));
+        assert_eq!(
+            activate["inputSchema"]["required"],
+            json!(["operation", "appshot_id"])
+        );
         assert_eq!(activate["inputSchema"]["additionalProperties"], false);
         assert!(
             activate["inputSchema"]["properties"]
@@ -3207,7 +3497,10 @@ mod tests {
 
         let type_text = find_tool("desktop_keyboard");
         assert_eq!(type_text["inputSchema"]["additionalProperties"], false);
-        assert_eq!(type_text["inputSchema"]["required"], json!(["operation"]));
+        assert_eq!(
+            type_text["inputSchema"]["required"],
+            json!(["operation", "appshot_id"])
+        );
         let type_text_branch = type_text["inputSchema"]["allOf"]
             .as_array()
             .and_then(|all_of| {
@@ -3220,13 +3513,16 @@ mod tests {
                 })
             })
             .expect("desktop_keyboard type_text branch");
-        assert_eq!(type_text_branch["required"], json!(["operation", "text"]));
+        assert_eq!(
+            type_text_branch["required"],
+            json!(["operation", "appshot_id", "text"])
+        );
 
         let get_app_state = find_tool("observe");
         assert!(
             get_app_state["description"]
                 .as_str()
-                .is_some_and(|description| description.contains("Desktop returns elements"))
+                .is_some_and(|description| description.contains("canonical AppShot"))
         );
         let get_app_state_schema = &get_app_state["inputSchema"];
         assert_eq!(
@@ -4730,6 +5026,11 @@ mod tests {
                 "phone_notification_reply",
                 "phone_app_action",
                 "phone_app_install",
+                "phone_content",
+                "phone_clipboard",
+                "phone_editor",
+                "phone_camera",
+                "phone_storage",
             ]
         );
 
@@ -4740,12 +5041,12 @@ mod tests {
         assert!(
             observe["inputSchema"]["properties"]
                 .get("capture_screen")
-                .is_some()
+                .is_none()
         );
         assert!(
             observe["description"]
                 .as_str()
-                .is_some_and(|description| description.contains("snapshot_id"))
+                .is_some_and(|description| description.contains("canonical AppShot"))
         );
 
         let text_only_tools = build_tool_definitions(false, false);
@@ -4942,7 +5243,7 @@ mod tests {
             &heuristics,
             &ModelSessionInfo::default(),
             "click",
-            json!({"snapshot_id": "snap-1", "element_index": 3, "x": 12.5, "y": 42.0}),
+            json!({"appshot_id": "appshot-1", "snapshot_id": "snap-1", "element_index": 3, "x": 12.5, "y": 42.0}),
         )
         .unwrap();
 

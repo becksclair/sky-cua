@@ -3,13 +3,15 @@ use std::collections::VecDeque;
 
 use serde_json::json;
 use sky_cua_platform::model::{
-    BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
-    BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserActionResponse, BrowserClaimTabResponse,
-    BrowserControlEventWindow, BrowserControlPlaneSnapshot, BrowserControlSchedulerSnapshot,
-    BrowserEvalResponse, BrowserListTabsResponse, BrowserMigrationMode, BrowserMoveMouseResponse,
-    BrowserOpenResponse, BrowserRequest, BrowserResponse, BrowserSnapshotResponse,
-    BrowserStatusReport, BrowserTab, BrowserTargetAvailability, BrowserTargetKind, DiagnosticEntry,
-    ServiceRequest, ServiceResponse,
+    AppShotActionSnapshot, AppShotCapture, AppShotConsistency, AppShotCoverage, AppShotEnvelope,
+    AppShotTrigger, BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
+    BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserActionResponse, BrowserAppShotResponse,
+    BrowserClaimTabResponse, BrowserControlEventWindow, BrowserControlPlaneSnapshot,
+    BrowserControlSchedulerSnapshot, BrowserEvalResponse, BrowserListTabsResponse,
+    BrowserMigrationMode, BrowserMoveMouseResponse, BrowserOpenResponse, BrowserRequest,
+    BrowserResponse, BrowserSnapshotResponse, BrowserStatusReport, BrowserTab,
+    BrowserTargetAvailability, BrowserTargetKind, ContentPersistence, ContentRef, ContentSource,
+    DiagnosticEntry, PixelSize, ServiceRequest, ServiceResponse,
 };
 
 use crate::heuristics::HeuristicsRegistry;
@@ -102,7 +104,10 @@ fn browser_scroll_schema_matches_delta_defaults() {
         .find(|tool| tool["name"] == "browser_scroll")
         .expect("browser_scroll tool is advertised");
 
-    assert_eq!(scroll_tool["inputSchema"]["required"], json!(["tab_id"]));
+    assert_eq!(
+        scroll_tool["inputSchema"]["required"],
+        json!(["tab_id", "appshot_id"])
+    );
     let description = scroll_tool["description"]
         .as_str()
         .expect("browser_scroll description");
@@ -224,14 +229,14 @@ fn browser_input_schema_accepts_element_ref_alternative() {
     assert!(
         schema_accepts(
             schema,
-            &json!({"operation": "click", "tab_id": "tab-1", "ref": "opaque-token"})
+            &json!({"operation": "click", "tab_id": "tab-1", "ref": "opaque-token", "appshot_id": "appshot-1"})
         ),
         "click by ref must be accepted"
     );
     assert!(
         schema_accepts(
             schema,
-            &json!({"operation": "click", "tab_id": "tab-1", "x": 1, "y": 1})
+            &json!({"operation": "click", "tab_id": "tab-1", "x": 1, "y": 1, "appshot_id": "appshot-1"})
         ),
         "click by coordinates must remain accepted"
     );
@@ -240,14 +245,14 @@ fn browser_input_schema_accepts_element_ref_alternative() {
     assert!(
         schema_accepts(
             schema,
-            &json!({"operation": "type_text", "tab_id": "tab-1", "text": "hi", "ref": "opaque-token"})
+            &json!({"operation": "type_text", "tab_id": "tab-1", "text": "hi", "ref": "opaque-token", "appshot_id": "appshot-1"})
         ),
         "type_text with a ref must be accepted"
     );
     assert!(
         schema_accepts(
             schema,
-            &json!({"operation": "type_text", "tab_id": "tab-1", "text": "hi"})
+            &json!({"operation": "type_text", "tab_id": "tab-1", "text": "hi", "appshot_id": "appshot-1"})
         ),
         "type_text without a ref must remain accepted"
     );
@@ -419,7 +424,7 @@ fn browser_type_text_preserves_literal_text() {
         &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
         &ModelSessionInfo::default(),
         "browser_type_text",
-        json!({"target": "user_chrome", "tab_id": "123", "text": " hello "}),
+        json!({"target": "user_chrome", "tab_id": "123", "text": " hello ", "appshot_id": "appshot-1"}),
     )
     .unwrap();
 
@@ -433,6 +438,7 @@ fn browser_type_text_preserves_literal_text() {
                 target: Some(BrowserTargetKind::UserChrome),
                 tab_id: "123".to_string(),
                 text: " hello ".to_string(),
+                appshot_id: Some("appshot-1".to_string()),
             },
         }
     );
@@ -500,7 +506,7 @@ fn browser_move_mouse_routes_to_service_and_returns_coordinates() {
         &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
         &ModelSessionInfo::default(),
         "browser_move_mouse",
-        json!({"target": "user_chrome", "tab_id": "123", "x": 240, "y": 160}),
+        json!({"target": "user_chrome", "tab_id": "123", "x": 240, "y": 160, "appshot_id": "appshot-1"}),
     )
     .unwrap();
 
@@ -523,6 +529,7 @@ fn browser_move_mouse_routes_to_service_and_returns_coordinates() {
                 x: 240.0,
                 y: 160.0,
                 wait_for_arrival: true,
+                appshot_id: Some("appshot-1".to_string()),
             },
         }
     );
@@ -568,6 +575,7 @@ fn browser_open_routes_to_service_and_returns_tab() {
                 url: Some("https://example.test/".to_string()),
                 active: true,
             }),
+            destination_appshot: None,
             diagnostics: Vec::new(),
         },
     }));
@@ -609,6 +617,7 @@ fn browser_open_summary_reports_failure_without_tab() {
     let response = BrowserOpenResponse {
         target: BrowserTargetKind::UserChrome,
         tab: None,
+        destination_appshot: None,
         diagnostics: vec![DiagnosticEntry {
             code: "BrowserBridgeDisconnected".to_string(),
             message: "No browser bridge is connected.".to_string(),
@@ -633,6 +642,7 @@ fn browser_open_partial_response_is_mcp_error_with_tab() {
                 url: Some("about:blank".to_string()),
                 active: true,
             }),
+            destination_appshot: None,
             diagnostics: vec![DiagnosticEntry {
                 code: "BrowserOpenPartial".to_string(),
                 message: "Created browser tab 616, but browser_open could not complete attach."
@@ -1564,7 +1574,7 @@ fn browser_eval_enabled_by_default_routes_to_service() {
         &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
         &ModelSessionInfo::default(),
         "browser_eval",
-        json!({"tab_id": "tab-1", "expression": "1"}),
+        json!({"tab_id": "tab-1", "expression": "1", "appshot_id": "appshot-1"}),
     )
     .unwrap();
 
@@ -1619,7 +1629,7 @@ fn browser_eval_routes_expression_to_service() {
         &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
         &ModelSessionInfo::default(),
         "browser_eval",
-        json!({"tab_id": "tab-1", "expression": "(() => ({ok: true}))()"}),
+        json!({"tab_id": "tab-1", "expression": "(() => ({ok: true}))()", "appshot_id": "appshot-1"}),
     )
     .unwrap();
 
@@ -1638,6 +1648,7 @@ fn browser_eval_routes_expression_to_service() {
                 target: None,
                 tab_id: "tab-1".to_string(),
                 expression: "(() => ({ok: true}))()".to_string(),
+                appshot_id: Some("appshot-1".to_string()),
             },
         }]
     );
@@ -1919,4 +1930,77 @@ fn browser_screenshot_with_empty_data_reports_error() {
 
     assert_eq!(result["isError"], true);
     assert_eq!(result["content"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn grouped_browser_observe_attaches_exact_appshot_image_and_envelope() {
+    let envelope = AppShotEnvelope {
+        appshot_id: "shot-1".into(),
+        trigger: AppShotTrigger::Observe,
+        captured_at: chrono::Utc::now(),
+        consistency: AppShotConsistency::Stable,
+        capture: AppShotCapture::Browser {
+            tab_id: "tab-1".into(),
+            url: "https://example.test/".into(),
+            title: Some("Example".into()),
+            viewport: PixelSize {
+                width: 800,
+                height: 600,
+            },
+            document_generation: 7,
+            semantic_snapshot: json!({"elements": [{"ref": "el-1"}]}),
+        },
+        image: ContentRef {
+            content_id: "content-1".into(),
+            device_id: None,
+            link_epoch: None,
+            mime_type: "image/png".into(),
+            filename: Some("capture.png".into()),
+            size_bytes: 3,
+            sha256: "00".repeat(32),
+            source: ContentSource::Screenshot,
+            expires_at_ms: Some(3_600_000),
+            persistence: ContentPersistence::Temporary,
+        },
+        action_snapshot: AppShotActionSnapshot {
+            snapshot_id: "actions-1".into(),
+            session_id: None,
+            subject_generation: Some(7),
+        },
+        coverage: AppShotCoverage {
+            pixels_complete: true,
+            semantics_complete: true,
+            secure_regions_redacted: false,
+            projection_truncated: false,
+            total_semantic_nodes: Some(1),
+            projected_semantic_nodes: Some(1),
+        },
+        capability_profile_id: "browser-v1".into(),
+        diagnostics: vec![],
+    };
+    let service = FakeService::with_response(browser_service_response!(AppShot {
+        response: BrowserAppShotResponse {
+            appshot: envelope,
+            image_data_base64: "aW1n".into(),
+            image_mime_type: "image/png".into(),
+        },
+    }));
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo {
+            supports_images: Some(true),
+        },
+        "browser_appshot",
+        json!({"tab_id": "tab-1", "target": "user_chrome"}),
+    )
+    .expect("grouped browser observe should dispatch");
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["structuredContent"]["appshot_id"], "shot-1");
+    assert_eq!(result["content"][1]["type"], "image");
+    assert_eq!(result["content"][1]["data"], "aW1n");
+    assert_eq!(
+        result["structuredContent"]["image"]["content_id"],
+        "content-1"
+    );
 }

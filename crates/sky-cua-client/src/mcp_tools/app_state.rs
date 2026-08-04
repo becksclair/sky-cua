@@ -1,6 +1,9 @@
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
-use sky_cua_platform::model::{DiagnosticEntry, ServiceRequest, ServiceResponse};
+use sky_cua_platform::model::{
+    AppShotCapture, AppShotCaptureFlags, AppShotEnvelope, DiagnosticEntry, ServiceRequest,
+    ServiceResponse, WindowTarget,
+};
 
 use crate::app_state::{
     APP_STATE_DEFAULT_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_LIMIT,
@@ -109,6 +112,145 @@ pub(super) fn handle_get_app_state(
         ServiceResponse::Error { code, message, .. } => tool_error(code, message),
         other => Err(anyhow!("unexpected response for get_app_state: {other:?}")),
     }
+}
+
+/// Canonical desktop `observe` path. It calls the service-owned exact-window
+/// producer directly, so every MCP host receives the same AppShot without an
+/// AppServer or host-specific pre-turn hook.
+pub(super) fn handle_desktop_observe_appshot(
+    service: &impl McpService,
+    arguments: Value,
+    model: &ModelSessionInfo,
+) -> Result<Value> {
+    if arguments.get("desktop_file_id").is_some_and(|value| {
+        !value.is_null() && value.as_str().is_none_or(|value| !value.is_empty())
+    }) {
+        return invalid_request_tool_error(
+            "desktop observe AppShots require an exact window-resolvable selector; desktop_file_id is not supported"
+                .to_string(),
+        );
+    }
+    let element_options = match parse_app_state_element_options(&arguments) {
+        Ok(options) => options,
+        Err(error) => return invalid_request_tool_error(error.to_string()),
+    };
+    let target = WindowTarget {
+        app_id: arguments
+            .get("app_id")
+            .and_then(Value::as_str)
+            .and_then(super::optional_non_empty_string),
+        title: arguments
+            .get("window_title")
+            .and_then(Value::as_str)
+            .and_then(super::optional_non_empty_string),
+        wm_class: arguments
+            .get("name")
+            .and_then(Value::as_str)
+            .and_then(super::optional_non_empty_string),
+        ..Default::default()
+    };
+    let target = (target != WindowTarget::default()).then_some(target);
+    let request_id = format!("observe-{}", uuid::Uuid::new_v4());
+    match service.call(&ServiceRequest::AppShotCapture {
+        request_id,
+        frontmost: target.is_none(),
+        target,
+        flags: AppShotCaptureFlags {
+            include_ax_text: true,
+        },
+    })? {
+        ServiceResponse::AppShotCapture { result } => {
+            let mut appshot = result.appshot.map(|value| *value).ok_or_else(|| {
+                anyhow!("desktop AppShot response omitted its canonical envelope")
+            })?;
+            project_desktop_appshot(&mut appshot, &element_options);
+            let structured_content = serde_json::to_value(&appshot)?;
+            let mut content = vec![json!({
+                "type": "text",
+                "text": format!(
+                    "Desktop AppShot {} for window {}; consistency={:?}",
+                    appshot.appshot_id,
+                    desktop_window_id(&appshot).unwrap_or("unknown"),
+                    appshot.consistency
+                )
+            })];
+            if model.can_receive_images() {
+                match std::fs::read(&result.image.path) {
+                    Ok(bytes) => {
+                        use base64::Engine as _;
+                        content.push(json!({
+                            "type": "image",
+                            "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+                            "mimeType": result.image.mime_type,
+                        }));
+                    }
+                    Err(error) => {
+                        appshot.diagnostics.push(DiagnosticEntry {
+                            code: "AppShotImageAttachmentFailed".to_string(),
+                            message: format!("{}: {error}", result.image.path),
+                            details: None,
+                        });
+                    }
+                }
+            }
+            Ok(json!({
+                "content": content,
+                "structuredContent": structured_content,
+                "isError": false
+            }))
+        }
+        ServiceResponse::Error { code, message, .. } => tool_error(code, message),
+        other => Err(anyhow!(
+            "unexpected response for desktop observe AppShot: {other:?}"
+        )),
+    }
+}
+
+fn desktop_window_id(appshot: &AppShotEnvelope) -> Option<&str> {
+    match &appshot.capture {
+        AppShotCapture::Desktop { window_id, .. } => Some(window_id),
+        _ => None,
+    }
+}
+
+fn project_desktop_appshot(appshot: &mut AppShotEnvelope, options: &AppStateElementOptions) {
+    let AppShotCapture::Desktop {
+        semantic_projection,
+        ..
+    } = &mut appshot.capture
+    else {
+        return;
+    };
+    let Some(elements) = semantic_projection
+        .get_mut("elements")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    let total = elements.len();
+    let query = options
+        .element_query
+        .as_deref()
+        .map(str::to_ascii_lowercase);
+    let mut projected: Vec<Value> = elements
+        .drain(..)
+        .filter(|element| {
+            query
+                .as_ref()
+                .is_none_or(|query| element.to_string().to_ascii_lowercase().contains(query))
+        })
+        .skip(options.element_offset)
+        .take(
+            options
+                .element_limit
+                .unwrap_or(APP_STATE_DEFAULT_ELEMENT_LIMIT),
+        )
+        .collect();
+    let projected_len = projected.len();
+    elements.append(&mut projected);
+    appshot.coverage.total_semantic_nodes = Some(total as u64);
+    appshot.coverage.projected_semantic_nodes = Some(projected_len as u64);
+    appshot.coverage.projection_truncated = projected_len < total;
 }
 
 pub(super) fn parse_app_state_detail(arguments: &Value) -> Result<AppStateDetail> {

@@ -569,6 +569,7 @@ mod tests {
     fn xwayland_fallback_elements_stay_on_portal_pointer_backend() {
         let request = ActionRequest {
             action: ActionName::Click,
+            appshot_id: None,
             snapshot_id: Some("snapshot-1".to_string()),
             element_index: Some(1),
             arguments: json!({}),
@@ -609,6 +610,7 @@ mod tests {
     fn parses_explicit_drag_destination_coordinates() {
         let request = ActionRequest {
             action: ActionName::Drag,
+            appshot_id: None,
             snapshot_id: None,
             element_index: None,
             arguments: json!({"to_x": 320.0, "to_y": 240.0}),
@@ -729,6 +731,7 @@ mod tests {
     fn snapshot_explicit_coordinates_reject_points_outside_model_image_bounds() {
         let request = ActionRequest {
             action: ActionName::Click,
+            appshot_id: None,
             snapshot_id: Some("snapshot-1".to_string()),
             element_index: None,
             arguments: json!({"x": 1316.0, "y": 785.0}),
@@ -776,6 +779,7 @@ mod tests {
     fn snapshot_explicit_coordinates_reject_image_edge_coordinates() {
         let request = ActionRequest {
             action: ActionName::Click,
+            appshot_id: None,
             snapshot_id: Some("snapshot-1".to_string()),
             element_index: None,
             arguments: json!({"x": 914.0, "y": 899.0}),
@@ -993,6 +997,7 @@ mod tests {
     fn portal_snapshot_coordinates_fail_without_dispatch_source_for_screenshot_fallback() {
         let request = ActionRequest {
             action: ActionName::Click,
+            appshot_id: None,
             snapshot_id: Some("snapshot-1".to_string()),
             element_index: None,
             arguments: json!({"x": 1280.0, "y": 720.0}),
@@ -1045,6 +1050,7 @@ mod tests {
     fn portal_snapshot_coordinates_fail_without_dispatch_source_for_pipewire_capture() {
         let request = ActionRequest {
             action: ActionName::Click,
+            appshot_id: None,
             snapshot_id: Some("snapshot-1".to_string()),
             element_index: None,
             arguments: json!({"x": 470.0, "y": 280.0}),
@@ -1092,6 +1098,7 @@ mod tests {
     fn portal_snapshot_semantic_element_maps_when_dispatch_source_covers_capture() {
         let request = ActionRequest {
             action: ActionName::Click,
+            appshot_id: None,
             snapshot_id: Some("snapshot-1".to_string()),
             element_index: Some(1),
             arguments: json!({}),
@@ -1170,6 +1177,7 @@ mod tests {
     fn portal_snapshot_element_fails_without_dispatch_source_for_pipewire_capture() {
         let request = ActionRequest {
             action: ActionName::Click,
+            appshot_id: None,
             snapshot_id: Some("snapshot-1".to_string()),
             element_index: Some(1),
             arguments: json!({}),
@@ -1358,6 +1366,7 @@ mod tests {
     fn linux_virtual_snapshot_coordinates_fail_without_logical_rect() {
         let request = ActionRequest {
             action: ActionName::Click,
+            appshot_id: None,
             snapshot_id: Some("snapshot-1".to_string()),
             element_index: None,
             arguments: json!({"x": 640.0, "y": 360.0}),
@@ -1576,6 +1585,7 @@ mod tests {
         };
         let request = ActionRequest {
             action: ActionName::Drag,
+            appshot_id: None,
             snapshot_id: Some("snapshot-1".to_string()),
             element_index: Some(4),
             arguments: json!({"to_x": 640.0, "to_y": 480.0}),

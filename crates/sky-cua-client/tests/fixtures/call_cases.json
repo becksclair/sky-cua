@@ -156,7 +156,7 @@
     },
     {
       "branch": "desktop",
-      "handler_id": "get_app_state",
+      "handler_id": "desktop_observe_appshot",
       "invalid": {
         "include_mdns": true,
         "surface": "desktop"
@@ -168,7 +168,7 @@
     },
     {
       "branch": "browser",
-      "handler_id": "browser_snapshot",
+      "handler_id": "browser_appshot",
       "invalid": {
         "surface": "__invalid__",
         "tab_id": "tab-1"
@@ -321,12 +321,14 @@
       "branch": "focus",
       "handler_id": "focus_element",
       "invalid": {
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "operation": "__invalid__",
         "snapshot_id": "snapshot-1"
       },
       "tool": "desktop_semantic",
       "valid": {
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "operation": "focus",
         "snapshot_id": "snapshot-1"
@@ -336,12 +338,14 @@
       "branch": "select",
       "handler_id": "select_element",
       "invalid": {
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "operation": "__invalid__",
         "snapshot_id": "snapshot-1"
       },
       "tool": "desktop_semantic",
       "valid": {
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "operation": "select",
         "snapshot_id": "snapshot-1"
@@ -351,12 +355,14 @@
       "branch": "expand",
       "handler_id": "expand_element",
       "invalid": {
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "operation": "__invalid__",
         "snapshot_id": "snapshot-1"
       },
       "tool": "desktop_semantic",
       "valid": {
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "operation": "expand",
         "snapshot_id": "snapshot-1"
@@ -366,12 +372,14 @@
       "branch": "collapse",
       "handler_id": "collapse_element",
       "invalid": {
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "operation": "__invalid__",
         "snapshot_id": "snapshot-1"
       },
       "tool": "desktop_semantic",
       "valid": {
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "operation": "collapse",
         "snapshot_id": "snapshot-1"
@@ -392,12 +400,14 @@
       "branch": "default",
       "handler_id": "browser_move_mouse",
       "invalid": {
-        "tab_id": false,
+        "appshot_id": false,
+        "tab_id": "tab-1",
         "x": 1,
         "y": 1
       },
       "tool": "browser_move_mouse",
       "valid": {
+        "appshot_id": "appshot-1",
         "tab_id": "tab-1",
         "x": 1,
         "y": 1
@@ -485,11 +495,13 @@
       "branch": "default",
       "handler_id": "phone_app_force_stop",
       "invalid": {
-        "package_name": false,
+        "appshot_id": false,
+        "package_name": "com.example.app",
         "session_id": "phone-1"
       },
       "tool": "phone_app_force_stop",
       "valid": {
+        "appshot_id": "appshot-1",
         "package_name": "com.example.app",
         "session_id": "phone-1"
       }
@@ -498,11 +510,13 @@
       "branch": "default",
       "handler_id": "toggle_element",
       "invalid": {
-        "element_index": false,
+        "appshot_id": false,
+        "element_index": 1,
         "snapshot_id": "snapshot-1"
       },
       "tool": "desktop_toggle",
       "valid": {
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "snapshot_id": "snapshot-1"
       }
@@ -511,12 +525,14 @@
       "branch": "default",
       "handler_id": "scroll",
       "invalid": {
-        "direction": false,
+        "appshot_id": false,
+        "direction": "down",
         "element_index": 1,
         "snapshot_id": "snapshot-1"
       },
       "tool": "desktop_scroll",
       "valid": {
+        "appshot_id": "appshot-1",
         "direction": "down",
         "element_index": 1,
         "snapshot_id": "snapshot-1"
@@ -526,11 +542,13 @@
       "branch": "default",
       "handler_id": "browser_scroll",
       "invalid": {
-        "delta_y": false,
+        "appshot_id": false,
+        "delta_y": 300,
         "tab_id": "tab-1"
       },
       "tool": "browser_scroll",
       "valid": {
+        "appshot_id": "appshot-1",
         "delta_y": 300,
         "tab_id": "tab-1"
       }
@@ -539,12 +557,14 @@
       "branch": "click",
       "handler_id": "click",
       "invalid": {
+        "appshot_id": "appshot-1",
         "operation": "__invalid__",
         "x": 1,
         "y": 1
       },
       "tool": "desktop_pointer",
       "valid": {
+        "appshot_id": "appshot-1",
         "operation": "click",
         "x": 1,
         "y": 1
@@ -554,12 +574,14 @@
       "branch": "secondary_click",
       "handler_id": "perform_secondary_action",
       "invalid": {
+        "appshot_id": "appshot-1",
         "operation": "__invalid__",
         "x": 1,
         "y": 1
       },
       "tool": "desktop_pointer",
       "valid": {
+        "appshot_id": "appshot-1",
         "operation": "secondary_click",
         "x": 1,
         "y": 1
@@ -569,6 +591,7 @@
       "branch": "drag",
       "handler_id": "drag",
       "invalid": {
+        "appshot_id": "appshot-1",
         "from_x": 1,
         "from_y": 1,
         "operation": "__invalid__",
@@ -577,6 +600,7 @@
       },
       "tool": "desktop_pointer",
       "valid": {
+        "appshot_id": "appshot-1",
         "from_x": 1,
         "from_y": 1,
         "operation": "drag",
@@ -588,11 +612,13 @@
       "branch": "type_text",
       "handler_id": "type_text",
       "invalid": {
+        "appshot_id": "appshot-1",
         "operation": "__invalid__",
         "text": "hello"
       },
       "tool": "desktop_keyboard",
       "valid": {
+        "appshot_id": "appshot-1",
         "operation": "type_text",
         "text": "hello"
       }
@@ -601,11 +627,13 @@
       "branch": "press_key",
       "handler_id": "press_key",
       "invalid": {
+        "appshot_id": "appshot-1",
         "key": "Enter",
         "operation": "__invalid__"
       },
       "tool": "desktop_keyboard",
       "valid": {
+        "appshot_id": "appshot-1",
         "key": "Enter",
         "operation": "press_key"
       }
@@ -614,12 +642,14 @@
       "branch": "activate",
       "handler_id": "activate_element",
       "invalid": {
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "operation": "__invalid__",
         "snapshot_id": "snapshot-1"
       },
       "tool": "desktop_action",
       "valid": {
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "operation": "activate",
         "snapshot_id": "snapshot-1"
@@ -630,6 +660,7 @@
       "handler_id": "perform_action",
       "invalid": {
         "action_index": 0,
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "operation": "__invalid__",
         "snapshot_id": "snapshot-1"
@@ -637,6 +668,7 @@
       "tool": "desktop_action",
       "valid": {
         "action_index": 0,
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "operation": "perform_action",
         "snapshot_id": "snapshot-1"
@@ -661,12 +693,14 @@
       "branch": "default",
       "handler_id": "set_value",
       "invalid": {
-        "element_index": false,
+        "appshot_id": false,
+        "element_index": 1,
         "snapshot_id": "snapshot-1",
         "value": "hello"
       },
       "tool": "desktop_set_value",
       "valid": {
+        "appshot_id": "appshot-1",
         "element_index": 1,
         "snapshot_id": "snapshot-1",
         "value": "hello"
@@ -698,6 +732,7 @@
       "branch": "click",
       "handler_id": "browser_click",
       "invalid": {
+        "appshot_id": "appshot-1",
         "operation": "__invalid__",
         "tab_id": "tab-1",
         "x": 1,
@@ -705,6 +740,7 @@
       },
       "tool": "browser_input",
       "valid": {
+        "appshot_id": "appshot-1",
         "operation": "click",
         "tab_id": "tab-1",
         "x": 1,
@@ -715,6 +751,7 @@
       "branch": "type_text",
       "handler_id": "browser_type_text",
       "invalid": {
+        "appshot_id": "appshot-1",
         "operation": "type_text",
         "tab_id": "tab-1",
         "text": "hello",
@@ -723,6 +760,7 @@
       },
       "tool": "browser_input",
       "valid": {
+        "appshot_id": "appshot-1",
         "operation": "type_text",
         "tab_id": "tab-1",
         "text": "hello"
@@ -732,12 +770,14 @@
       "branch": "press_key",
       "handler_id": "browser_press_key",
       "invalid": {
+        "appshot_id": "appshot-1",
         "key": "Enter",
         "operation": "__invalid__",
         "tab_id": "tab-1"
       },
       "tool": "browser_input",
       "valid": {
+        "appshot_id": "appshot-1",
         "key": "Enter",
         "operation": "press_key",
         "tab_id": "tab-1"
@@ -747,6 +787,7 @@
       "branch": "tap",
       "handler_id": "phone_tap",
       "invalid": {
+        "appshot_id": "appshot-1",
         "operation": "tap",
         "session_id": "phone-1",
         "x": 1,
@@ -754,6 +795,7 @@
       },
       "tool": "phone_pointer",
       "valid": {
+        "appshot_id": "appshot-1",
         "operation": "tap",
         "phone_snapshot_id": "phone-snapshot-1",
         "session_id": "phone-1",
@@ -765,6 +807,7 @@
       "branch": "swipe",
       "handler_id": "phone_swipe",
       "invalid": {
+        "appshot_id": "appshot-1",
         "end_x": 2,
         "end_y": 2,
         "operation": "__invalid__",
@@ -775,6 +818,7 @@
       },
       "tool": "phone_pointer",
       "valid": {
+        "appshot_id": "appshot-1",
         "end_x": 2,
         "end_y": 2,
         "operation": "swipe",
@@ -788,12 +832,14 @@
       "branch": "type_text",
       "handler_id": "phone_type_text",
       "invalid": {
+        "appshot_id": "appshot-1",
         "operation": "__invalid__",
         "session_id": "phone-1",
         "text": "hello"
       },
       "tool": "phone_keyboard",
       "valid": {
+        "appshot_id": "appshot-1",
         "operation": "type_text",
         "session_id": "phone-1",
         "text": "hello"
@@ -803,12 +849,14 @@
       "branch": "press_key",
       "handler_id": "phone_press_key",
       "invalid": {
+        "appshot_id": "appshot-1",
         "key": "BACK",
         "operation": "__invalid__",
         "session_id": "phone-1"
       },
       "tool": "phone_keyboard",
       "valid": {
+        "appshot_id": "appshot-1",
         "key": "BACK",
         "operation": "press_key",
         "session_id": "phone-1"
@@ -818,12 +866,14 @@
       "branch": "open",
       "handler_id": "phone_notification_open",
       "invalid": {
+        "appshot_id": "appshot-1",
         "event_id": "event-1",
         "operation": "__invalid__",
         "session_id": "phone-1"
       },
       "tool": "phone_notification_action",
       "valid": {
+        "appshot_id": "appshot-1",
         "event_id": "event-1",
         "operation": "open",
         "session_id": "phone-1"
@@ -833,12 +883,14 @@
       "branch": "dismiss",
       "handler_id": "phone_notification_dismiss",
       "invalid": {
+        "appshot_id": "appshot-1",
         "event_id": "event-1",
         "operation": "__invalid__",
         "session_id": "phone-1"
       },
       "tool": "phone_notification_action",
       "valid": {
+        "appshot_id": "appshot-1",
         "event_id": "event-1",
         "operation": "dismiss",
         "session_id": "phone-1"
@@ -849,6 +901,7 @@
       "handler_id": "phone_notification_action",
       "invalid": {
         "action_id": "action-1",
+        "appshot_id": "appshot-1",
         "event_id": "event-1",
         "operation": "__invalid__",
         "session_id": "phone-1"
@@ -856,6 +909,7 @@
       "tool": "phone_notification_action",
       "valid": {
         "action_id": "action-1",
+        "appshot_id": "appshot-1",
         "event_id": "event-1",
         "operation": "action",
         "session_id": "phone-1"
@@ -866,6 +920,7 @@
       "handler_id": "phone_notification_reply",
       "invalid": {
         "action_id": false,
+        "appshot_id": "appshot-1",
         "event_id": "event-1",
         "session_id": "phone-1",
         "text": "reply"
@@ -873,6 +928,7 @@
       "tool": "phone_notification_reply",
       "valid": {
         "action_id": "reply-1",
+        "appshot_id": "appshot-1",
         "event_id": "event-1",
         "session_id": "phone-1",
         "text": "reply"
@@ -913,6 +969,7 @@
       "handler_id": "phone_app_install",
       "invalid": {
         "apk_paths": false,
+        "appshot_id": "appshot-1",
         "session_id": "phone-1"
       },
       "tool": "phone_app_install",
@@ -920,6 +977,74 @@
         "apk_paths": [
           "/tmp/example.apk"
         ],
+        "appshot_id": "appshot-1",
+        "session_id": "phone-1"
+      }
+    },
+    {
+      "branch": "describe",
+      "handler_id": "phone_content",
+      "invalid": {
+        "content_id": "content-1",
+        "operation": "__invalid__",
+        "session_id": "phone-1"
+      },
+      "tool": "phone_content",
+      "valid": {
+        "content_id": "content-1",
+        "operation": "describe",
+        "session_id": "phone-1"
+      }
+    },
+    {
+      "branch": "get",
+      "handler_id": "phone_clipboard",
+      "invalid": {
+        "operation": "__invalid__",
+        "session_id": "phone-1"
+      },
+      "tool": "phone_clipboard",
+      "valid": {
+        "operation": "get",
+        "session_id": "phone-1"
+      }
+    },
+    {
+      "branch": "context",
+      "handler_id": "phone_editor",
+      "invalid": {
+        "operation": "__invalid__",
+        "session_id": "phone-1"
+      },
+      "tool": "phone_editor",
+      "valid": {
+        "operation": "context",
+        "session_id": "phone-1"
+      }
+    },
+    {
+      "branch": "enumerate",
+      "handler_id": "phone_camera",
+      "invalid": {
+        "operation": "__invalid__",
+        "session_id": "phone-1"
+      },
+      "tool": "phone_camera",
+      "valid": {
+        "operation": "enumerate",
+        "session_id": "phone-1"
+      }
+    },
+    {
+      "branch": "roots",
+      "handler_id": "phone_storage",
+      "invalid": {
+        "operation": "__invalid__",
+        "session_id": "phone-1"
+      },
+      "tool": "phone_storage",
+      "valid": {
+        "operation": "roots",
         "session_id": "phone-1"
       }
     },
@@ -927,11 +1052,13 @@
       "branch": "default",
       "handler_id": "browser_eval",
       "invalid": {
-        "expression": false,
+        "appshot_id": false,
+        "expression": "document.title",
         "tab_id": "tab-1"
       },
       "tool": "browser_eval",
       "valid": {
+        "appshot_id": "appshot-1",
         "expression": "document.title",
         "tab_id": "tab-1"
       }

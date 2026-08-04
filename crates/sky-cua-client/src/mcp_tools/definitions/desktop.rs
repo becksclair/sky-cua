@@ -13,7 +13,7 @@ use super::common::*;
 use super::phone::*;
 
 pub(super) fn observe_properties(can_receive_images: bool) -> Value {
-    merge_properties(
+    let mut properties = merge_properties(
         json!({
             "surface": {"type": "string", "enum": ["desktop", "browser", "phone"]},
             "target": optional_absent_string_schema(browser_target_schema()),
@@ -41,14 +41,22 @@ pub(super) fn observe_properties(can_receive_images: bool) -> Value {
                 phone_session_properties(),
             ),
         ),
-    )
+    );
+    if let Some(properties) = properties.as_object_mut() {
+        // Canonical AppShots always capture the selected surface. These legacy
+        // get_app_state knobs do not alter the AppShot producer and must not be
+        // advertised as if they did.
+        properties.remove("desktop_file_id");
+        properties.remove("capture_screen");
+        properties.remove("screenshot_delivery");
+    }
+    properties
 }
 
 pub(super) fn observe_constraints(can_receive_images: bool) -> Value {
-    let mut desktop_allowed = vec![
+    let desktop_allowed = vec![
         "surface",
         "app_id",
-        "desktop_file_id",
         "window_title",
         "name",
         "detail",
@@ -56,9 +64,6 @@ pub(super) fn observe_constraints(can_receive_images: bool) -> Value {
         "element_offset",
         "element_limit",
     ];
-    if can_receive_images {
-        desktop_allowed.extend(["capture_screen", "screenshot_delivery"]);
-    }
     let properties = observe_properties(can_receive_images);
     exact_branch_constraints(
         &properties,
@@ -208,21 +213,21 @@ pub(super) fn desktop_pointer_constraints() -> Value {
         exact_branch_schema_with_constraints(
             &properties,
             &[("operation", "click")],
-            &[],
+            &["appshot_id"],
             &desktop_pointer_click_allowed_fields(),
             desktop_point_or_selector_constraint(),
         ),
         exact_branch_schema_with_constraints(
             &properties,
             &[("operation", "secondary_click")],
-            &[],
+            &["appshot_id"],
             &desktop_pointer_click_allowed_fields(),
             desktop_point_or_selector_constraint(),
         ),
         exact_branch_schema_with_constraints(
             &properties,
             &[("operation", "drag")],
-            &[],
+            &["appshot_id"],
             &desktop_pointer_drag_allowed_fields(),
             json!({
                 "anyOf": [
@@ -256,8 +261,9 @@ pub(super) fn desktop_pointer_constraints() -> Value {
     })
 }
 
-pub(super) fn desktop_selector_allowed_fields() -> [&'static str; 7] {
+pub(super) fn desktop_selector_allowed_fields() -> [&'static str; 8] {
     [
+        "appshot_id",
         "snapshot_id",
         "element_index",
         "element_identifier",
@@ -305,7 +311,7 @@ pub(super) fn desktop_pointer_drag_allowed_fields() -> Vec<&'static str> {
 }
 
 pub(super) fn desktop_keyboard_allowed_fields(branch_field: &'static str) -> Vec<&'static str> {
-    let mut fields = vec!["operation", branch_field, "snapshot_id"];
+    let mut fields = vec!["operation", "appshot_id", branch_field, "snapshot_id"];
     fields.extend(desktop_window_target_allowed_fields());
     fields
 }
@@ -332,12 +338,12 @@ pub(super) fn desktop_keyboard_constraints() -> Value {
         &[
             (
                 "type_text",
-                &["text"][..],
+                &["appshot_id", "text"][..],
                 &desktop_keyboard_allowed_fields("text"),
             ),
             (
                 "press_key",
-                &["key"][..],
+                &["appshot_id", "key"][..],
                 &desktop_keyboard_allowed_fields("key"),
             ),
         ],
@@ -370,14 +376,14 @@ pub(super) fn desktop_action_constraints() -> Value {
         exact_branch_schema_with_constraints(
             &properties,
             &[("operation", "activate")],
-            &[],
+            &["appshot_id"],
             &desktop_action_allowed_fields(&[]),
             desktop_selector_constraint(),
         ),
         exact_branch_schema_with_constraints(
             &properties,
             &[("operation", "perform_action")],
-            &[],
+            &["appshot_id"],
             &desktop_action_allowed_fields(&["action_name", "action_index"]),
             desktop_selector_action_constraint(),
         ),
@@ -405,6 +411,14 @@ pub(super) fn action_tool_properties(mut properties: Value) -> Value {
     let property_map = properties
         .as_object_mut()
         .expect("action tool properties must be object");
+    property_map.insert(
+        "appshot_id".to_string(),
+        optional_absent_string_schema(json!({
+            "type": "string",
+            "minLength": 1,
+            "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action."
+        })),
+    );
     property_map.insert(
         "snapshot_id".to_string(),
         optional_absent_string_schema(json!({

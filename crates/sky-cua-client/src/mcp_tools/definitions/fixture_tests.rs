@@ -60,6 +60,11 @@ const EXPECTED: &[AnnotationRow] = &[
     ("phone_notification_reply", (false, true, false, false)),
     ("phone_app_action", (false, true, false, false)),
     ("phone_app_install", (false, true, false, false)),
+    ("phone_content", (false, true, false, false)),
+    ("phone_clipboard", (false, true, false, false)),
+    ("phone_editor", (false, true, false, false)),
+    ("phone_camera", (false, true, false, false)),
+    ("phone_storage", (false, true, false, false)),
     ("browser_eval", (false, true, false, true)),
 ];
 
@@ -201,7 +206,7 @@ pub(super) fn process_config(browser_eval_enabled: bool) -> McpProcessConfig {
 fn registry_has_expected_name_budget() {
     let model = ModelSessionInfo::default();
     let registry = build_tool_registry(&process_config(false), &model);
-    assert_eq!(registry.active_names.len(), 35);
+    assert_eq!(registry.active_names.len(), 40);
     assert!(registry.contains("observe"));
     assert!(registry.contains("browser_input"));
     let doctor = registry
@@ -226,7 +231,7 @@ fn registry_has_expected_name_budget() {
 fn registry_adds_browser_eval_only_when_enabled() {
     let model = ModelSessionInfo::default();
     let registry = build_tool_registry(&process_config(true), &model);
-    assert_eq!(registry.active_names.len(), 36);
+    assert_eq!(registry.active_names.len(), 41);
     assert!(registry.contains("browser_eval"));
     assert_eq!(registry.inactive_reason("browser_eval"), None);
 }
@@ -260,7 +265,10 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
     };
 
     let pointer_schema = &tool("desktop_pointer")["inputSchema"];
-    assert_eq!(pointer_schema["required"], json!(["operation"]));
+    assert_eq!(
+        pointer_schema["required"],
+        json!(["operation", "appshot_id"])
+    );
     assert!(
         pointer_schema["description"].is_null(),
         "tool-level description should stay on the MCP tool object"
@@ -428,7 +436,10 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
     );
 
     let action_schema = &tool("desktop_action")["inputSchema"];
-    assert_eq!(action_schema["required"], json!(["operation"]));
+    assert_eq!(
+        action_schema["required"],
+        json!(["operation", "appshot_id"])
+    );
     assert_eq!(
         action_schema["properties"]["action_name"]["minLength"], 1,
         "desktop_action perform_action must reject empty action names"
@@ -511,7 +522,7 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
     );
     assert!(
         exact_branch(keyboard_schema, "operation", "press_key")["required"]
-            == json!(["operation", "key"])
+            == json!(["operation", "appshot_id", "key"])
             && exact_branch(keyboard_schema, "operation", "press_key")["additionalProperties"]
                 == json!(false),
         "desktop_keyboard press_key branch must require key"
@@ -519,17 +530,17 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
 
     assert_eq!(
         tool("desktop_semantic")["inputSchema"]["required"],
-        json!(["operation"]),
+        json!(["operation", "appshot_id"]),
         "desktop_semantic must allow non-index selectors"
     );
     assert_eq!(
         tool("desktop_toggle")["inputSchema"]["required"],
-        json!([]),
+        json!(["appshot_id"]),
         "desktop_toggle must allow non-index selectors"
     );
     assert_eq!(
         tool("desktop_scroll")["inputSchema"]["required"],
-        json!(["direction"]),
+        json!(["direction", "appshot_id"]),
         "desktop_scroll must allow non-index selectors"
     );
     assert!(
@@ -559,7 +570,7 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
     );
     assert_eq!(
         tool("desktop_set_value")["inputSchema"]["required"],
-        json!(["value"]),
+        json!(["value", "appshot_id"]),
         "desktop_set_value must allow non-index selectors"
     );
 
@@ -575,10 +586,17 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
             "battery_optimization"
         ])
     );
+    let open_settings = exact_branch(phone_setup_schema, "operation", "open_settings");
     assert!(
-        exact_branch(phone_setup_schema, "operation", "open_settings")["required"]
-            == json!(["operation", "session_id", "screen"]),
-        "phone_setup open_settings branch must require screen"
+        open_settings["oneOf"].as_array().is_some_and(|selectors| {
+            selectors
+                .iter()
+                .any(|branch| branch["required"] == json!(["session_id", "operation", "screen"]))
+                && selectors
+                    .iter()
+                    .any(|branch| branch["required"] == json!(["device_id", "operation", "screen"]))
+        }),
+        "phone_setup open_settings must require screen plus a typed selector"
     );
 
     let phone_pointer_schema = &tool("phone_pointer")["inputSchema"];
@@ -588,26 +606,45 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
             "phone_pointer {coordinate} must reject negative coordinates"
         );
     }
+    let tap = exact_branch(phone_pointer_schema, "operation", "tap");
     assert!(
-        exact_branch(phone_pointer_schema, "operation", "tap")["required"]
-            == json!(["operation", "session_id", "x", "y"])
-            && exact_branch(phone_pointer_schema, "operation", "tap")["additionalProperties"]
-                == json!(false),
-        "phone_pointer tap branch must require coordinates"
+        tap["oneOf"].as_array().is_some_and(|selectors| {
+            selectors.iter().any(|branch| {
+                branch["required"] == json!(["session_id", "operation", "appshot_id", "x", "y"])
+            }) && selectors.iter().any(|branch| {
+                branch["required"] == json!(["device_id", "operation", "appshot_id", "x", "y"])
+            })
+        }) && tap["additionalProperties"] == json!(false),
+        "phone_pointer tap branch must require coordinates and a typed selector"
     );
+    let swipe = exact_branch(phone_pointer_schema, "operation", "swipe");
     assert!(
-        exact_branch(phone_pointer_schema, "operation", "swipe")["required"]
-            == json!([
-                "operation",
-                "session_id",
-                "start_x",
-                "start_y",
-                "end_x",
-                "end_y"
-            ])
-            && exact_branch(phone_pointer_schema, "operation", "swipe")["additionalProperties"]
-                == json!(false),
-        "phone_pointer swipe branch must require start/end coordinates"
+        swipe["oneOf"].as_array().is_some_and(|selectors| {
+            selectors.iter().any(|branch| {
+                branch["required"]
+                    == json!([
+                        "session_id",
+                        "operation",
+                        "appshot_id",
+                        "start_x",
+                        "start_y",
+                        "end_x",
+                        "end_y"
+                    ])
+            }) && selectors.iter().any(|branch| {
+                branch["required"]
+                    == json!([
+                        "device_id",
+                        "operation",
+                        "appshot_id",
+                        "start_x",
+                        "start_y",
+                        "end_x",
+                        "end_y"
+                    ])
+            })
+        }) && swipe["additionalProperties"] == json!(false),
+        "phone_pointer swipe branch must require start/end coordinates and a typed selector"
     );
 
     let phone_keyboard_schema = &tool("phone_keyboard")["inputSchema"];
@@ -619,12 +656,16 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
         phone_keyboard_schema["properties"]["key"]["minLength"], 1,
         "phone_keyboard press_key must reject empty key"
     );
+    let type_text = exact_branch(phone_keyboard_schema, "operation", "type_text");
     assert!(
-        exact_branch(phone_keyboard_schema, "operation", "type_text")["required"]
-            == json!(["operation", "session_id", "text"])
-            && exact_branch(phone_keyboard_schema, "operation", "type_text")["additionalProperties"]
-                == json!(false),
-        "phone_keyboard type_text branch must require text"
+        type_text["oneOf"].as_array().is_some_and(|selectors| {
+            selectors.iter().any(|branch| {
+                branch["required"] == json!(["session_id", "operation", "appshot_id", "text"])
+            }) && selectors.iter().any(|branch| {
+                branch["required"] == json!(["device_id", "operation", "appshot_id", "text"])
+            })
+        }) && type_text["additionalProperties"] == json!(false),
+        "phone_keyboard type_text branch must require text and a typed selector"
     );
 
     let phone_notification_schema = &tool("phone_notification_action")["inputSchema"];
@@ -636,12 +677,33 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
         phone_notification_schema["properties"]["action_id"]["minLength"], 1,
         "phone_notification_action must reject empty action ids"
     );
+    let notification_action = exact_branch(phone_notification_schema, "operation", "action");
     assert!(
-        exact_branch(phone_notification_schema, "operation", "action")["required"]
-            == json!(["operation", "session_id", "event_id", "action_id"])
-            && exact_branch(phone_notification_schema, "operation", "action")["additionalProperties"]
-                == json!(false),
-        "phone_notification_action action branch must require event_id and action_id"
+        notification_action["oneOf"]
+            .as_array()
+            .is_some_and(|selectors| {
+                selectors.iter().any(|branch| {
+                    branch["required"]
+                        == json!([
+                            "session_id",
+                            "operation",
+                            "appshot_id",
+                            "event_id",
+                            "action_id"
+                        ])
+                }) && selectors.iter().any(|branch| {
+                    branch["required"]
+                        == json!([
+                            "device_id",
+                            "operation",
+                            "appshot_id",
+                            "event_id",
+                            "action_id"
+                        ])
+                })
+            })
+            && notification_action["additionalProperties"] == json!(false),
+        "phone_notification_action action branch must require event fields and a typed selector"
     );
 
     let phone_install_schema = &tool("phone_app_install")["inputSchema"];
@@ -649,10 +711,19 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
         phone_install_schema["properties"]["apk_paths"]["minItems"], 1,
         "phone_app_install apk_paths must be non-empty"
     );
-    assert_eq!(
-        phone_install_schema["required"],
-        json!(["session_id", "apk_paths"]),
-        "phone_app_install must require session_id and apk_paths"
+    assert!(
+        phone_install_schema["allOf"]
+            .as_array()
+            .and_then(|all_of| all_of.first())
+            .and_then(|branch| branch["oneOf"].as_array())
+            .is_some_and(|selectors| {
+                selectors.iter().any(|branch| {
+                    branch["required"] == json!(["session_id", "appshot_id", "apk_paths"])
+                }) && selectors.iter().any(|branch| {
+                    branch["required"] == json!(["device_id", "appshot_id", "apk_paths"])
+                })
+            }),
+        "phone_app_install must require apk_paths and a typed selector"
     );
     assert!(
         phone_install_schema["properties"].get("apk_path").is_none(),
@@ -829,7 +900,7 @@ fn validation_schemas_still_reject_vague_grouped_calls() {
         registry
             .validate_arguments(
                 "desktop_pointer",
-                &json!({"operation": "click", "x": 10, "y": 20})
+                &json!({"operation": "click", "x": 10, "y": 20, "appshot_id": "appshot-1"})
             )
             .is_ok(),
         "a click with coordinates must be accepted"
@@ -843,6 +914,47 @@ fn validation_schemas_still_reject_vague_grouped_calls() {
             .is_err(),
         "capture_desktop must still reject mixing a window target with a display target"
     );
+}
+
+#[test]
+fn phone_validation_accepts_device_id_only_selectors() {
+    let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
+    let cases = [
+        (
+            "phone_connection",
+            json!({"operation": "disconnect", "device_id": "d1"}),
+        ),
+        (
+            "phone_pointer",
+            json!({"operation": "tap", "device_id": "d1", "appshot_id": "a1", "x": 1, "y": 2, "use_device_coordinates": true}),
+        ),
+        (
+            "phone_keyboard",
+            json!({"operation": "type_text", "device_id": "d1", "appshot_id": "a1", "text": "hello"}),
+        ),
+        (
+            "phone_notification_action",
+            json!({"operation": "open", "device_id": "d1", "appshot_id": "a1", "event_id": "e1"}),
+        ),
+        (
+            "phone_app_action",
+            json!({"operation": "launch", "device_id": "d1", "package_name": "com.example.app"}),
+        ),
+        (
+            "phone_setup",
+            json!({"operation": "install_companion", "device_id": "d1"}),
+        ),
+        (
+            "phone_app_install",
+            json!({"device_id": "d1", "appshot_id": "a1", "apk_paths": ["/tmp/app.apk"]}),
+        ),
+    ];
+    for (tool, arguments) in cases {
+        assert!(
+            registry.validate_arguments(tool, &arguments).is_ok(),
+            "device_id-only call must validate for {tool}: {arguments}"
+        );
+    }
 }
 
 #[test]
@@ -866,9 +978,8 @@ fn list_resources_browser_tabs_accepts_limit() {
 
 #[test]
 fn observe_browser_branch_rejects_capture_fields() {
-    // Regression guard: capture_screen/screenshot_delivery are desktop-only.
-    // observe returns structure; a browser-tab image comes from the separate
-    // capture_screen tool, so the browser branch must keep rejecting them.
+    // Canonical observe produces the AppShot image itself; legacy screenshot
+    // controls are not accepted on any surface branch.
     let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
     assert!(
         registry
@@ -902,6 +1013,15 @@ fn observe_browser_branch_rejects_capture_fields() {
             .is_err(),
         "the browser observe branch must reject screenshot_delivery"
     );
+    assert!(
+        registry
+            .validate_arguments(
+                "observe",
+                &json!({"surface": "desktop", "capture_screen": "always"})
+            )
+            .is_err(),
+        "desktop observe must not advertise ignored legacy capture controls"
+    );
 }
 
 #[test]
@@ -930,6 +1050,91 @@ fn runtime_schema_validator_fails_closed_for_unsupported_schema_surface() {
         &json!({"type": "string", "pattern": "^custom$"}),
         &json!("custom")
     ));
+}
+
+#[test]
+fn desktop_mutation_schemas_require_appshot_id() {
+    let tools = build_tool_definitions(false, false);
+    let tools = tools.as_array().expect("tool definitions array");
+    for name in [
+        "desktop_semantic",
+        "desktop_toggle",
+        "desktop_scroll",
+        "desktop_pointer",
+        "desktop_keyboard",
+        "desktop_action",
+        "desktop_set_value",
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        assert!(
+            tool["inputSchema"]["required"]
+                .as_array()
+                .is_some_and(|required| required.iter().any(|field| field == "appshot_id")),
+            "{name} must require appshot_id"
+        );
+    }
+}
+
+#[test]
+fn phone_camera_schema_enforces_v1_capture_resolution_bound() {
+    let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
+    let base = json!({
+        "operation": "photo",
+        "session_id": "phone-1",
+        "appshot_id": "shot-1",
+        "camera_id": "0"
+    });
+    let mut portrait = base.clone();
+    portrait["options"] = json!({"size": {"width": 1080, "height": 1920}});
+    assert!(
+        registry
+            .validate_arguments("phone_camera", &portrait)
+            .is_ok()
+    );
+    let mut too_large = base;
+    too_large["options"] = json!({"size": {"width": 3840, "height": 2160}});
+    assert!(
+        registry
+            .validate_arguments("phone_camera", &too_large)
+            .is_err()
+    );
+}
+
+#[test]
+fn phone_camera_schema_separates_phone_and_camera_session_ids() {
+    let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
+    let valid = json!({
+        "operation": "preview_stop",
+        "session_id": "phone-session-1",
+        "appshot_id": "shot-1",
+        "camera_session_id": "camera-session-1"
+    });
+    assert!(registry.validate_arguments("phone_camera", &valid).is_ok());
+
+    let ambiguous = json!({
+        "operation": "preview_stop",
+        "session_id": "phone-session-1",
+        "appshot_id": "shot-1"
+    });
+    assert!(
+        registry
+            .validate_arguments("phone_camera", &ambiguous)
+            .is_err()
+    );
+
+    let by_device = json!({
+        "operation": "preview_frame",
+        "device_id": "device-1",
+        "camera_session_id": "camera-session-1"
+    });
+    assert!(
+        registry
+            .validate_arguments("phone_camera", &by_device)
+            .is_ok()
+    );
 }
 
 #[test]

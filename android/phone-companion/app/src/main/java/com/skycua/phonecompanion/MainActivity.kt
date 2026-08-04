@@ -23,6 +23,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.skycua.phonecompanion.protocol.HealthState
+import com.skycua.phonecompanion.direct.AndroidCredentialStore
+import com.skycua.phonecompanion.direct.DirectLinkServiceOwner
+import com.skycua.phonecompanion.direct.directLinkNeedsUserRetry
 import com.skycua.phonecompanion.service.DeviceMethodHandler
 import com.skycua.phonecompanion.service.RpcController
 import com.skycua.phonecompanion.ui.PointerPlaygroundActivity
@@ -203,6 +206,51 @@ class MainActivity : AppCompatActivity() {
                 },
             ),
         )
+        val linkAvailability = DirectLinkServiceOwner.availability()
+        val directDesired = runCatching {
+            val store = AndroidCredentialStore(applicationContext)
+            store.load() != null || store.pendingEnrollment() != null
+        }.getOrDefault(false)
+        val needsUserRetry = directLinkNeedsUserRetry(linkAvailability, directDesired)
+        statusBody.addView(divider())
+        statusBody.addView(
+            statusRow(
+                getString(R.string.status_host_link),
+                chip(
+                    when (linkAvailability) {
+                        DirectLinkServiceOwner.Availability.RUNNING -> getString(R.string.chip_running)
+                        DirectLinkServiceOwner.Availability.STARTING -> getString(R.string.chip_connecting)
+                        DirectLinkServiceOwner.Availability.START_DENIED -> getString(R.string.chip_start_denied)
+                        DirectLinkServiceOwner.Availability.TERMINAL -> getString(R.string.chip_attention)
+                        DirectLinkServiceOwner.Availability.STOPPED ->
+                            if (directDesired) getString(R.string.chip_retry_needed) else getString(R.string.chip_idle)
+                        else -> getString(R.string.chip_idle)
+                    },
+                    if (linkAvailability == DirectLinkServiceOwner.Availability.START_DENIED || needsUserRetry) ChipKind.OFF else ChipKind.NEUTRAL,
+                ),
+            ),
+        )
+        if (linkAvailability == DirectLinkServiceOwner.Availability.START_DENIED || needsUserRetry) {
+            statusBody.addView(
+                subRow(
+                    getString(if (needsUserRetry) R.string.status_host_link_stopped else R.string.status_host_link_denied),
+                    false,
+                ),
+            )
+            statusBody.addView(
+                tonalButton(getString(R.string.retry_host_connection)) {
+                    val started = DirectLinkServiceOwner.retryUserInitiated(applicationContext)
+                    renderStatus()
+                    if (started) {
+                        statusBody.postDelayed(
+                            { if (!isFinishing && !isDestroyed) renderStatus() },
+                            750,
+                        )
+                    }
+                },
+                marginParams(top = 6),
+            )
+        }
 
         statusBody.addView(sectionLabel(getString(R.string.section_permissions)), marginParams(top = 18))
         statusBody.addView(

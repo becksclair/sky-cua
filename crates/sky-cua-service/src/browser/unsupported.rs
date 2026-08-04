@@ -91,6 +91,7 @@ pub(crate) async fn open_tab(
     BrowserOpenResponse {
         target: target.unwrap_or(BrowserTargetKind::UserChrome),
         tab: None,
+        destination_appshot: None,
         diagnostics: vec![browser_bridge_unsupported_diagnostic()],
     }
 }
@@ -159,6 +160,7 @@ pub(crate) async fn navigate(
         target: target.unwrap_or(BrowserTargetKind::UserChrome),
         tab_id,
         url,
+        destination_appshot: None,
         diagnostics: vec![browser_bridge_unsupported_diagnostic()],
     }
 }

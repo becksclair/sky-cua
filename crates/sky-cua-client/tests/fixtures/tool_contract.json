@@ -1,6 +1,6 @@
 {
-  "default_tool_count": 35,
-  "eval_tool_count": 36,
+  "default_tool_count": 40,
+  "eval_tool_count": 41,
   "surface": "grouped",
   "tools": [
     {
@@ -783,7 +783,7 @@
             "FeatureDisabled",
             "UnknownTool"
           ],
-          "handler_id": "get_app_state",
+          "handler_id": "desktop_observe_appshot",
           "minimal_valid_arguments": {
             "surface": "desktop"
           },
@@ -795,7 +795,7 @@
             "FeatureDisabled",
             "UnknownTool"
           ],
-          "handler_id": "browser_snapshot",
+          "handler_id": "browser_appshot",
           "minimal_valid_arguments": {
             "surface": "browser",
             "tab_id": "tab-1"
@@ -846,29 +846,6 @@
               }
             ]
           },
-          "capture_screen": {
-            "anyOf": [
-              {
-                "description": "Screen-capture policy. Defaults to if_changed. Use always for a fresh frame, never for structure-only loops.",
-                "enum": [
-                  "auto",
-                  "if_changed",
-                  "always",
-                  "never"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "desktop_file_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "detail": {
             "anyOf": [
               {
@@ -877,6 +854,22 @@
                   "full",
                   "compact"
                 ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
                 "type": "string"
               },
               {
@@ -948,21 +941,6 @@
             "type": [
               "string",
               "null"
-            ]
-          },
-          "screenshot_delivery": {
-            "anyOf": [
-              {
-                "description": "path returns capture.inspection_image_path metadata; inline also attaches the inspection image block.",
-                "enum": [
-                  "path",
-                  "inline"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
             ]
           },
           "session_id": {
@@ -1043,29 +1021,6 @@
                       "null"
                     ]
                   },
-                  "capture_screen": {
-                    "anyOf": [
-                      {
-                        "description": "Screen-capture policy. Defaults to if_changed. Use always for a fresh frame, never for structure-only loops.",
-                        "enum": [
-                          "auto",
-                          "if_changed",
-                          "always",
-                          "never"
-                        ],
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "desktop_file_id": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
-                  },
                   "detail": {
                     "anyOf": [
                       {
@@ -1123,21 +1078,6 @@
                     "type": [
                       "string",
                       "null"
-                    ]
-                  },
-                  "screenshot_delivery": {
-                    "anyOf": [
-                      {
-                        "description": "path returns capture.inspection_image_path metadata; inline also attaches the inspection image block.",
-                        "enum": [
-                          "path",
-                          "inline"
-                        ],
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
                     ]
                   },
                   "surface": {
@@ -1333,29 +1273,6 @@
               }
             ]
           },
-          "capture_screen": {
-            "anyOf": [
-              {
-                "description": "Screen-capture policy. Defaults to if_changed. Use always for a fresh frame, never for structure-only loops.",
-                "enum": [
-                  "auto",
-                  "if_changed",
-                  "always",
-                  "never"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "desktop_file_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "detail": {
             "anyOf": [
               {
@@ -1364,6 +1281,22 @@
                   "full",
                   "compact"
                 ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
                 "type": "string"
               },
               {
@@ -1435,21 +1368,6 @@
             "type": [
               "string",
               "null"
-            ]
-          },
-          "screenshot_delivery": {
-            "anyOf": [
-              {
-                "description": "path returns capture.inspection_image_path metadata; inline also attaches the inspection image block.",
-                "enum": [
-                  "path",
-                  "inline"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
             ]
           },
           "session_id": {
@@ -1563,6 +1481,22 @@
                   "adb",
                   "companion"
                 ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
                 "type": "string"
               },
               {
@@ -1722,6 +1656,22 @@
               }
             ]
           },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "session_id": {
             "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
             "minLength": 1,
@@ -1790,6 +1740,22 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "node_limit": {
             "anyOf": [
               {
@@ -1817,6 +1783,22 @@
       "validation_schema": {
         "additionalProperties": false,
         "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "node_limit": {
             "anyOf": [
               {
@@ -1865,6 +1847,22 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "limit": {
             "anyOf": [
               {
@@ -1892,6 +1890,22 @@
       "validation_schema": {
         "additionalProperties": false,
         "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "limit": {
             "anyOf": [
               {
@@ -3289,6 +3303,7 @@
           ],
           "handler_id": "focus_element",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "element_index": 1,
             "operation": "focus",
             "snapshot_id": "snapshot-1"
@@ -3303,6 +3318,7 @@
           ],
           "handler_id": "select_element",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "element_index": 1,
             "operation": "select",
             "snapshot_id": "snapshot-1"
@@ -3317,6 +3333,7 @@
           ],
           "handler_id": "expand_element",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "element_index": 1,
             "operation": "expand",
             "snapshot_id": "snapshot-1"
@@ -3331,6 +3348,7 @@
           ],
           "handler_id": "collapse_element",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "element_index": 1,
             "operation": "collapse",
             "snapshot_id": "snapshot-1"
@@ -3342,6 +3360,22 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "element_identifier": {
             "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
             "minLength": 1,
@@ -3405,7 +3439,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -3474,6 +3509,22 @@
           }
         ],
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "element_identifier": {
             "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
             "minLength": 1,
@@ -3537,7 +3588,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       }
@@ -3649,6 +3701,7 @@
           ],
           "handler_id": "browser_move_mouse",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "tab_id": "tab-1",
             "x": 1,
             "y": 1
@@ -3660,6 +3713,11 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
           "tab_id": {
             "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
             "minLength": 1,
@@ -3709,7 +3767,8 @@
         "required": [
           "tab_id",
           "x",
-          "y"
+          "y",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -3718,6 +3777,11 @@
       "validation_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
           "tab_id": {
             "description": "Browser tab_id returned by browser_open or list_resources(surface=\"browser\", resource=\"tabs\"). Claim listed existing tabs before acting.",
             "minLength": 1,
@@ -3767,7 +3831,8 @@
         "required": [
           "tab_id",
           "x",
-          "y"
+          "y",
+          "appshot_id"
         ],
         "type": "object"
       }
@@ -3823,6 +3888,22 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical phone AppShot id returned by phone_observe; required for state-changing phone actions.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "backend": {
             "anyOf": [
               {
@@ -3833,6 +3914,22 @@
                   "companion",
                   "scrcpy"
                 ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
                 "type": "string"
               },
               {
@@ -3940,6 +4037,22 @@
                       }
                     ]
                   },
+                  "device_id": {
+                    "anyOf": [
+                      {
+                        "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "install_companion": {
                     "anyOf": [
                       {
@@ -3987,7 +4100,34 @@
               },
               {
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "operation": {},
+                      "session_id": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "device_id": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation"
+                    ]
+                  }
+                ],
                 "properties": {
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "keep_wireless": {
                     "anyOf": [
                       {
@@ -4007,15 +4147,38 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "operation",
-                  "session_id"
-                ],
                 "type": "object"
               },
               {
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "operation": {},
+                      "session_id": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "device_id": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation"
+                    ]
+                  }
+                ],
                 "properties": {
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "operation": {
                     "const": "refresh"
                   },
@@ -4025,16 +4188,28 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "operation",
-                  "session_id"
-                ],
                 "type": "object"
               }
             ]
           }
         ],
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical phone AppShot id returned by phone_observe; required for state-changing phone actions.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "backend": {
             "anyOf": [
               {
@@ -4045,6 +4220,22 @@
                   "companion",
                   "scrcpy"
                 ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
                 "type": "string"
               },
               {
@@ -4238,6 +4429,22 @@
               }
             ]
           },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "force_reinstall": {
             "anyOf": [
               {
@@ -4250,6 +4457,7 @@
           },
           "operation": {
             "enum": [
+              "create_enrollment",
               "install_companion",
               "open_settings"
             ],
@@ -4303,6 +4511,40 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "operation": {
+                    "const": "create_enrollment"
+                  }
+                },
+                "required": [
+                  "operation"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "operation": {},
+                      "session_id": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "device_id": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation"
+                    ]
+                  }
+                ],
+                "properties": {
                   "allow_downgrade": {
                     "anyOf": [
                       {
@@ -4312,6 +4554,11 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
                   },
                   "force_reinstall": {
                     "anyOf": [
@@ -4332,15 +4579,42 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "operation",
-                  "session_id"
-                ],
                 "type": "object"
               },
               {
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "operation": {},
+                      "screen": {},
+                      "session_id": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation",
+                      "screen"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "device_id": {},
+                      "operation": {},
+                      "screen": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation",
+                      "screen"
+                    ]
+                  }
+                ],
                 "properties": {
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "operation": {
                     "const": "open_settings"
                   },
@@ -4377,11 +4651,6 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "operation",
-                  "session_id",
-                  "screen"
-                ],
                 "type": "object"
               }
             ]
@@ -4426,6 +4695,22 @@
               }
             ]
           },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "force_reinstall": {
             "anyOf": [
               {
@@ -4438,6 +4723,7 @@
           },
           "operation": {
             "enum": [
+              "create_enrollment",
               "install_companion",
               "open_settings"
             ],
@@ -4498,6 +4784,7 @@
           ],
           "handler_id": "phone_app_force_stop",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "package_name": "com.example.app",
             "session_id": "phone-1"
           },
@@ -4508,10 +4795,58 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical phone AppShot id returned by phone_observe; required for state-changing phone actions.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "package_name": {
             "minLength": 1,
             "pattern": ".*\\S.*",
             "type": "string"
+          },
+          "serial": {
+            "anyOf": [
+              {
+                "description": "ADB serial from phone discovery; accepted only for discovery, pairing, and connect-like paths.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "session_id": {
             "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
@@ -4521,7 +4856,8 @@
         },
         "required": [
           "session_id",
-          "package_name"
+          "package_name",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -4530,10 +4866,58 @@
       "validation_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical phone AppShot id returned by phone_observe; required for state-changing phone actions.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "package_name": {
             "minLength": 1,
             "pattern": ".*\\S.*",
             "type": "string"
+          },
+          "serial": {
+            "anyOf": [
+              {
+                "description": "ADB serial from phone discovery; accepted only for discovery, pairing, and connect-like paths.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "session_id": {
             "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
@@ -4543,7 +4927,8 @@
         },
         "required": [
           "session_id",
-          "package_name"
+          "package_name",
+          "appshot_id"
         ],
         "type": "object"
       }
@@ -4564,6 +4949,7 @@
           ],
           "handler_id": "toggle_element",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "element_index": 1,
             "snapshot_id": "snapshot-1"
           },
@@ -4574,6 +4960,22 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "element_identifier": {
             "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
             "minLength": 1,
@@ -4627,7 +5029,9 @@
             "type": "string"
           }
         },
-        "required": [],
+        "required": [
+          "appshot_id"
+        ],
         "type": "object"
       },
       "name": "desktop_toggle",
@@ -4695,6 +5099,22 @@
           }
         ],
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "element_identifier": {
             "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
             "minLength": 1,
@@ -4748,7 +5168,9 @@
             "type": "string"
           }
         },
-        "required": [],
+        "required": [
+          "appshot_id"
+        ],
         "type": "object"
       }
     },
@@ -4768,6 +5190,7 @@
           ],
           "handler_id": "scroll",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "direction": "down",
             "element_index": 1,
             "snapshot_id": "snapshot-1"
@@ -4779,6 +5202,22 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "direction": {
             "enum": [
               "up",
@@ -4845,7 +5284,8 @@
           }
         },
         "required": [
-          "direction"
+          "direction",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -4905,6 +5345,22 @@
           }
         ],
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "direction": {
             "enum": [
               "up",
@@ -4971,7 +5427,8 @@
           }
         },
         "required": [
-          "direction"
+          "direction",
+          "appshot_id"
         ],
         "type": "object"
       }
@@ -4992,6 +5449,7 @@
           ],
           "handler_id": "browser_scroll",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "delta_y": 300,
             "tab_id": "tab-1"
           },
@@ -5002,6 +5460,11 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
           "delta_x": {
             "description": "Horizontal wheel delta in CSS pixels; at least one delta must be non-zero.",
             "type": "number"
@@ -5060,7 +5523,8 @@
           }
         },
         "required": [
-          "tab_id"
+          "tab_id",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -5139,6 +5603,11 @@
           }
         ],
         "properties": {
+          "appshot_id": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
           "delta_x": {
             "description": "Horizontal wheel delta in CSS pixels; at least one delta must be non-zero.",
             "type": "number"
@@ -5197,7 +5666,8 @@
           }
         },
         "required": [
-          "tab_id"
+          "tab_id",
+          "appshot_id"
         ],
         "type": "object"
       }
@@ -5218,6 +5688,7 @@
           ],
           "handler_id": "click",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "operation": "click",
             "x": 1,
             "y": 1
@@ -5232,6 +5703,7 @@
           ],
           "handler_id": "perform_secondary_action",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "operation": "secondary_click",
             "x": 1,
             "y": 1
@@ -5246,6 +5718,7 @@
           ],
           "handler_id": "drag",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "from_x": 1,
             "from_y": 1,
             "operation": "drag",
@@ -5259,6 +5732,22 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "duration_ms": {
             "description": "Drag only. Paces the injected pointer path over this many milliseconds of wall-clock time; the drag is always interpolated, but a larger value (~400-800) makes sliders and drag-and-drop gestures track more reliably.",
             "minimum": 0,
@@ -5350,7 +5839,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -5418,6 +5908,22 @@
                   }
                 ],
                 "properties": {
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "element_identifier": {
                     "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
                     "minLength": 1,
@@ -5483,7 +5989,8 @@
                   }
                 },
                 "required": [
-                  "operation"
+                  "operation",
+                  "appshot_id"
                 ],
                 "type": "object"
               },
@@ -5544,6 +6051,22 @@
                   }
                 ],
                 "properties": {
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "element_identifier": {
                     "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
                     "minLength": 1,
@@ -5609,7 +6132,8 @@
                   }
                 },
                 "required": [
-                  "operation"
+                  "operation",
+                  "appshot_id"
                 ],
                 "type": "object"
               },
@@ -5746,6 +6270,22 @@
                   }
                 ],
                 "properties": {
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "duration_ms": {
                     "description": "Drag only. Paces the injected pointer path over this many milliseconds of wall-clock time; the drag is always interpolated, but a larger value (~400-800) makes sliders and drag-and-drop gestures track more reliably.",
                     "minimum": 0,
@@ -5832,7 +6372,8 @@
                   }
                 },
                 "required": [
-                  "operation"
+                  "operation",
+                  "appshot_id"
                 ],
                 "type": "object"
               }
@@ -5840,6 +6381,22 @@
           }
         ],
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "duration_ms": {
             "description": "Drag only. Paces the injected pointer path over this many milliseconds of wall-clock time; the drag is always interpolated, but a larger value (~400-800) makes sliders and drag-and-drop gestures track more reliably.",
             "minimum": 0,
@@ -5931,7 +6488,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       }
@@ -5952,6 +6510,7 @@
           ],
           "handler_id": "type_text",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "operation": "type_text",
             "text": "hello"
           },
@@ -5965,6 +6524,7 @@
           ],
           "handler_id": "press_key",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "key": "Enter",
             "operation": "press_key"
           },
@@ -5978,6 +6538,22 @@
           "app_id": {
             "anyOf": [
               {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
                 "minLength": 1,
                 "type": "string"
               },
@@ -6147,7 +6723,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -6164,6 +6741,22 @@
                   "app_id": {
                     "anyOf": [
                       {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
                         "minLength": 1,
                         "type": "string"
                       },
@@ -6326,6 +6919,7 @@
                 },
                 "required": [
                   "operation",
+                  "appshot_id",
                   "text"
                 ],
                 "type": "object"
@@ -6336,6 +6930,22 @@
                   "app_id": {
                     "anyOf": [
                       {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
                         "minLength": 1,
                         "type": "string"
                       },
@@ -6498,6 +7108,7 @@
                 },
                 "required": [
                   "operation",
+                  "appshot_id",
                   "key"
                 ],
                 "type": "object"
@@ -6509,6 +7120,22 @@
           "app_id": {
             "anyOf": [
               {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
                 "minLength": 1,
                 "type": "string"
               },
@@ -6678,7 +7305,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       }
@@ -6699,6 +7327,7 @@
           ],
           "handler_id": "activate_element",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "element_index": 1,
             "operation": "activate",
             "snapshot_id": "snapshot-1"
@@ -6714,6 +7343,7 @@
           "handler_id": "perform_action",
           "minimal_valid_arguments": {
             "action_index": 0,
+            "appshot_id": "appshot-1",
             "element_index": 1,
             "operation": "perform_action",
             "snapshot_id": "snapshot-1"
@@ -6735,6 +7365,22 @@
             "minLength": 1,
             "pattern": ".*\\S.*",
             "type": "string"
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "element_identifier": {
             "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
@@ -6797,7 +7443,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -6863,6 +7510,22 @@
                   }
                 ],
                 "properties": {
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "element_identifier": {
                     "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
                     "minLength": 1,
@@ -6920,7 +7583,8 @@
                   }
                 },
                 "required": [
-                  "operation"
+                  "operation",
+                  "appshot_id"
                 ],
                 "type": "object"
               },
@@ -7014,6 +7678,22 @@
                     "pattern": ".*\\S.*",
                     "type": "string"
                   },
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "element_identifier": {
                     "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
                     "minLength": 1,
@@ -7071,7 +7751,8 @@
                   }
                 },
                 "required": [
-                  "operation"
+                  "operation",
+                  "appshot_id"
                 ],
                 "type": "object"
               }
@@ -7089,6 +7770,22 @@
             "minLength": 1,
             "pattern": ".*\\S.*",
             "type": "string"
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "element_identifier": {
             "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
@@ -7151,7 +7848,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       }
@@ -7247,6 +7945,7 @@
           ],
           "handler_id": "set_value",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "element_index": 1,
             "snapshot_id": "snapshot-1",
             "value": "hello"
@@ -7258,6 +7957,22 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "element_identifier": {
             "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
             "minLength": 1,
@@ -7316,7 +8031,8 @@
           }
         },
         "required": [
-          "value"
+          "value",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -7385,6 +8101,22 @@
           }
         ],
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical desktop AppShot id from the same observe result; required for every state-changing desktop action.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "element_identifier": {
             "description": "Exact backend_ref from a desktop observation; direct semantic target that does not require snapshot_id.",
             "minLength": 1,
@@ -7443,7 +8175,8 @@
           }
         },
         "required": [
-          "value"
+          "value",
+          "appshot_id"
         ],
         "type": "object"
       }
@@ -7669,6 +8402,7 @@
           ],
           "handler_id": "browser_click",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "operation": "click",
             "tab_id": "tab-1",
             "x": 1,
@@ -7684,6 +8418,7 @@
           ],
           "handler_id": "browser_type_text",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "operation": "type_text",
             "tab_id": "tab-1",
             "text": "hello"
@@ -7698,6 +8433,7 @@
           ],
           "handler_id": "browser_press_key",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "key": "Enter",
             "operation": "press_key",
             "tab_id": "tab-1"
@@ -7709,6 +8445,11 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
           "key": {
             "minLength": 1,
             "pattern": ".*\\S.*",
@@ -7768,7 +8509,8 @@
         },
         "required": [
           "operation",
-          "tab_id"
+          "tab_id",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -7802,6 +8544,11 @@
                   }
                 ],
                 "properties": {
+                  "appshot_id": {
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "operation": {
                     "const": "click"
                   },
@@ -7847,13 +8594,19 @@
                 },
                 "required": [
                   "operation",
-                  "tab_id"
+                  "tab_id",
+                  "appshot_id"
                 ],
                 "type": "object"
               },
               {
                 "additionalProperties": false,
                 "properties": {
+                  "appshot_id": {
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "operation": {
                     "const": "type_text"
                   },
@@ -7894,6 +8647,7 @@
                 "required": [
                   "operation",
                   "tab_id",
+                  "appshot_id",
                   "text"
                 ],
                 "type": "object"
@@ -7901,6 +8655,11 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "appshot_id": {
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "key": {
                     "minLength": 1,
                     "pattern": ".*\\S.*",
@@ -7937,6 +8696,7 @@
                 "required": [
                   "operation",
                   "tab_id",
+                  "appshot_id",
                   "key"
                 ],
                 "type": "object"
@@ -7945,6 +8705,11 @@
           }
         ],
         "properties": {
+          "appshot_id": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
           "key": {
             "minLength": 1,
             "pattern": ".*\\S.*",
@@ -8004,7 +8769,8 @@
         },
         "required": [
           "operation",
-          "tab_id"
+          "tab_id",
+          "appshot_id"
         ],
         "type": "object"
       }
@@ -8025,6 +8791,7 @@
           ],
           "handler_id": "phone_tap",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "operation": "tap",
             "phone_snapshot_id": "phone-snapshot-1",
             "session_id": "phone-1",
@@ -8041,6 +8808,7 @@
           ],
           "handler_id": "phone_swipe",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "end_x": 2,
             "end_y": 2,
             "operation": "swipe",
@@ -8056,6 +8824,37 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "duration_ms": {
             "anyOf": [
               {
@@ -8128,7 +8927,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -8161,7 +8961,61 @@
                     ]
                   }
                 ],
+                "oneOf": [
+                  {
+                    "properties": {
+                      "appshot_id": {},
+                      "operation": {},
+                      "session_id": {},
+                      "x": {},
+                      "y": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation",
+                      "appshot_id",
+                      "x",
+                      "y"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "appshot_id": {},
+                      "device_id": {},
+                      "operation": {},
+                      "x": {},
+                      "y": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation",
+                      "appshot_id",
+                      "x",
+                      "y"
+                    ]
+                  }
+                ],
                 "properties": {
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "operation": {
                     "const": "tap"
                   },
@@ -8198,12 +9052,6 @@
                     "type": "number"
                   }
                 },
-                "required": [
-                  "operation",
-                  "session_id",
-                  "x",
-                  "y"
-                ],
                 "type": "object"
               },
               {
@@ -8228,7 +9076,69 @@
                     ]
                   }
                 ],
+                "oneOf": [
+                  {
+                    "properties": {
+                      "appshot_id": {},
+                      "end_x": {},
+                      "end_y": {},
+                      "operation": {},
+                      "session_id": {},
+                      "start_x": {},
+                      "start_y": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation",
+                      "appshot_id",
+                      "start_x",
+                      "start_y",
+                      "end_x",
+                      "end_y"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "appshot_id": {},
+                      "device_id": {},
+                      "end_x": {},
+                      "end_y": {},
+                      "operation": {},
+                      "start_x": {},
+                      "start_y": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation",
+                      "appshot_id",
+                      "start_x",
+                      "start_y",
+                      "end_x",
+                      "end_y"
+                    ]
+                  }
+                ],
                 "properties": {
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "duration_ms": {
                     "anyOf": [
                       {
@@ -8286,20 +9196,43 @@
                     ]
                   }
                 },
-                "required": [
-                  "operation",
-                  "session_id",
-                  "start_x",
-                  "start_y",
-                  "end_x",
-                  "end_y"
-                ],
                 "type": "object"
               }
             ]
           }
         ],
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "duration_ms": {
             "anyOf": [
               {
@@ -8372,7 +9305,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       }
@@ -8393,6 +9327,7 @@
           ],
           "handler_id": "phone_type_text",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "operation": "type_text",
             "session_id": "phone-1",
             "text": "hello"
@@ -8407,6 +9342,7 @@
           ],
           "handler_id": "phone_press_key",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "key": "BACK",
             "operation": "press_key",
             "session_id": "phone-1"
@@ -8418,6 +9354,37 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "key": {
             "minLength": 1,
             "pattern": ".*\\S.*",
@@ -8441,7 +9408,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -8454,7 +9422,57 @@
             "oneOf": [
               {
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "appshot_id": {},
+                      "operation": {},
+                      "session_id": {},
+                      "text": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation",
+                      "appshot_id",
+                      "text"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "appshot_id": {},
+                      "device_id": {},
+                      "operation": {},
+                      "text": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation",
+                      "appshot_id",
+                      "text"
+                    ]
+                  }
+                ],
                 "properties": {
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "operation": {
                     "const": "type_text"
                   },
@@ -8468,16 +9486,61 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "operation",
-                  "session_id",
-                  "text"
-                ],
                 "type": "object"
               },
               {
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "appshot_id": {},
+                      "key": {},
+                      "operation": {},
+                      "session_id": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation",
+                      "appshot_id",
+                      "key"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "appshot_id": {},
+                      "device_id": {},
+                      "key": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation",
+                      "appshot_id",
+                      "key"
+                    ]
+                  }
+                ],
                 "properties": {
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "key": {
                     "minLength": 1,
                     "pattern": ".*\\S.*",
@@ -8492,17 +9555,43 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "operation",
-                  "session_id",
-                  "key"
-                ],
                 "type": "object"
               }
             ]
           }
         ],
         "properties": {
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "key": {
             "minLength": 1,
             "pattern": ".*\\S.*",
@@ -8526,7 +9615,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       }
@@ -8547,6 +9637,7 @@
           ],
           "handler_id": "phone_notification_open",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "event_id": "event-1",
             "operation": "open",
             "session_id": "phone-1"
@@ -8561,6 +9652,7 @@
           ],
           "handler_id": "phone_notification_dismiss",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "event_id": "event-1",
             "operation": "dismiss",
             "session_id": "phone-1"
@@ -8576,6 +9668,7 @@
           "handler_id": "phone_notification_action",
           "minimal_valid_arguments": {
             "action_id": "action-1",
+            "appshot_id": "appshot-1",
             "event_id": "event-1",
             "operation": "action",
             "session_id": "phone-1"
@@ -8593,6 +9686,37 @@
             "pattern": ".*\\S.*",
             "type": "string"
           },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "event_id": {
             "description": "Exact event_id from a fresh phone_notifications result or notification-bearing phone observation.",
             "minLength": 1,
@@ -8614,7 +9738,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -8627,7 +9752,57 @@
             "oneOf": [
               {
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "appshot_id": {},
+                      "event_id": {},
+                      "operation": {},
+                      "session_id": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation",
+                      "appshot_id",
+                      "event_id"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "appshot_id": {},
+                      "device_id": {},
+                      "event_id": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation",
+                      "appshot_id",
+                      "event_id"
+                    ]
+                  }
+                ],
                 "properties": {
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "event_id": {
                     "description": "Exact event_id from a fresh phone_notifications result or notification-bearing phone observation.",
                     "minLength": 1,
@@ -8643,16 +9818,61 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "operation",
-                  "session_id",
-                  "event_id"
-                ],
                 "type": "object"
               },
               {
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "appshot_id": {},
+                      "event_id": {},
+                      "operation": {},
+                      "session_id": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation",
+                      "appshot_id",
+                      "event_id"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "appshot_id": {},
+                      "device_id": {},
+                      "event_id": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation",
+                      "appshot_id",
+                      "event_id"
+                    ]
+                  }
+                ],
                 "properties": {
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "event_id": {
                     "description": "Exact event_id from a fresh phone_notifications result or notification-bearing phone observation.",
                     "minLength": 1,
@@ -8668,20 +9888,69 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "operation",
-                  "session_id",
-                  "event_id"
-                ],
                 "type": "object"
               },
               {
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "action_id": {},
+                      "appshot_id": {},
+                      "event_id": {},
+                      "operation": {},
+                      "session_id": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation",
+                      "appshot_id",
+                      "event_id",
+                      "action_id"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "action_id": {},
+                      "appshot_id": {},
+                      "device_id": {},
+                      "event_id": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation",
+                      "appshot_id",
+                      "event_id",
+                      "action_id"
+                    ]
+                  }
+                ],
                 "properties": {
                   "action_id": {
                     "description": "Exact action_id from that same notification event.",
                     "minLength": 1,
                     "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
+                  "appshot_id": {
+                    "anyOf": [
+                      {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
                     "type": "string"
                   },
                   "event_id": {
@@ -8699,12 +9968,6 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "operation",
-                  "session_id",
-                  "event_id",
-                  "action_id"
-                ],
                 "type": "object"
               }
             ]
@@ -8716,6 +9979,37 @@
             "minLength": 1,
             "pattern": ".*\\S.*",
             "type": "string"
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "event_id": {
             "description": "Exact event_id from a fresh phone_notifications result or notification-bearing phone observation.",
@@ -8738,7 +10032,8 @@
           }
         },
         "required": [
-          "operation"
+          "operation",
+          "appshot_id"
         ],
         "type": "object"
       }
@@ -8760,6 +10055,7 @@
           "handler_id": "phone_notification_reply",
           "minimal_valid_arguments": {
             "action_id": "reply-1",
+            "appshot_id": "appshot-1",
             "event_id": "event-1",
             "session_id": "phone-1",
             "text": "reply"
@@ -8777,11 +10073,59 @@
             "pattern": ".*\\S.*",
             "type": "string"
           },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical phone AppShot id returned by phone_observe; required for state-changing phone actions.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "event_id": {
             "description": "event_id from fresh phone notifications.",
             "minLength": 1,
             "pattern": ".*\\S.*",
             "type": "string"
+          },
+          "serial": {
+            "anyOf": [
+              {
+                "description": "ADB serial from phone discovery; accepted only for discovery, pairing, and connect-like paths.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "session_id": {
             "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
@@ -8796,6 +10140,7 @@
         },
         "required": [
           "session_id",
+          "appshot_id",
           "event_id",
           "action_id",
           "text"
@@ -8813,11 +10158,59 @@
             "pattern": ".*\\S.*",
             "type": "string"
           },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "description": "Canonical phone AppShot id returned by phone_observe; required for state-changing phone actions.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "event_id": {
             "description": "event_id from fresh phone notifications.",
             "minLength": 1,
             "pattern": ".*\\S.*",
             "type": "string"
+          },
+          "serial": {
+            "anyOf": [
+              {
+                "description": "ADB serial from phone discovery; accepted only for discovery, pairing, and connect-like paths.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "session_id": {
             "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
@@ -8832,6 +10225,7 @@
         },
         "required": [
           "session_id",
+          "appshot_id",
           "event_id",
           "action_id",
           "text"
@@ -8880,6 +10274,22 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "intent_uri": {
             "description": "Intent URI or deep link.",
             "minLength": 1,
@@ -8930,7 +10340,38 @@
             "oneOf": [
               {
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "operation": {},
+                      "package_name": {},
+                      "session_id": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation",
+                      "package_name"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "device_id": {},
+                      "operation": {},
+                      "package_name": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation",
+                      "package_name"
+                    ]
+                  }
+                ],
                 "properties": {
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "operation": {
                     "const": "launch"
                   },
@@ -8946,16 +10387,42 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "operation",
-                  "session_id",
-                  "package_name"
-                ],
                 "type": "object"
               },
               {
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "intent_uri": {},
+                      "operation": {},
+                      "session_id": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation",
+                      "intent_uri"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "device_id": {},
+                      "intent_uri": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation",
+                      "intent_uri"
+                    ]
+                  }
+                ],
                 "properties": {
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "intent_uri": {
                     "description": "Intent URI or deep link.",
                     "minLength": 1,
@@ -8988,17 +10455,28 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "operation",
-                  "session_id",
-                  "intent_uri"
-                ],
                 "type": "object"
               }
             ]
           }
         ],
         "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "intent_uri": {
             "description": "Intent URI or deep link.",
             "minLength": 1,
@@ -9060,6 +10538,7 @@
             "apk_paths": [
               "/tmp/example.apk"
             ],
+            "appshot_id": "appshot-1",
             "session_id": "phone-1"
           },
           "name": "default"
@@ -9099,6 +10578,37 @@
             "minItems": 1,
             "type": "array"
           },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "grant_runtime_permissions": {
             "anyOf": [
               {
@@ -9142,8 +10652,7 @@
           }
         },
         "required": [
-          "session_id",
-          "apk_paths"
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -9151,6 +10660,38 @@
       "structured_policy": "grouped_envelope",
       "validation_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "apk_paths": {},
+                  "appshot_id": {},
+                  "session_id": {}
+                },
+                "required": [
+                  "session_id",
+                  "appshot_id",
+                  "apk_paths"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "apk_paths": {},
+                  "appshot_id": {},
+                  "device_id": {}
+                },
+                "required": [
+                  "device_id",
+                  "appshot_id",
+                  "apk_paths"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        ],
         "properties": {
           "allow_downgrade": {
             "anyOf": [
@@ -9182,6 +10723,37 @@
             "minItems": 1,
             "type": "array"
           },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "grant_runtime_permissions": {
             "anyOf": [
               {
@@ -9225,8 +10797,4206 @@
           }
         },
         "required": [
-          "session_id",
-          "apk_paths"
+          "appshot_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "FeatureDisabled",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_content",
+          "minimal_valid_arguments": {
+            "content_id": "content-1",
+            "operation": "describe",
+            "session_id": "phone-1"
+          },
+          "name": "describe"
+        }
+      ],
+      "content_policy": "grouped_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sha256"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "controls": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_height": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_width": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation": {
+            "enum": [
+              "describe",
+              "import_host_file",
+              "export_host_file",
+              "release"
+            ],
+            "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "since_sequence": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_content",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "operation": {},
+                  "session_id": {}
+                },
+                "required": [
+                  "session_id",
+                  "operation"
+                ]
+              },
+              {
+                "properties": {
+                  "device_id": {},
+                  "operation": {}
+                },
+                "required": [
+                  "device_id",
+                  "operation"
+                ]
+              }
+            ]
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "not": {
+                    "enum": [
+                      "describe"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "properties": {
+                "appshot_id": {}
+              },
+              "required": [
+                "appshot_id"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "algorithm": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sha256"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "controls": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_height": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_width": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation": {
+            "enum": [
+              "describe",
+              "import_host_file",
+              "export_host_file",
+              "release"
+            ],
+            "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "since_sequence": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "FeatureDisabled",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_clipboard",
+          "minimal_valid_arguments": {
+            "operation": "get",
+            "session_id": "phone-1"
+          },
+          "name": "get"
+        }
+      ],
+      "content_policy": "grouped_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sha256"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "controls": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_height": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_width": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation": {
+            "enum": [
+              "get",
+              "set",
+              "clear",
+              "changes"
+            ],
+            "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "since_sequence": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_clipboard",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "operation": {},
+                  "session_id": {}
+                },
+                "required": [
+                  "session_id",
+                  "operation"
+                ]
+              },
+              {
+                "properties": {
+                  "device_id": {},
+                  "operation": {}
+                },
+                "required": [
+                  "device_id",
+                  "operation"
+                ]
+              }
+            ]
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "not": {
+                    "enum": [
+                      "get",
+                      "changes"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "properties": {
+                "appshot_id": {}
+              },
+              "required": [
+                "appshot_id"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "algorithm": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sha256"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "controls": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_height": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_width": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation": {
+            "enum": [
+              "get",
+              "set",
+              "clear",
+              "changes"
+            ],
+            "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "since_sequence": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "FeatureDisabled",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_editor",
+          "minimal_valid_arguments": {
+            "operation": "context",
+            "session_id": "phone-1"
+          },
+          "name": "context"
+        }
+      ],
+      "content_policy": "grouped_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sha256"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "controls": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_height": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_width": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation": {
+            "enum": [
+              "context",
+              "set_text",
+              "insert_text",
+              "set_selection",
+              "select_all",
+              "copy",
+              "cut",
+              "paste",
+              "insert_content"
+            ],
+            "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "since_sequence": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_editor",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "operation": {},
+                  "session_id": {}
+                },
+                "required": [
+                  "session_id",
+                  "operation"
+                ]
+              },
+              {
+                "properties": {
+                  "device_id": {},
+                  "operation": {}
+                },
+                "required": [
+                  "device_id",
+                  "operation"
+                ]
+              }
+            ]
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "not": {
+                    "enum": [
+                      "context"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "properties": {
+                "appshot_id": {}
+              },
+              "required": [
+                "appshot_id"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "algorithm": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sha256"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "controls": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_height": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_width": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation": {
+            "enum": [
+              "context",
+              "set_text",
+              "insert_text",
+              "set_selection",
+              "select_all",
+              "copy",
+              "cut",
+              "paste",
+              "insert_content"
+            ],
+            "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "since_sequence": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "FeatureDisabled",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_camera",
+          "minimal_valid_arguments": {
+            "operation": "enumerate",
+            "session_id": "phone-1"
+          },
+          "name": "enumerate"
+        }
+      ],
+      "content_policy": "grouped_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sha256"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "camera_session_id": {
+            "anyOf": [
+              {
+                "description": "Opaque preview/video session handle returned by phone_camera preview_start or video_start.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "controls": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_height": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_width": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation": {
+            "enum": [
+              "enumerate",
+              "capabilities",
+              "photo",
+              "video_start",
+              "video_pause",
+              "video_resume",
+              "video_stop",
+              "preview_start",
+              "preview_frame",
+              "preview_stop",
+              "controls"
+            ],
+            "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "description": "Capture options. V1 rejects image dimensions above 1920x1080 or portrait 1080x1920; video stops after 60000 ms.",
+                "properties": {
+                  "flash": {
+                    "enum": [
+                      "off",
+                      "on",
+                      "auto",
+                      "screen"
+                    ],
+                    "type": "string"
+                  },
+                  "fps": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "include_audio": {
+                    "type": "boolean"
+                  },
+                  "mime_type": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "size": {
+                    "additionalProperties": false,
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "height": {
+                            "maximum": 1080
+                          },
+                          "width": {
+                            "maximum": 1920
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "height": {
+                            "maximum": 1920
+                          },
+                          "width": {
+                            "maximum": 1080
+                          }
+                        }
+                      }
+                    ],
+                    "properties": {
+                      "height": {
+                        "maximum": 1920,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "width": {
+                        "maximum": 1920,
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "width",
+                      "height"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "since_sequence": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_camera",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "allOf": [
+              {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "operation": {},
+                      "session_id": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "operation"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "device_id": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "operation"
+                    ]
+                  }
+                ]
+              },
+              {
+                "if": {
+                  "properties": {
+                    "operation": {
+                      "not": {
+                        "enum": [
+                          "enumerate",
+                          "capabilities",
+                          "preview_frame"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "operation"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "appshot_id": {}
+                  },
+                  "required": [
+                    "appshot_id"
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "enum": [
+                    "video_pause",
+                    "video_resume",
+                    "video_stop",
+                    "preview_frame",
+                    "preview_stop",
+                    "controls"
+                  ]
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "properties": {
+                "camera_session_id": {}
+              },
+              "required": [
+                "camera_session_id"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "algorithm": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sha256"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "camera_session_id": {
+            "anyOf": [
+              {
+                "description": "Opaque preview/video session handle returned by phone_camera preview_start or video_start.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "controls": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_height": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_width": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation": {
+            "enum": [
+              "enumerate",
+              "capabilities",
+              "photo",
+              "video_start",
+              "video_pause",
+              "video_resume",
+              "video_stop",
+              "preview_start",
+              "preview_frame",
+              "preview_stop",
+              "controls"
+            ],
+            "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "description": "Capture options. V1 rejects image dimensions above 1920x1080 or portrait 1080x1920; video stops after 60000 ms.",
+                "properties": {
+                  "flash": {
+                    "enum": [
+                      "off",
+                      "on",
+                      "auto",
+                      "screen"
+                    ],
+                    "type": "string"
+                  },
+                  "fps": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "include_audio": {
+                    "type": "boolean"
+                  },
+                  "mime_type": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "size": {
+                    "additionalProperties": false,
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "height": {
+                            "maximum": 1080
+                          },
+                          "width": {
+                            "maximum": 1920
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "height": {
+                            "maximum": 1920
+                          },
+                          "width": {
+                            "maximum": 1080
+                          }
+                        }
+                      }
+                    ],
+                    "properties": {
+                      "height": {
+                        "maximum": 1920,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "width": {
+                        "maximum": 1920,
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "width",
+                      "height"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "since_sequence": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "branches": [
+        {
+          "expected_errors": [
+            "InvalidRequest",
+            "FeatureDisabled",
+            "UnknownTool"
+          ],
+          "handler_id": "phone_storage",
+          "minimal_valid_arguments": {
+            "operation": "roots",
+            "session_id": "phone-1"
+          },
+          "name": "roots"
+        }
+      ],
+      "content_policy": "grouped_rewrite",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sha256"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "controls": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_height": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_width": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation": {
+            "enum": [
+              "roots",
+              "list",
+              "stat",
+              "read",
+              "write",
+              "mkdir",
+              "copy",
+              "move",
+              "rename",
+              "delete",
+              "trash",
+              "hash",
+              "search",
+              "thumbnail",
+              "metadata",
+              "add_saf_root",
+              "remove_saf_root",
+              "list_saf_roots"
+            ],
+            "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "since_sequence": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "phone_storage",
+      "structured_policy": "grouped_envelope",
+      "validation_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "operation": {},
+                  "session_id": {}
+                },
+                "required": [
+                  "session_id",
+                  "operation"
+                ]
+              },
+              {
+                "properties": {
+                  "device_id": {},
+                  "operation": {}
+                },
+                "required": [
+                  "device_id",
+                  "operation"
+                ]
+              }
+            ]
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "not": {
+                    "enum": [
+                      "roots",
+                      "list",
+                      "stat",
+                      "read",
+                      "hash",
+                      "search",
+                      "thumbnail",
+                      "metadata",
+                      "list_saf_roots"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "properties": {
+                "appshot_id": {}
+              },
+              "required": [
+                "appshot_id"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "algorithm": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sha256"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appshot_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "controls": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_height": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_width": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation": {
+            "enum": [
+              "roots",
+              "list",
+              "stat",
+              "read",
+              "write",
+              "mkdir",
+              "copy",
+              "move",
+              "rename",
+              "delete",
+              "trash",
+              "hash",
+              "search",
+              "thumbnail",
+              "metadata",
+              "add_saf_root",
+              "remove_saf_root",
+              "list_saf_roots"
+            ],
+            "type": "string"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "since_sequence": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
         ],
         "type": "object"
       }
@@ -9247,6 +15017,7 @@
           ],
           "handler_id": "browser_eval",
           "minimal_valid_arguments": {
+            "appshot_id": "appshot-1",
             "expression": "document.title",
             "tab_id": "tab-1"
           },
@@ -9257,6 +15028,11 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
           "expression": {
             "minLength": 1,
             "type": "string"
@@ -9288,7 +15064,8 @@
         },
         "required": [
           "tab_id",
-          "expression"
+          "expression",
+          "appshot_id"
         ],
         "type": "object"
       },
@@ -9297,6 +15074,11 @@
       "validation_schema": {
         "additionalProperties": false,
         "properties": {
+          "appshot_id": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          },
           "expression": {
             "minLength": 1,
             "type": "string"
@@ -9328,7 +15110,8 @@
         },
         "required": [
           "tab_id",
-          "expression"
+          "expression",
+          "appshot_id"
         ],
         "type": "object"
       }

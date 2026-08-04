@@ -472,7 +472,13 @@ impl PhoneManager {
         // a manual confirmation the adb write cannot satisfy; a still-disabled
         // service yields an actionable diagnostic and (for accessibility) opens
         // the on-device settings screen so setup can be finished by hand.
-        if runtime.is_some() && install_allowed {
+        // Permission verification is not gated on install: the companion may have
+        // been installed earlier and permissions revoked while the session was
+        // disconnected. A reachable companion RPC is sufficient to probe and
+        // report gaps, and to re-ensure permissions for the steady state.
+        if runtime.is_some() {
+            self.ensure_companion_permissions(serial, &package, &mut diagnostics)
+                .await;
             self.flag_companion_permission_gaps(serial, &profile.companion, &mut diagnostics)
                 .await;
         }
@@ -598,6 +604,14 @@ impl PhoneManager {
                     .to_string(),
                 details: None,
             });
+            let _ = crate::phone::adb::open_settings(
+                self.runner.as_ref(),
+                self.configured_adb_path(),
+                serial,
+                PhoneSettingsScreen::NotificationAccess,
+                None,
+            )
+            .await;
         }
     }
 
@@ -656,6 +670,30 @@ impl PhoneManager {
         if let Some(session_id) = self.resolve_session_id(selector)
             && let Some(cached) = self.profiles.get(&session_id)
         {
+            if let Some((device_id, epoch)) = self.direct_identity(&session_id)
+                && let Some(provider) = &self.direct_provider
+                && let Err(error) = provider
+                    .dispatch(
+                        &device_id,
+                        epoch,
+                        "companion.status",
+                        serde_json::json!({}),
+                        true,
+                        std::time::Duration::from_secs(5),
+                    )
+                    .await
+            {
+                return PhoneCompanionStatusResponse {
+                    session_id,
+                    serial: String::new(),
+                    companion: cached.profile.companion.clone(),
+                    diagnostics: vec![DiagnosticEntry {
+                        code: "PhoneCompanionDirectDispatchFailed".into(),
+                        message: format!("CompanionDirect status failed: {error:?}"),
+                        details: None,
+                    }],
+                };
+            }
             // Surface the most recent companion bootstrap diagnostics (install
             // outcome class, forward/probe failures) rather than discarding them.
             let diagnostics = self.companion_bootstrap_diagnostics(&session_id);

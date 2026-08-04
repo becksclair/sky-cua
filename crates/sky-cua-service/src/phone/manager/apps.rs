@@ -41,12 +41,25 @@ impl PhoneManager {
                 kind: PhoneAppResponseKind::Current,
                 backend: PhoneBackendKind::Companion,
                 success: true,
+                destination_appshot: None,
                 current_app: Some(app),
                 apps: Vec::new(),
                 truncated: false,
                 install_strategy: None,
                 diagnostics: Vec::new(),
             };
+        }
+        if self.direct_identity(&session_id).is_some() {
+            return app_failure(
+                session_id,
+                serial,
+                PhoneAppResponseKind::Current,
+                DiagnosticEntry {
+                    code: "PhoneCompanionDirectDispatchFailed".into(),
+                    message: "the direct Companion could not report the foreground app".into(),
+                    details: None,
+                },
+            );
         }
 
         match adb::foreground_app(self.runner.as_ref(), self.configured_adb_path(), &serial).await {
@@ -56,6 +69,7 @@ impl PhoneManager {
                 kind: PhoneAppResponseKind::Current,
                 backend: PhoneBackendKind::Adb,
                 success: true,
+                destination_appshot: None,
                 current_app: Some(PhoneAppInfo {
                     package_name: app.package,
                     label: None,
@@ -96,6 +110,77 @@ impl PhoneManager {
             return app_no_session(&request.session, PhoneAppResponseKind::List);
         };
         let serial = self.serial_of(&session_id);
+        if let Some((device_id, epoch)) = self.direct_identity(&session_id)
+            && let Some(provider) = &self.direct_provider
+            && let Ok(result) = provider
+                .dispatch(
+                    &device_id,
+                    epoch,
+                    "app_list",
+                    serde_json::json!({"launchable_only": !request.include_system}),
+                    true,
+                    std::time::Duration::from_secs(10),
+                )
+                .await
+        {
+            let all = result
+                .get("apps")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let limit = request.limit.unwrap_or(all.len());
+            let truncated = result
+                .get("truncated")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                || all.len() > limit;
+            let apps = all
+                .into_iter()
+                .take(limit)
+                .filter_map(|app| {
+                    Some(PhoneAppInfo {
+                        package_name: app.get("package")?.as_str()?.to_owned(),
+                        label: app
+                            .get("label")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned),
+                        activity: None,
+                        version_name: None,
+                        version_code: None,
+                        launchable: app
+                            .get("launchable")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                        system_app: false,
+                    })
+                })
+                .collect();
+            return PhoneAppResponse {
+                session_id,
+                serial,
+                kind: PhoneAppResponseKind::List,
+                backend: PhoneBackendKind::Companion,
+                success: true,
+                destination_appshot: None,
+                current_app: None,
+                apps,
+                truncated,
+                install_strategy: None,
+                diagnostics: Vec::new(),
+            };
+        }
+        if self.direct_identity(&session_id).is_some() {
+            return app_failure(
+                session_id,
+                serial,
+                PhoneAppResponseKind::List,
+                DiagnosticEntry {
+                    code: "PhoneCompanionDirectDispatchFailed".into(),
+                    message: "the direct Companion could not list visible applications".into(),
+                    details: None,
+                },
+            );
+        }
         match adb::list_packages(
             self.runner.as_ref(),
             self.configured_adb_path(),
@@ -126,6 +211,7 @@ impl PhoneManager {
                     kind: PhoneAppResponseKind::List,
                     backend: PhoneBackendKind::Adb,
                     success: true,
+                    destination_appshot: None,
                     current_app: None,
                     apps,
                     truncated,
@@ -170,6 +256,18 @@ impl PhoneManager {
                 "phone_app_launch",
             );
         }
+        if self.direct_identity(&session_id).is_some() {
+            return app_failure(
+                session_id,
+                serial,
+                PhoneAppResponseKind::Launch,
+                DiagnosticEntry {
+                    code: "PhoneCompanionDirectDispatchFailed".into(),
+                    message: "the direct Companion rejected the app launch".into(),
+                    details: None,
+                },
+            );
+        }
 
         let outcome = adb::launch_package(
             self.runner.as_ref(),
@@ -211,6 +309,18 @@ impl PhoneManager {
                 "phone_app_open_intent",
             );
         }
+        if self.direct_identity(&session_id).is_some() {
+            return app_failure(
+                session_id,
+                serial,
+                PhoneAppResponseKind::OpenIntent,
+                DiagnosticEntry {
+                    code: "PhoneCompanionDirectDispatchFailed".into(),
+                    message: "the direct Companion rejected the intent".into(),
+                    details: None,
+                },
+            );
+        }
 
         let outcome = adb::start_intent(
             self.runner.as_ref(),
@@ -237,6 +347,18 @@ impl PhoneManager {
             return app_no_session(&request.session, PhoneAppResponseKind::ForceStop);
         };
         let serial = self.serial_of(&session_id);
+        if self.direct_identity(&session_id).is_some() {
+            return app_failure(
+                session_id,
+                serial,
+                PhoneAppResponseKind::ForceStop,
+                DiagnosticEntry {
+                    code: "PhoneOperationUnsupported".into(),
+                    message: "force-stop requires ADB or a visible Settings UI fallback".into(),
+                    details: None,
+                },
+            );
+        }
         let outcome = adb::force_stop(
             self.runner.as_ref(),
             self.configured_adb_path(),
@@ -257,6 +379,11 @@ impl PhoneManager {
             return app_no_session(&request.session, PhoneAppResponseKind::Install);
         };
         let serial = self.serial_of(&session_id);
+        if self.direct_identity(&session_id).is_some() {
+            return app_failure(session_id, serial, PhoneAppResponseKind::Install, DiagnosticEntry {
+                code: "PhoneOperationUnsupported".into(), message: "APK installation through the visible package installer is not implemented for direct sessions".into(), details: None,
+            });
+        }
         if request.apk_paths.is_empty() {
             return app_failure(
                 session_id,
@@ -329,6 +456,7 @@ impl PhoneManager {
                 kind: PhoneAppResponseKind::Install,
                 backend: PhoneBackendKind::Adb,
                 success: true,
+                destination_appshot: None,
                 current_app: None,
                 apps: Vec::new(),
                 truncated: false,
@@ -365,6 +493,32 @@ impl PhoneManager {
             return app_no_session(&request.session, PhoneAppResponseKind::OpenSettings);
         };
         let serial = self.serial_of(&session_id);
+        if let Some((device_id, epoch)) = self.direct_identity(&session_id) {
+            let params = serde_json::json!({
+                "screen": serde_json::to_value(request.screen).unwrap_or(serde_json::Value::Null),
+                "package_name": request.package_name,
+            });
+            let result = self
+                .direct_provider
+                .as_ref()
+                .expect("direct identity requires provider")
+                .dispatch(
+                    &device_id,
+                    epoch,
+                    "app.settings",
+                    params,
+                    false,
+                    std::time::Duration::from_secs(10),
+                )
+                .await;
+            return companion_app_result(
+                session_id,
+                serial,
+                PhoneAppResponseKind::OpenSettings,
+                result.is_ok(),
+                "phone_open_settings",
+            );
+        }
         let outcome = adb::open_settings(
             self.runner.as_ref(),
             self.configured_adb_path(),
@@ -391,6 +545,9 @@ impl PhoneManager {
     /// fallback. Force-stop never consults this (a non-privileged companion cannot
     /// force-stop).
     fn companion_app_management(&self, session_id: &str) -> bool {
+        if self.direct_identity(session_id).is_some() {
+            return true;
+        }
         self.profiles
             .get(session_id)
             .map(|cached| !cached.profile.stale && cached.profile.companion.rpc_reachable)
@@ -416,6 +573,30 @@ impl PhoneManager {
         package: Option<String>,
         intent_uri: Option<String>,
     ) -> Option<bool> {
+        if let Some((device_id, epoch)) = self.direct_identity(session_id) {
+            let (method, params) = match op {
+                AppOp::Launch => ("app.launch", serde_json::json!({"package": package?})),
+                AppOp::OpenIntent => (
+                    "app.open_intent",
+                    serde_json::json!({"intent_uri": intent_uri?}),
+                ),
+                AppOp::ForceStop => return None,
+            };
+            return self
+                .direct_provider
+                .as_ref()?
+                .dispatch(
+                    &device_id,
+                    epoch,
+                    method,
+                    params,
+                    false,
+                    std::time::Duration::from_secs(10),
+                )
+                .await
+                .ok()
+                .map(|_| true);
+        }
         let entry = self.sessions.get_mut(session_id)?;
         let runtime = entry.companion.as_mut()?;
         match runtime.client.app_op(op, package, intent_uri).await {
@@ -433,6 +614,36 @@ impl PhoneManager {
 
     /// Foreground app from the companion, if reachable.
     async fn companion_current_app(&mut self, session_id: &str) -> Option<PhoneAppInfo> {
+        if let Some((device_id, epoch)) = self.direct_identity(session_id) {
+            let app = self
+                .direct_provider
+                .as_ref()?
+                .dispatch(
+                    &device_id,
+                    epoch,
+                    "current_app",
+                    serde_json::json!({}),
+                    true,
+                    std::time::Duration::from_secs(5),
+                )
+                .await
+                .ok()?;
+            return Some(PhoneAppInfo {
+                package_name: app.get("package")?.as_str()?.to_owned(),
+                label: app
+                    .get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                activity: app
+                    .get("activity")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                version_name: None,
+                version_code: None,
+                launchable: true,
+                system_app: false,
+            });
+        }
         let entry = self.sessions.get_mut(session_id)?;
         let runtime = entry.companion.as_mut()?;
         let app = runtime.client.current_app().await.ok()?;
@@ -455,6 +666,13 @@ impl PhoneManager {
     ) -> Result<Option<PhoneAppInfo>, DiagnosticEntry> {
         if let Some(app) = self.companion_current_app(session_id).await {
             return Ok(Some(app));
+        }
+        if self.direct_identity(session_id).is_some() {
+            return Err(DiagnosticEntry {
+                code: "PhoneCompanionDirectDispatchFailed".into(),
+                message: "the direct Companion could not report the foreground app".into(),
+                details: None,
+            });
         }
         match adb::foreground_app(self.runner.as_ref(), self.configured_adb_path(), serial).await {
             Ok(Some(app)) => Ok(Some(PhoneAppInfo {
@@ -489,6 +707,7 @@ impl PhoneManager {
                 kind,
                 backend: PhoneBackendKind::Adb,
                 success: true,
+                destination_appshot: None,
                 current_app: None,
                 apps: Vec::new(),
                 truncated: false,
@@ -523,6 +742,7 @@ fn app_no_session(selector: &PhoneSessionSelector, kind: PhoneAppResponseKind) -
         kind,
         backend: PhoneBackendKind::None,
         success: false,
+        destination_appshot: None,
         current_app: None,
         apps: Vec::new(),
         truncated: false,
@@ -547,6 +767,7 @@ fn companion_app_result(
             kind,
             backend: PhoneBackendKind::Companion,
             success: true,
+            destination_appshot: None,
             current_app: None,
             apps: Vec::new(),
             truncated: false,
@@ -579,6 +800,7 @@ fn app_failure(
         kind,
         backend: PhoneBackendKind::None,
         success: false,
+        destination_appshot: None,
         current_app: None,
         apps: Vec::new(),
         truncated: false,

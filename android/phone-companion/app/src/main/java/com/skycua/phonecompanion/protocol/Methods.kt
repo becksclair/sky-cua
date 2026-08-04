@@ -90,6 +90,20 @@ data class ScreenshotParams(val includeOverlay: Boolean) {
     }
 }
 
+/** Parameters for the bounded universal phone AppShot capture. */
+data class AppShotParams(val maxNodes: Int, val deadlineMs: Long) {
+    companion object {
+        const val DEFAULT_MAX_NODES = 5000
+        const val HARD_MAX_NODES = 5000
+        const val DEFAULT_DEADLINE_MS = 2000L
+        fun parse(params: JsonValue.Obj): AppShotParams {
+            val nodes = (params.int("max_nodes") ?: DEFAULT_MAX_NODES).coerceIn(1, HARD_MAX_NODES)
+            val deadline = (params.long("deadline_ms") ?: DEFAULT_DEADLINE_MS).coerceIn(1L, DEFAULT_DEADLINE_MS)
+            return AppShotParams(nodes, deadline)
+        }
+    }
+}
+
 data class ScreenshotResult(
     val mimeType: String,
     val dataBase64: String,
@@ -520,12 +534,15 @@ data class CapabilitiesState(
     val screenshotApiLevel: Int,
     val screenshotSupported: Boolean,
     val gestureSupported: Boolean,
+    /** Android may recreate START_STICKY services, but does not guarantee it. */
+    val processDeathAutorestart: Boolean = false,
 ) {
     fun toJson(): JsonValue.Obj {
         val base = health.toHealthJson().entries.toMutableMap()
         base["screenshot_api_level"] = JsonValue.of(screenshotApiLevel)
         base["screenshot_supported"] = JsonValue.of(screenshotSupported)
         base["gesture_supported"] = JsonValue.of(gestureSupported)
+        base["process_death_autorestart"] = JsonValue.of(processDeathAutorestart)
         return JsonValue.Obj(base)
     }
 }

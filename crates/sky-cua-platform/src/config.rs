@@ -50,6 +50,11 @@ pub const PHONE_COMPANION_RPC_PORT_ENV: &str = "SKY_CUA_PHONE_COMPANION_RPC_PORT
 pub const PHONE_COMPANION_RPC_TOKEN_TTL_MS_ENV: &str = "SKY_CUA_PHONE_COMPANION_RPC_TOKEN_TTL_MS";
 pub const PHONE_CAPABILITY_CACHE_TTL_MS_ENV: &str = "SKY_CUA_PHONE_CAPABILITY_CACHE_TTL_MS";
 pub const PHONE_TARGET_MODELS_ENV: &str = "SKY_CUA_PHONE_TARGET_MODELS";
+pub const PHONE_DIRECT_ENABLED_ENV: &str = "SKY_CUA_PHONE_DIRECT";
+pub const PHONE_DIRECT_LISTEN_ADDR_ENV: &str = "SKY_CUA_PHONE_DIRECT_LISTEN_ADDR";
+pub const PHONE_DIRECT_ADVERTISED_ENDPOINT_ENV: &str = "SKY_CUA_PHONE_DIRECT_ADVERTISED_ENDPOINT";
+pub const PHONE_DIRECT_ENROLLMENT_TTL_MS_ENV: &str = "SKY_CUA_PHONE_DIRECT_ENROLLMENT_TTL_MS";
+pub const PHONE_DIRECT_STATE_PATH_ENV: &str = "SKY_CUA_PHONE_DIRECT_STATE_PATH";
 
 // Isolated-desktop environment overrides. Each beats the matching
 // `[isolated_desktop]` config key for this process. Names are the public
@@ -155,6 +160,11 @@ pub struct PhoneConfig {
     pub companion_rpc_port: Option<u16>,
     pub companion_rpc_token_ttl_ms: Option<u64>,
     pub capability_cache_ttl_ms: Option<u64>,
+    pub direct_enabled: Option<bool>,
+    pub direct_listen_addr: Option<String>,
+    pub direct_advertised_endpoint: Option<String>,
+    pub direct_enrollment_ttl_ms: Option<u64>,
+    pub direct_state_path: Option<String>,
     #[serde(default)]
     pub primary_target_models: Vec<String>,
 }
@@ -169,6 +179,8 @@ pub const PHONE_DEFAULT_COMPANION_RPC_PORT: u16 = 47683;
 pub const PHONE_DEFAULT_COMPANION_RPC_TOKEN_TTL_MS: u64 = 900_000;
 /// Default capability-cache soft refresh hint (30 seconds).
 pub const PHONE_DEFAULT_CAPABILITY_CACHE_TTL_MS: u64 = 30_000;
+/// Direct enrollment codes are single-use and expire after five minutes.
+pub const PHONE_DEFAULT_DIRECT_ENROLLMENT_TTL_MS: u64 = 300_000;
 
 /// Parsed `[isolated_desktop]` table. Every field is optional in the file;
 /// defaults and per-process env overrides are layered on by
@@ -277,6 +289,15 @@ pub struct ResolvedPhoneSelection {
     pub companion_rpc_token_ttl_ms: u64,
     pub capability_cache_ttl_ms: u64,
     pub primary_target_models: Vec<String>,
+    /// Explicit opt-in for the phone-initiated `phone-control.v2` listener.
+    pub direct_enabled: bool,
+    /// Concrete tailnet address to bind. The listener rejects wildcard/public
+    /// binds during startup; loopback is accepted for deterministic tests.
+    pub direct_listen_addr: Option<String>,
+    /// MagicDNS WebSocket endpoint encoded into enrollment QR payloads.
+    pub direct_advertised_endpoint: Option<String>,
+    pub direct_enrollment_ttl_ms: u64,
+    pub direct_state_path: Option<String>,
 }
 
 /// Every `SKY_CUA_*` environment key declared as a `pub const *_ENV` in this
@@ -315,6 +336,11 @@ pub fn all_env_keys() -> &'static [&'static str] {
         PHONE_COMPANION_RPC_TOKEN_TTL_MS_ENV,
         PHONE_CAPABILITY_CACHE_TTL_MS_ENV,
         PHONE_TARGET_MODELS_ENV,
+        PHONE_DIRECT_ENABLED_ENV,
+        PHONE_DIRECT_LISTEN_ADDR_ENV,
+        PHONE_DIRECT_ADVERTISED_ENDPOINT_ENV,
+        PHONE_DIRECT_ENROLLMENT_TTL_MS_ENV,
+        PHONE_DIRECT_STATE_PATH_ENV,
         ISOLATED_DESKTOP_ENABLED_ENV,
         ISOLATED_DESKTOP_DISPLAY_ENV,
         ISOLATED_DESKTOP_RESOLUTION_ENV,
@@ -589,6 +615,18 @@ pub fn resolve_phone_selection(phone: &PhoneConfig) -> ResolvedPhoneSelection {
             .or(phone.capability_cache_ttl_ms)
             .unwrap_or(PHONE_DEFAULT_CAPABILITY_CACHE_TTL_MS),
         primary_target_models: target_models,
+        direct_enabled: env_bool(PHONE_DIRECT_ENABLED_ENV)
+            .or(phone.direct_enabled)
+            .unwrap_or(false),
+        direct_listen_addr: env_string(PHONE_DIRECT_LISTEN_ADDR_ENV)
+            .or_else(|| normalize(phone.direct_listen_addr.clone())),
+        direct_advertised_endpoint: env_string(PHONE_DIRECT_ADVERTISED_ENDPOINT_ENV)
+            .or_else(|| normalize(phone.direct_advertised_endpoint.clone())),
+        direct_enrollment_ttl_ms: env_u64(PHONE_DIRECT_ENROLLMENT_TTL_MS_ENV)
+            .or(phone.direct_enrollment_ttl_ms)
+            .unwrap_or(PHONE_DEFAULT_DIRECT_ENROLLMENT_TTL_MS),
+        direct_state_path: env_string(PHONE_DIRECT_STATE_PATH_ENV)
+            .or_else(|| normalize(phone.direct_state_path.clone())),
     }
 }
 
@@ -847,6 +885,11 @@ companion_allow_downgrade = false
 companion_rpc_port = 47683
 companion_rpc_token_ttl_ms = 900000
 capability_cache_ttl_ms = 30000
+direct_enabled = true
+direct_listen_addr = "100.64.0.10:47684"
+direct_advertised_endpoint = "wss://saga.example.ts.net/phone/control"
+direct_enrollment_ttl_ms = 120000
+direct_state_path = "/var/lib/sky-cua/phone-direct.json"
 primary_target_models = ["Galaxy S26 Ultra", "Redmi Pad 15 Pro"]
 "#;
 
@@ -859,6 +902,12 @@ primary_target_models = ["Galaxy S26 Ultra", "Redmi Pad 15 Pro"]
         assert_eq!(phone.default_backend.as_deref(), Some("companion"));
         assert_eq!(phone.companion_rpc_port, Some(47683));
         assert_eq!(phone.capability_cache_ttl_ms, Some(30000));
+        assert_eq!(phone.direct_enabled, Some(true));
+        assert_eq!(
+            phone.direct_listen_addr.as_deref(),
+            Some("100.64.0.10:47684")
+        );
+        assert_eq!(phone.direct_enrollment_ttl_ms, Some(120000));
         assert_eq!(
             phone.primary_target_models,
             vec![
@@ -884,6 +933,11 @@ primary_target_models = ["Galaxy S26 Ultra", "Redmi Pad 15 Pro"]
             PHONE_CAPABILITY_CACHE_TTL_MS_ENV,
             PHONE_ADB_ENV,
             PHONE_TARGET_MODELS_ENV,
+            PHONE_DIRECT_ENABLED_ENV,
+            PHONE_DIRECT_LISTEN_ADDR_ENV,
+            PHONE_DIRECT_ADVERTISED_ENDPOINT_ENV,
+            PHONE_DIRECT_ENROLLMENT_TTL_MS_ENV,
+            PHONE_DIRECT_STATE_PATH_ENV,
             REPO_ROOT_ENV,
         ]);
         let config = parse_machine_config("browser = \"chrome\"\n").expect("valid config");
@@ -907,6 +961,12 @@ primary_target_models = ["Galaxy S26 Ultra", "Redmi Pad 15 Pro"]
         );
         assert!(resolved.adb_path.is_none());
         assert!(resolved.primary_target_models.is_empty());
+        assert!(!resolved.direct_enabled);
+        assert!(resolved.direct_listen_addr.is_none());
+        assert_eq!(
+            resolved.direct_enrollment_ttl_ms,
+            PHONE_DEFAULT_DIRECT_ENROLLMENT_TTL_MS
+        );
     }
 
     #[test]
@@ -934,6 +994,11 @@ primary_target_models = ["Galaxy S26 Ultra", "Redmi Pad 15 Pro"]
             PHONE_COMPANION_ENV,
             PHONE_COMPANION_RPC_PORT_ENV,
             PHONE_TARGET_MODELS_ENV,
+            PHONE_DIRECT_ENABLED_ENV,
+            PHONE_DIRECT_LISTEN_ADDR_ENV,
+            PHONE_DIRECT_ADVERTISED_ENDPOINT_ENV,
+            PHONE_DIRECT_ENROLLMENT_TTL_MS_ENV,
+            PHONE_DIRECT_STATE_PATH_ENV,
         ]);
         let phone = parse_machine_config(PHONE_TABLE)
             .expect("valid config")
@@ -945,6 +1010,12 @@ primary_target_models = ["Galaxy S26 Ultra", "Redmi Pad 15 Pro"]
         assert!(resolved.wireless_auto_connect);
         assert_eq!(resolved.companion_rpc_port, 47683);
         assert_eq!(resolved.primary_target_models.len(), 2);
+        assert!(resolved.direct_enabled);
+        assert_eq!(
+            resolved.direct_advertised_endpoint.as_deref(),
+            Some("wss://saga.example.ts.net/phone/control")
+        );
+        assert_eq!(resolved.direct_enrollment_ttl_ms, 120000);
     }
 
     #[test]

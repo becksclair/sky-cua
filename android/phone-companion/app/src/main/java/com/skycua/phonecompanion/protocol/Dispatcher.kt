@@ -30,6 +30,10 @@ interface MethodHandler {
 
     fun screenshot(params: ScreenshotParams): ScreenshotResult
 
+    /** Canonical bounded perception envelope used by CompanionDirect. */
+    fun appShot(params: AppShotParams): JsonValue.Obj =
+        throw MethodApplicationException("unsupported_api", "appshot is unavailable")
+
     fun gesture(params: GestureParams): JsonValue.Obj
 
     fun cursorOverlay(params: CursorOverlayParams): JsonValue.Obj
@@ -47,6 +51,21 @@ interface MethodHandler {
     fun appList(params: AppListParams): AppListResult
 
     fun appOp(params: AppOpParams): JsonValue.Obj
+
+    fun clipboard(params: JsonValue.Obj): JsonValue.Obj =
+        throw MethodApplicationException("unsupported_api", "clipboard is unavailable")
+
+    fun editor(params: JsonValue.Obj): JsonValue.Obj =
+        throw MethodApplicationException("unsupported_api", "editor control is unavailable")
+
+    fun storage(params: JsonValue.Obj): JsonValue.Obj =
+        throw MethodApplicationException("unsupported_api", "storage is unavailable")
+
+    fun camera(params: JsonValue.Obj): JsonValue.Obj =
+        throw MethodApplicationException("unsupported_api", "camera is unavailable")
+
+    fun key(params: JsonValue.Obj): JsonValue.Obj =
+        throw MethodApplicationException("unsupported_api", "key input is unavailable")
 }
 
 /**
@@ -106,6 +125,8 @@ class RpcDispatcher(
                 handler.accessibilityTree(AccessibilityTreeParams.parse(request.params)).toJson()
             Protocol.Methods.SCREENSHOT ->
                 handler.screenshot(ScreenshotParams.parse(request.params)).toJson()
+            Protocol.Methods.APP_SHOT ->
+                handler.appShot(AppShotParams.parse(request.params))
             Protocol.Methods.GESTURE ->
                 handler.gesture(GestureParams.parse(request.params))
             Protocol.Methods.CURSOR_OVERLAY ->
@@ -123,6 +144,11 @@ class RpcDispatcher(
                 handler.appList(AppListParams.parse(request.params)).toJson()
             Protocol.Methods.APP_OP ->
                 handler.appOp(AppOpParams.parse(request.params))
+            Protocol.Methods.CLIPBOARD -> handler.clipboard(request.params)
+            Protocol.Methods.EDITOR -> handler.editor(request.params)
+            Protocol.Methods.STORAGE -> handler.storage(request.params)
+            Protocol.Methods.CAMERA -> handler.camera(request.params)
+            Protocol.Methods.KEY -> handler.key(request.params)
             else ->
                 throw MethodParamException(
                     Protocol.ErrorCodes.UNKNOWN_METHOD,
