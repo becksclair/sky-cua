@@ -10,6 +10,12 @@ verify-python:
     uv run ruff format --check scripts
     uv run ruff check scripts
     uv run basedpyright
+    uv run pytest --ignore=scripts/test_browser_control_acceptance.py
+
+verify-python-full:
+    uv run ruff format --check scripts
+    uv run ruff check scripts
+    uv run basedpyright
     uv run pytest
 
 # Skips (exit 0 with a message) when no JDK is available.

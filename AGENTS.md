@@ -49,6 +49,7 @@ with `cargo install cargo-nextest`. nextest does not run doctests; run
 - Keep examples and docs professional. No persona, no private shorthand,
   no transcript paste.
 - Preserve executable wrapper contracts in `bin/` and `.mcp.json`.
+- Every new `SKY_CUA_*` environment key added in `crates/` must be either forwarded through the installer (`install_mcp_server.py`, `_install_shared.py`, `.mcp.json`) or explicitly exempted in `test_env_key_contract.py:KNOWN_NOT_FORWARDED` with a one-line reason. The `test_forwarding_relevant_rust_keys_are_forwarded_or_exempted` test enforces this — don't let new keys silently miss the installer.
 - Branch names use `bex/` unless the user asks otherwise.
 - File naming: human-readable lowercase slugs (`agent-cursor-overlay.md`,
   `linux_virtual_input.md`); never timestamp-prefixed or auto-generated
