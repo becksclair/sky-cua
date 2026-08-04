@@ -340,9 +340,9 @@ def release_command(
         source[: match.start()] + f'PRODUCT_VERSION = "{target_version}"' + source[match.end() :]
     )
     rewrite_product_version(version_path, target_version)
-    verify = _capture(runner, ("just", "verify"), repo_root=repo_root)
+    verify = _capture(runner, ("just", "verify-python"), repo_root=repo_root)
     if verify.returncode != 0:
-        raise ReleaseError(f"just verify failed: {_command_detail(verify)}")
+        raise ReleaseError(f"just verify-python failed: {_command_detail(verify)}")
 
     relative = VERSION_PATH.as_posix()
     _require_clean_scope(

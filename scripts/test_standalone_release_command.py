@@ -108,7 +108,7 @@ def _successful_release_steps(target: str = DEFAULT_RELEASE_VERSION) -> list[Ste
     tag_ref = f"refs/tags/{tag}"
     return [
         *_preflight_steps(target),
-        (("just", "verify"), 0, "verified\n"),
+        (("just", "verify-python"), 0, "verified\n"),
         (
             ("git", "status", "--porcelain=v1", "--untracked-files=all"),
             0,
@@ -378,7 +378,7 @@ def test_release_happy_path_has_exact_order_and_scope(
 
 @pytest.mark.parametrize(
     "failed_command",
-    [("just", "verify"), ("git", "commit"), ("git", "tag"), ("git", "push")],
+    [("just", "verify-python"), ("git", "commit"), ("git", "tag"), ("git", "push")],
 )
 def test_release_stops_at_failure_without_cleanup_or_later_side_effects(
     tmp_path: Path, failed_command: tuple[str, ...]
@@ -409,7 +409,7 @@ def test_release_rejects_verify_changes_outside_version_file(tmp_path: Path) -> 
     repo = _release_checkout(tmp_path)
     steps = [
         *_preflight_steps(),
-        (("just", "verify"), 0, ""),
+        (("just", "verify-python"), 0, ""),
         (
             ("git", "status", "--porcelain=v1", "--untracked-files=all"),
             0,
@@ -476,7 +476,7 @@ def test_release_end_to_end_with_isolated_git_remote(tmp_path: Path) -> None:
     git("config", "push.followTags", "true")
 
     def runner(command: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        if list(command) == ["just", "verify"]:
+        if list(command) == ["just", "verify-python"]:
             return subprocess.CompletedProcess(command, 0, "verified\n", "")
         return subprocess.run(list(command), **kwargs)
 
