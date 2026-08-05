@@ -28,6 +28,7 @@ from _plugin_bundle import (
     runtime_binary_path,
     runtime_binary_source_name,
 )
+from _portable_elf import LINUX_X64_RUNTIME_NAMES, validate_x86_64_v3_paths
 from deploy_freshness import STAMP_SUFFIX, write_build_stamp
 
 BUNDLE_SOURCE_PATHS = [
@@ -158,6 +159,10 @@ def build_release_binaries() -> None:
     result = run_cargo_build()
     if result.returncode == 0:
         emit_cargo_output(result)
+        if current_runtime_platform() == "linux-x64":
+            validate_x86_64_v3_paths(
+                [cargo_target_root() / "release" / name for name in LINUX_X64_RUNTIME_NAMES]
+            )
         write_build_stamp(release_client_binary_path())
         return
 
@@ -169,6 +174,10 @@ def build_release_binaries() -> None:
         retry = run_cargo_build(env=cargo_env_without_rustc_wrappers())
         if retry.returncode == 0:
             emit_cargo_output(retry)
+            if current_runtime_platform() == "linux-x64":
+                validate_x86_64_v3_paths(
+                    [cargo_target_root() / "release" / name for name in LINUX_X64_RUNTIME_NAMES]
+                )
             write_build_stamp(release_client_binary_path())
             return
         emit_cargo_output(result)

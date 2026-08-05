@@ -409,7 +409,8 @@ def test_release_workflow_publishes_tags_and_keeps_manual_retry() -> None:
     assert "tags:" in release_workflow
     assert "- standalone-v*" in release_workflow
     assert "${{ inputs.tag || gitea.ref_name }}" in release_workflow
-    assert "RUSTFLAGS: -Ctarget-cpu=x86-64-v3" in release_workflow
+    assert "env -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_RUSTFLAGS" in release_workflow
+    assert "RUSTFLAGS=-Ctarget-cpu=x86-64-v3" in release_workflow
     assert "ssh -o BatchMode=yes saga" in deploy_workflow
     assert not (REPO_ROOT / ".github/workflows/verify.yml").exists()
 

@@ -16,6 +16,7 @@ import pytest
 
 import _chrome_bridge
 import _plugin_bundle as plugin_bundle
+import _portable_elf as portable_elf
 import build_plugin
 import live_agent_cursor_kde_smoke
 from _plugin_bundle import (
@@ -1211,6 +1212,37 @@ def test_build_release_binaries_retries_windows_sccache_shim_failure(
     assert calls[1]["RUSTC_WRAPPER"] == ""
     assert calls[1]["RUSTC_WORKSPACE_WRAPPER"] == ""
     assert stamps == [build_plugin.REPO_ROOT / "target" / "release" / "sky-cua-client.exe"]
+
+
+def test_portable_elf_rejects_gfni(tmp_path: Path) -> None:
+    path = tmp_path / "runtime"
+    header = bytearray(64)
+    header[:4] = b"\x7fELF"
+    header[4:6] = b"\x02\x01"
+    header[18:20] = (62).to_bytes(2, "little")
+    path.write_bytes(header)
+
+    def fake_objdump(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            [], 0, stdout="  vgf2p8affineqb %ymm7,%ymm2,%ymm2\n", stderr=""
+        )
+
+    with pytest.raises(ValueError, match="vgf2p8affineqb"):
+        portable_elf.validate_x86_64_v3_elf(path, runner=fake_objdump)
+
+
+def test_portable_elf_accepts_x86_64_v3_instructions(tmp_path: Path) -> None:
+    path = tmp_path / "runtime"
+    header = bytearray(64)
+    header[:4] = b"\x7fELF"
+    header[4:6] = b"\x02\x01"
+    header[18:20] = (62).to_bytes(2, "little")
+    path.write_bytes(header)
+
+    def fake_objdump(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 0, stdout="  vpshufb %ymm5,%ymm6,%ymm5\n", stderr="")
+
+    portable_elf.validate_x86_64_v3_elf(path, runner=fake_objdump)
 
 
 def test_build_release_binaries_does_not_retry_unrelated_failure(

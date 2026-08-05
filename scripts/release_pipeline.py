@@ -22,6 +22,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
+from _portable_elf import LINUX_X64_RUNTIME_MEMBERS, validate_x86_64_v3_elf
+
 ARCHIVE_NAME = "sky-cua-linux-x64-glibc.tar.gz"
 CHECKSUM_NAME = f"{ARCHIVE_NAME}.sha256"
 PAYLOAD_ROOT = "sky-cua-linux-x64-glibc"
@@ -153,6 +155,36 @@ def validate_archive(archive_path: Path, *, tag: str | None = None) -> dict[str,
             f"tag version {expected_version!r} does not match archive version {version!r}"
         )
     return manifest
+
+
+def validate_portable_runtime_archive(archive_path: Path) -> None:
+    """Validate Linux Rust runtime members when present in a standalone archive."""
+    with tempfile.TemporaryDirectory(prefix="sky-cua-portable-runtime-") as temporary:
+        temporary_root = Path(temporary)
+        with tarfile.open(archive_path, "r:gz") as archive:
+            members = {member.name: member for member in archive.getmembers()}
+            archive_members = {
+                relative: members.get(f"{PAYLOAD_ROOT}/{relative.as_posix()}")
+                for relative in LINUX_X64_RUNTIME_MEMBERS
+            }
+            present = {relative: member for relative, member in archive_members.items() if member}
+            if not present:
+                return
+            missing = [
+                relative.as_posix() for relative, member in archive_members.items() if not member
+            ]
+            if missing:
+                raise ValueError(
+                    f"standalone archive is missing portable runtime members: {missing}"
+                )
+
+            for relative, member in present.items():
+                stream = archive.extractfile(member)
+                if stream is None:
+                    raise ValueError(f"standalone runtime member cannot be read: {relative}")
+                path = temporary_root / relative.name
+                path.write_bytes(stream.read())
+                validate_x86_64_v3_elf(path, label=relative.as_posix())
 
 
 def smoke_install(archive_path: Path, *, tag: str) -> dict[str, Any]:
@@ -423,6 +455,7 @@ def publish_release(
 ) -> str:
     """Create/reuse a release, prove readback identity, and dispatch Saga."""
     validate_archive(archive_path, tag=tag)
+    validate_portable_runtime_archive(archive_path)
     if archive_path.name != ARCHIVE_NAME:
         raise ValueError(f"standalone archive must be named {ARCHIVE_NAME!r}")
     if not re.fullmatch(r"[0-9a-f]{40,64}", commit):
@@ -495,6 +528,7 @@ def publish_release(
 
 def _command_validate(args: argparse.Namespace) -> int:
     manifest = validate_archive(args.archive, tag=args.tag)
+    validate_portable_runtime_archive(args.archive)
     print(json.dumps(manifest, sort_keys=True))
     return 0
 

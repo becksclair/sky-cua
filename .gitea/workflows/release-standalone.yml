@@ -1,5 +1,4 @@
 name: release standalone
-
 on:
   push:
     tags:
@@ -9,16 +8,12 @@ on:
       tag:
         description: Existing standalone-v<VERSION> tag to publish
         required: true
-
 jobs:
   release:
     runs-on: asgard-build-1
     env:
       TAG: ${{ inputs.tag || gitea.ref_name }}
       ARCHIVE: dist/sky-cua-linux-x64-glibc.tar.gz
-      # The Asgard runner is configured for target-cpu=native. Release bytes
-      # must also run on Saga's older x86-64-v3 CPU.
-      RUSTFLAGS: -Ctarget-cpu=x86-64-v3
     steps:
       - name: Validate requested tag
         run: |
@@ -26,13 +21,11 @@ jobs:
             echo "invalid standalone tag: $TAG" >&2
             exit 2
           fi
-
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || gitea.ref_name }}
           fetch-depth: 0
           clean: true
-
       - name: Verify checked-out tag identity
         run: |
           commit="$(git rev-parse HEAD)"
@@ -51,7 +44,6 @@ jobs:
               )
           PY
           echo "source commit: $commit"
-
       - name: Preflight build disk space
         run: |
           available="$(df --output=avail -B1 . | tail -n 1 | tr -d ' ')"
@@ -60,35 +52,31 @@ jobs:
             echo "release build requires at least 20 GiB free; found $available bytes" >&2
             exit 1
           fi
-
       - name: Prepare verification dependencies
         working-directory: packages/browser-use
         run: |
           bun install --frozen-lockfile
           bun run build
-
       - name: Sync Python environment
         run: uv sync --dev
-
       - name: Verify source
         run: |
           just verify-rust
           just verify-python
-
       - name: Build standalone archive
         run: |
           git diff --exit-code
           git diff --cached --exit-code
-          python3 install.py build
+          env -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_RUSTFLAGS \
+            RUSTFLAGS=-Ctarget-cpu=x86-64-v3 \
+            python3 install.py build
           git diff --exit-code
           git diff --cached --exit-code
           test -f "$ARCHIVE"
-
       - name: Validate archive and isolated install
         run: |
           python3 scripts/release_pipeline.py validate --archive "$ARCHIVE" --tag "$TAG"
           python3 scripts/release_pipeline.py smoke-install --archive "$ARCHIVE" --tag "$TAG"
-
       - name: Publish, read back, and dispatch Saga deployment
         env:
           SKY_CUA_GITEA_TOKEN: ${{ secrets.SKY_CUA_GITEA_TOKEN }}
