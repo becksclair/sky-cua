@@ -801,8 +801,8 @@ mod tests {
         }
 
         // The connection must still be usable after a malformed frame.
-        let valid_request =
-            serde_json::to_string(&ServiceRequest::Health).expect("encode health request");
+        let valid_request = serde_json::to_string(&ServiceRequest::AgentCursorStatus)
+            .expect("encode agent cursor status request");
         write_half
             .write_all(valid_request.as_bytes())
             .await
@@ -823,6 +823,7 @@ mod tests {
             .shutdown()
             .await
             .expect("shut down client write half");
+        drop(write_half);
         handle
             .await
             .expect("handle_stream task should not panic")
