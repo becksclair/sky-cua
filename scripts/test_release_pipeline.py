@@ -414,6 +414,8 @@ def test_release_workflow_publishes_tags_and_keeps_manual_retry() -> None:
     assert verify_workflow.count("runs-on: saga-sky-cua-build") == 2
     assert "runs-on: asgard-build-1" not in verify_workflow
     assert "python3 install.py build" in release_workflow
+    assert 'minimum="$((8 * 1024 * 1024 * 1024))"' in release_workflow
+    assert "release build requires at least 8 GiB free" in release_workflow
     assert "RUSTFLAGS=-Ctarget-cpu=x86-64-v3" not in release_workflow
     assert "CARGO_ENCODED_RUSTFLAGS" not in release_workflow
     assert "ssh -o BatchMode=yes saga" in deploy_workflow

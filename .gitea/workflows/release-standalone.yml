@@ -47,9 +47,12 @@ jobs:
       - name: Preflight build disk space
         run: |
           available="$(df --output=avail -B1 . | tail -n 1 | tr -d ' ')"
-          minimum="$((20 * 1024 * 1024 * 1024))"
+          # A cold Saga canary consumed about 4 GiB while populating the
+          # persistent pool-backed portable Cargo target. Keep 2x headroom
+          # without treating the persistent build cache itself as scratch.
+          minimum="$((8 * 1024 * 1024 * 1024))"
           if [ "$available" -lt "$minimum" ]; then
-            echo "release build requires at least 20 GiB free; found $available bytes" >&2
+            echo "release build requires at least 8 GiB free; found $available bytes" >&2
             exit 1
           fi
       - name: Prepare verification dependencies
