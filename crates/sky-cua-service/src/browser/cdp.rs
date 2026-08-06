@@ -20,6 +20,7 @@ pub(super) enum BrowserCdpAction {
     Navigate {
         url: String,
     },
+    Metadata,
     Snapshot {
         text_limit: Option<usize>,
         element_offset: Option<usize>,
@@ -66,6 +67,9 @@ pub(super) enum BrowserCdpAction {
 pub(super) enum BrowserCdpResult {
     Navigate {
         url: String,
+    },
+    Metadata {
+        metadata: Value,
     },
     Snapshot {
         title: Option<String>,
@@ -139,6 +143,10 @@ pub(super) async fn cdp_action_on_stream(
 ) -> Result<BrowserCdpResult, DiagnosticEntry> {
     match action {
         BrowserCdpAction::Navigate { url } => {
+            let before =
+                super::readiness::read_metadata(stream, socket, tab_id_value, deadline, identity)
+                    .await
+                    .ok();
             let response = execute_compounding_cdp_until(
                 stream,
                 socket,
@@ -163,7 +171,37 @@ pub(super) async fn cdp_action_on_stream(
                     details: None,
                 });
             }
+            super::readiness::wait_for_navigation_readiness(
+                stream,
+                socket,
+                tab_id_value,
+                before,
+                deadline,
+                identity,
+            )
+            .await;
             Ok(BrowserCdpResult::Navigate { url: url.clone() })
+        }
+        BrowserCdpAction::Metadata => {
+            let response = execute_cdp_until(
+                stream,
+                socket,
+                super::protocol::NAVIGATION_METADATA_REQUEST_ID,
+                tab_id_value,
+                "Runtime.evaluate",
+                snapshot::metadata_evaluate_params(),
+                deadline,
+                identity,
+            )
+            .await?;
+            let metadata =
+                snapshot::cdp_runtime_value(&response).ok_or_else(|| DiagnosticEntry {
+                    code: "BrowserBridgeRequestFailed".to_string(),
+                    message: "Browser metadata CDP response did not include a runtime value."
+                        .to_string(),
+                    details: None,
+                })?;
+            Ok(BrowserCdpResult::Metadata { metadata })
         }
         BrowserCdpAction::Snapshot {
             text_limit,

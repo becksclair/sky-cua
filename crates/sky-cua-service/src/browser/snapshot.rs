@@ -120,6 +120,51 @@ pub(super) const BROWSER_SNAPSHOT_EXPRESSION_TEMPLATE: &str = r#"
 })()
 "#;
 
+pub(super) const BROWSER_METADATA_EXPRESSION: &str = r#"
+(() => {
+  const navigation = performance.getEntriesByType('navigation')[0];
+  const paints = performance.getEntriesByType('paint');
+  return {
+    title: document.title || '',
+    url: location.href,
+    documentGeneration: `${performance.timeOrigin}:${navigation?.startTime || 0}:${location.href}`,
+    readyState: document.readyState,
+    bodyPresent: Boolean(document.body),
+    paintObserved: paints.some((entry) => entry.name === 'first-paint' || entry.name === 'first-contentful-paint'),
+    viewport: { width: innerWidth, height: innerHeight, devicePixelRatio: devicePixelRatio || 1 }
+  };
+})()
+"#;
+
+pub(super) const BROWSER_RENDER_OPPORTUNITY_EXPRESSION: &str = r#"
+new Promise((resolve) => {
+  let settled = false;
+  const finish = (observed) => {
+    if (settled) return;
+    settled = true;
+    resolve(observed);
+  };
+  requestAnimationFrame(() => finish(true));
+  setTimeout(() => finish(false), 250);
+})
+"#;
+
+pub(super) fn metadata_evaluate_params() -> Value {
+    json!({
+        "expression": BROWSER_METADATA_EXPRESSION,
+        "awaitPromise": true,
+        "returnByValue": true,
+    })
+}
+
+pub(super) fn render_opportunity_evaluate_params() -> Value {
+    json!({
+        "expression": BROWSER_RENDER_OPPORTUNITY_EXPRESSION,
+        "awaitPromise": true,
+        "returnByValue": true,
+    })
+}
+
 pub(super) fn snapshot_evaluate_params(
     text_limit: Option<usize>,
     element_offset: Option<usize>,

@@ -5,14 +5,15 @@
 Shipped for `user_chrome`, the only browser target. The managed/isolated
 browser target was retired by decision on 2026-06-11 (controlling the user's
 real logged-in browser is the product) and its contract stub has been removed
-from the wire contract. Last verified: 2026-06-15 with focused Rust browser
-MCP tests, root `cargo test`, and plugin build/install. Installed-MCP
-agent-loop liveness was separately verified on 2026-06-15; live browser smoke
-remains the 2026-06-08 Brave MCP/native-host smoke. With
-`SKY_CUA_BROWSER=brave`, a full isolated MCP smoke advertised the browser tools,
-opened a session-owned Brave tab, navigated it to a local HTTP fixture, captured
-a snapshot and screenshot, moved the browser cursor, clicked, typed, pressed a
-key, scrolled, and navigated back to `about:blank`.
+from the wire contract. Last verified: 2026-08-06 with focused browser,
+client, and platform `cargo nextest` suites; the full Rust workspace; all-target
+Clippy; the Python harness suite; a complete portable plugin build whose six
+Linux runtimes passed the x86-64-v3 instruction-floor validator; and a live
+cold-start LinkedIn smoke against those exact portable binaries. That smoke
+opened a session-owned tab, returned a stable populated destination AppShot,
+re-observed the heavy SPA with bounded element projection, captured the visible
+viewport, exercised an AppShot-fenced action, and confirmed filtered tab totals.
+The installed runtime was left untouched by using a private service socket.
 
 ## Summary
 
@@ -34,8 +35,9 @@ Current MCP browser entrypoints:
   `title_contains` filters for the human-readable MCP summary and structured
   response. When filters are present, only matching tabs are returned to avoid
   leaking unrelated tab titles/URLs through `structuredContent`; call without
-  filters only when a broad tab inventory is actually needed. It returns tabs
-  plus diagnostics. `user_chrome` is the only target value.
+  filters only when a broad tab inventory is actually needed. It returns tabs,
+  a `total` matching-count before any explicit result limit, plus diagnostics.
+  `user_chrome` is the only target value.
 - `browser_open` accepts optional `target=user_chrome` and optional `url`. It
   creates a new session-owned tab through the Chrome-family bridge, attaches it
   to the sky-cua browser session, enables CDP Page events, and navigates when a
@@ -52,7 +54,8 @@ Current MCP browser entrypoints:
 - `browser_navigate` accepts `target=user_chrome`, `tab_id`, and `url`. Allowed
   URL forms are `http://`, `https://`, and `about:blank`.
 - `observe(surface="browser")` accepts `target=user_chrome`, `tab_id`, and optional
-  `element_query`, `element_offset`, `element_limit`, and `text_limit`, then
+  `element_query`, `element_offset`, `element_limit`, `text_limit`, and
+  `capture_timeout_ms`, then
   returns the current page title, URL, and a structured DOM snapshot payload
   when CDP access succeeds. `text_limit` defaults to 4000 visible-text
   characters for MCP calls, accepts 0 to omit page text, and allows up to 20000
@@ -69,7 +72,15 @@ Current MCP browser entrypoints:
   to `browser_input(operation="click"|"type_text")` to target the element by
   identity instead of coordinates. The agent never parses the `ref`; it is a
   self-contained token the service re-resolves against the live page at action
-  time.
+  time. `capture_timeout_ms` is an optional 1000..30000 ms aggregate budget for
+  this AppShot. Without it, the service scales a bounded 6..15 second budget
+  with requested text, element, and image work. The returned browser AppShot
+  carries `capture_outcome`; `deadline_exceeded` with `retryable=true` is safe
+  to retry once, while bridge attachment failures are a separate non-retryable
+  state. The browser capture also carries `readiness`: `ready` means the
+  document had an interactive/complete readyState and a body at capture time,
+  `loading` means it did not, and `unknown` means the metadata probe did not
+  complete. Readiness does not claim network idle or SPA hydration stability.
 - `capture_screen(surface="browser")` accepts `target=user_chrome` and `tab_id`, then captures
   the visible viewport, normalizes the image to CSS-pixel dimensions, and
   re-encodes it with the shared model-screenshot knobs (WebP by default, JPEG

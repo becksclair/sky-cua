@@ -846,10 +846,23 @@
               }
             ]
           },
+          "capture_timeout_ms": {
+            "anyOf": [
+              {
+                "description": "Browser AppShot capture deadline in milliseconds. Defaults to the service budget.",
+                "maximum": 30000,
+                "minimum": 1000,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "detail": {
             "anyOf": [
               {
-                "description": "Defaults to compact. Use full for verbose element details and full capability data.",
+                "description": "Desktop only. Defaults to compact. Use full for verbose element details and full capability data.",
                 "enum": [
                   "full",
                   "compact"
@@ -1024,7 +1037,7 @@
                   "detail": {
                     "anyOf": [
                       {
-                        "description": "Defaults to compact. Use full for verbose element details and full capability data.",
+                        "description": "Desktop only. Defaults to compact. Use full for verbose element details and full capability data.",
                         "enum": [
                           "full",
                           "compact"
@@ -1098,6 +1111,19 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "capture_timeout_ms": {
+                    "anyOf": [
+                      {
+                        "description": "Browser AppShot capture deadline in milliseconds. Defaults to the service budget.",
+                        "maximum": 30000,
+                        "minimum": 1000,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "element_limit": {
                     "anyOf": [
                       {
@@ -1273,10 +1299,23 @@
               }
             ]
           },
+          "capture_timeout_ms": {
+            "anyOf": [
+              {
+                "description": "Browser AppShot capture deadline in milliseconds. Defaults to the service budget.",
+                "maximum": 30000,
+                "minimum": 1000,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "detail": {
             "anyOf": [
               {
-                "description": "Defaults to compact. Use full for verbose element details and full capability data.",
+                "description": "Desktop only. Defaults to compact. Use full for verbose element details and full capability data.",
                 "enum": [
                   "full",
                   "compact"

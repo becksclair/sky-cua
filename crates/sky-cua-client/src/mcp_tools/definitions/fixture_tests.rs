@@ -1022,6 +1022,16 @@ fn observe_browser_branch_rejects_capture_fields() {
             .is_err(),
         "desktop observe must not advertise ignored legacy capture controls"
     );
+    let rejection = registry
+        .validate_arguments(
+            "observe",
+            &json!({"surface": "browser", "tab_id": "tab-1", "detail": "full"}),
+        )
+        .expect_err("browser detail must be rejected");
+    assert!(
+        rejection.contains("capture_timeout_ms"),
+        "browser observe repair guidance must mention every accepted branch field: {rejection}"
+    );
 }
 
 #[test]

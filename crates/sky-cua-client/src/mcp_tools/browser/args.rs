@@ -1,8 +1,10 @@
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 use sky_cua_platform::model::{
+    BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS, BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS,
     BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
-    BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserTargetKind, normalize_browser_open_url,
+    BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserTargetKind,
+    is_valid_browser_appshot_capture_timeout_ms, normalize_browser_open_url,
 };
 
 use super::super::{
@@ -182,6 +184,26 @@ pub(crate) fn parse_browser_snapshot_options(arguments: &Value) -> Result<Browse
             "browser_snapshot text_limit",
         )?,
     })
+}
+
+pub(crate) fn parse_browser_capture_timeout_ms(arguments: &Value) -> Result<Option<u64>> {
+    let Some(raw_value) = arguments.get("capture_timeout_ms") else {
+        return Ok(None);
+    };
+    if raw_value.is_null() {
+        return Ok(None);
+    }
+    let Some(value) = raw_value.as_u64() else {
+        return Err(anyhow!(
+            "browser observe capture_timeout_ms must be an integer"
+        ));
+    };
+    if !is_valid_browser_appshot_capture_timeout_ms(value) {
+        return Err(anyhow!(
+            "browser observe capture_timeout_ms must be between {BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS} and {BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS}"
+        ));
+    }
+    Ok(Some(value))
 }
 
 fn parse_optional_number(arguments: &Value, name: &str, default: f64, label: &str) -> Result<f64> {

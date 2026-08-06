@@ -98,6 +98,7 @@ impl BrowserBridgeExecutor {
 
         BrowserListTabsResponse {
             target,
+            total: tabs.len(),
             tabs,
             diagnostics,
         }
@@ -466,7 +467,9 @@ impl BoundTabOperation<'_> {
         match self {
             BoundTabOperation::Cdp { action } => matches!(
                 action,
-                BrowserCdpAction::Snapshot { .. } | BrowserCdpAction::Screenshot
+                BrowserCdpAction::Metadata
+                    | BrowserCdpAction::Snapshot { .. }
+                    | BrowserCdpAction::Screenshot
             ),
             BoundTabOperation::MoveMouse { .. } => true,
         }

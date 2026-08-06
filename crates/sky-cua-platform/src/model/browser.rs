@@ -255,7 +255,13 @@ pub enum BrowserRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text_limit: Option<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        element_offset: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         element_limit: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        element_query: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capture_timeout_ms: Option<u64>,
         #[serde(
             default = "default_include_image_data",
             skip_serializing_if = "is_true"
@@ -461,6 +467,11 @@ pub struct BrowserListTabsResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<BrowserTargetKind>,
     pub tabs: Vec<BrowserTab>,
+    /// Number of tabs in the logical result set before an explicit limit.
+    /// The service reports all discovered tabs; the MCP boundary rewrites this
+    /// after text filters. Older responses omit it and deserialize as zero.
+    #[serde(default)]
+    pub total: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<DiagnosticEntry>,
 }
@@ -553,6 +564,18 @@ pub const BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT: usize = 5_000;
 /// boundaries.
 pub const BROWSER_SNAPSHOT_MAX_TEXT_LIMIT: usize = 20_000;
 
+/// Minimum browser AppShot capture deadline accepted at MCP and service boundaries.
+pub const BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS: u64 = 1_000;
+
+/// Maximum browser AppShot capture deadline accepted at MCP and service boundaries.
+pub const BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS: u64 = 30_000;
+
+#[must_use]
+pub const fn is_valid_browser_appshot_capture_timeout_ms(value: u64) -> bool {
+    value >= BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS
+        && value <= BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS
+}
+
 /// Whether `browser_eval` page-JavaScript execution is enabled. Enabled by
 /// default; the operator turns it off with `SKY_CUA_BROWSER_EVAL` set to
 /// `off`, `0`, or `false`. This is a security boundary the MCP client and the
@@ -643,7 +666,9 @@ pub fn normalize_browser_open_url(value: &str) -> Option<String> {
 mod tests {
     use super::normalize_browser_open_url;
     use super::{
+        BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS, BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS,
         BrowserRequest, BrowserStatusReport, BrowserTargetAvailability, BrowserTargetKind,
+        is_valid_browser_appshot_capture_timeout_ms,
     };
 
     #[test]
@@ -770,6 +795,33 @@ mod tests {
 
         let encoded = serde_json::to_value(report).expect("serialize browser status");
         assert!(encoded.get("control_plane").is_none());
+    }
+
+    #[test]
+    fn legacy_list_tabs_payload_defaults_total() {
+        let response: super::BrowserListTabsResponse = serde_json::from_value(serde_json::json!({
+            "target": "user_chrome",
+            "tabs": [],
+            "diagnostics": []
+        }))
+        .expect("legacy list tabs response");
+        assert_eq!(response.total, 0);
+    }
+
+    #[test]
+    fn appshot_timeout_bounds_are_shared() {
+        assert!(is_valid_browser_appshot_capture_timeout_ms(
+            BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS
+        ));
+        assert!(is_valid_browser_appshot_capture_timeout_ms(
+            BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS
+        ));
+        assert!(!is_valid_browser_appshot_capture_timeout_ms(
+            BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS - 1
+        ));
+        assert!(!is_valid_browser_appshot_capture_timeout_ms(
+            BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS + 1
+        ));
     }
 
     #[test]

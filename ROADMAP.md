@@ -119,7 +119,8 @@ Open boxes link to the active ExecPlan that owns the work.
   - [x] Explicit host opt-in gate for OpenCode/Pi, with Codex Desktop kept on the companion Browser Use path
   - [x] Real user-tab listing, session-owned tab creation, existing-tab claiming, and Brave/Chrome/Chromium socket selection
   - [x] Page snapshots, screenshots, cursor movement, click, text entry, key dispatch, scroll, and navigation against session-owned or claimed tabs
-  - [x] Live Brave MCP smoke and installed OpenCode MCP probe for the full browser tool set
+   - [x] Live Brave MCP smoke and installed OpenCode MCP probe for the full browser tool set
+   - [x] Heavy-SPA resilience: bounded navigation readiness, retryable deadline-aware AppShots, forwarded observe filters, and tab totals
 - [x] Unified daemon-owned browser bridge control plane —
       [`docs/features/unified-browser-bridge-control-plane.md`](docs/features/unified-browser-bridge-control-plane.md)
   - [x] Source implementation: protocol-v1 identity model, daemon scheduler and

@@ -1642,6 +1642,7 @@ mod tests {
                         response: BrowserListTabsResponse {
                             target: None,
                             tabs: Vec::new(),
+                            total: 0,
                             diagnostics: Vec::new(),
                         },
                     },

@@ -38,7 +38,10 @@ pub(super) fn observe_properties(can_receive_images: bool) -> Value {
             get_app_state_properties(can_receive_images),
             merge_properties(
                 browser_snapshot_window_properties(),
-                phone_session_properties(),
+                merge_properties(
+                    json!({"capture_timeout_ms": browser_capture_timeout_property()}),
+                    phone_session_properties(),
+                ),
             ),
         ),
     );
@@ -81,6 +84,7 @@ pub(super) fn observe_constraints(can_receive_images: bool) -> Value {
                     "element_query",
                     "element_offset",
                     "element_limit",
+                    "capture_timeout_ms",
                 ][..],
             ),
             (
@@ -476,7 +480,7 @@ pub(super) fn get_app_state_properties(can_receive_images: bool) -> Value {
         "detail": optional_null_schema(json!({
             "type": "string",
             "enum": ["full", "compact"],
-            "description": "Defaults to compact. Use full for verbose element details and full capability data."
+            "description": "Desktop only. Defaults to compact. Use full for verbose element details and full capability data."
         })),
         "element_query": optional_absent_string_schema(json!({
             "type": "string",

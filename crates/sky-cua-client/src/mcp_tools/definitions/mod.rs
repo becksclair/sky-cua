@@ -122,7 +122,8 @@ fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> 
              fields, browser requires top-level `tab_id`, and phone requires \
              top-level `session_id`; do not mix fields from another surface. The \
              browser branch accepts only `surface`, `tab_id`, `target`, `text_limit`, \
-             `element_query`, `element_offset`, and `element_limit`. Every successful \
+             `element_query`, `element_offset`, `element_limit`, and `capture_timeout_ms`. \
+             Every successful \
              observe returns a canonical AppShot; image-capable hosts also receive \
              its image attachment.",
         ),

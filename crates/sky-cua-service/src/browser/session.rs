@@ -58,6 +58,10 @@ pub(super) async fn open_tab_from_socket(
     }
 
     if let Some(url) = url {
+        let before =
+            super::readiness::read_metadata(&mut stream, socket, &tab_id_value, deadline, identity)
+                .await
+                .ok();
         let response = match execute_cdp_until(
             &mut stream,
             socket,
@@ -92,6 +96,15 @@ pub(super) async fn open_tab_from_socket(
                 },
             ));
         }
+        super::readiness::wait_for_navigation_readiness(
+            &mut stream,
+            socket,
+            &tab_id_value,
+            before,
+            deadline,
+            identity,
+        )
+        .await;
         tab.url = Some(url.to_string());
     }
 

@@ -3,12 +3,69 @@ use std::fmt::Write as _;
 use anyhow::Result;
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
-    BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT, BrowserActionResponse, BrowserClaimTabResponse,
-    BrowserEvalResponse, BrowserListTabsResponse, BrowserMoveMouseResponse,
-    BrowserNavigateResponse, BrowserOpenResponse, BrowserScreenshotResponse,
-    BrowserSnapshotResponse, BrowserStatusReport, BrowserTab, BrowserTargetKind, DiagnosticEntry,
-    browser_diagnostic_is_error_code,
+    AppShotBrowserCaptureStatus, AppShotCapture, BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT,
+    BrowserActionResponse, BrowserAppShotResponse, BrowserClaimTabResponse, BrowserEvalResponse,
+    BrowserListTabsResponse, BrowserMoveMouseResponse, BrowserNavigateResponse,
+    BrowserOpenResponse, BrowserScreenshotResponse, BrowserSnapshotResponse, BrowserStatusReport,
+    BrowserTab, BrowserTargetKind, DiagnosticEntry, browser_diagnostic_is_error_code,
 };
+
+pub(crate) fn browser_appshot_result(
+    response: BrowserAppShotResponse,
+    can_receive_images: bool,
+) -> Result<Value> {
+    let (tab_id, status, retryable) = match &response.appshot.capture {
+        AppShotCapture::Browser {
+            tab_id,
+            capture_outcome,
+            ..
+        } => (
+            tab_id.as_str(),
+            capture_outcome.status,
+            capture_outcome.retryable,
+        ),
+        _ => ("unknown", AppShotBrowserCaptureStatus::Unknown, false),
+    };
+    let usable =
+        response.appshot.coverage.pixels_complete || response.appshot.coverage.semantics_complete;
+    let is_error = !usable;
+    let mut text = if !usable {
+        format!("Could not capture a usable browser AppShot for tab {tab_id}.")
+    } else {
+        match status {
+            AppShotBrowserCaptureStatus::Complete => {
+                format!("Captured browser AppShot for tab {tab_id}.")
+            }
+            AppShotBrowserCaptureStatus::DeadlineExceeded if retryable => format!(
+                "Browser AppShot capture for tab {tab_id} reached its deadline; partial evidence was preserved and the observation may be retried once."
+            ),
+            AppShotBrowserCaptureStatus::DeadlineExceeded => format!(
+                "Browser AppShot capture for tab {tab_id} reached its deadline; partial evidence was preserved."
+            ),
+            AppShotBrowserCaptureStatus::Partial => {
+                format!("Captured a partial browser AppShot for tab {tab_id}.")
+            }
+            AppShotBrowserCaptureStatus::Unknown => format!(
+                "Captured browser AppShot evidence for tab {tab_id}; this producer did not report a structured capture outcome."
+            ),
+        }
+    };
+    append_first_diagnostic(&mut text, &response.appshot.diagnostics);
+
+    let mut content = vec![json!({"type": "text", "text": text})];
+    if can_receive_images && !response.image_data_base64.is_empty() {
+        content.push(json!({
+            "type": "image",
+            "data": response.image_data_base64,
+            "mimeType": response.image_mime_type
+        }));
+    }
+    Ok(json!({
+        "content": content,
+        "structuredContent": response.appshot,
+        "isError": is_error
+    }))
+}
 
 pub(crate) fn browser_appshot_required_result(
     rejection: sky_cua_platform::model::AppShotRequired,
@@ -80,13 +137,13 @@ pub(crate) fn browser_list_tabs_summary_with_matches(
     let mut summary = if filter.is_empty() {
         format!(
             "Discovered {} browser tabs for {target}.",
-            response.tabs.len()
+            response.total.max(response.tabs.len())
         )
     } else {
         format!(
             "Discovered {} browser tabs for {target}; {} matched the text filters.",
             response.tabs.len(),
-            matching_tab_indexes.map_or(response.tabs.len(), <[usize]>::len)
+            browser_matching_tab_count(response, matching_tab_indexes)
         )
     };
     append_browser_tab_matches(&mut summary, response, matching_tab_indexes, filter);
@@ -134,7 +191,11 @@ fn browser_matching_tab_count(
     response: &BrowserListTabsResponse,
     matching_tab_indexes: Option<&[usize]>,
 ) -> usize {
-    matching_tab_indexes.map_or(response.tabs.len(), <[usize]>::len)
+    if response.total > 0 || response.tabs.is_empty() {
+        response.total
+    } else {
+        matching_tab_indexes.map_or(response.tabs.len(), <[usize]>::len)
+    }
 }
 
 fn browser_tab_matches_is_empty(
@@ -177,7 +238,8 @@ fn append_browser_tab_matches(
 
     let shown_limit = 12;
     let matching_tab_count = browser_matching_tab_count(response, matching_tab_indexes);
-    let shown_count = matching_tab_count.min(shown_limit);
+    let returned_match_count = matching_tab_indexes.map_or(matching_tab_count, <[usize]>::len);
+    let shown_count = returned_match_count.min(shown_limit);
     if filter.is_empty() {
         let _ = write!(
             summary,
@@ -207,11 +269,11 @@ fn append_browser_tab_matches(
             }
         }
     }
-    if matching_tab_count > shown_limit {
+    if matching_tab_count > shown_count {
         let _ = write!(
             summary,
             " ... {} more not shown.",
-            matching_tab_count - shown_limit
+            matching_tab_count - shown_count
         );
     }
 }

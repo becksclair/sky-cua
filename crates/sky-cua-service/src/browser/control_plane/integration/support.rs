@@ -362,6 +362,7 @@ pub(in crate::browser::control_plane) fn high_level_tab_id(
         BrowserRequest::ClaimTab { tab_id, .. }
         | BrowserRequest::MoveMouse { tab_id, .. }
         | BrowserRequest::Navigate { tab_id, .. }
+        | BrowserRequest::ObserveAppShot { tab_id, .. }
         | BrowserRequest::Snapshot { tab_id, .. }
         | BrowserRequest::Screenshot { tab_id, .. }
         | BrowserRequest::Click { tab_id, .. }
@@ -380,6 +381,7 @@ pub(in crate::browser::control_plane) fn high_level_class(
     match request {
         BrowserRequest::Status
         | BrowserRequest::ListTabs { .. }
+        | BrowserRequest::ObserveAppShot { .. }
         | BrowserRequest::Snapshot { .. }
         | BrowserRequest::Screenshot { .. } => OperationClass::ReadOnly,
         BrowserRequest::MoveMouse { .. } => OperationClass::AbsoluteSet,

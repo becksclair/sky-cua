@@ -8,11 +8,13 @@
 
 use std::io::Write as _;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use image::ImageEncoder;
+use sha2::{Digest, Sha256};
 use sky_cua_platform::config::{
     MODEL_SCREENSHOT_FORMAT_ENV, MODEL_SCREENSHOT_JPEG_QUALITY_ENV,
     MODEL_SCREENSHOT_WEBP_QUALITY_ENV,
@@ -46,6 +48,11 @@ impl BrowserCaptureFormat {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct PreparedBrowserCapture {
+    /// Exact encoded bytes represented by this capture. Keeping them beside
+    /// the metadata prevents later retry/error paths from re-reading a mutable
+    /// filesystem path or decoding a different attachment.
+    pub(super) bytes: Arc<[u8]>,
+    pub(super) sha256: String,
     pub(super) data_base64: String,
     pub(super) mime_type: String,
     pub(super) screenshot_path: Option<String>,
@@ -80,7 +87,10 @@ pub(super) fn prepare_browser_capture(
             } else {
                 "no path-backed capture can be delivered in path-only mode"
             };
+            let fallback_bytes = BASE64.decode(png_base64).unwrap_or_default();
             let mut fallback = PreparedBrowserCapture {
+                bytes: Arc::from(fallback_bytes.clone()),
+                sha256: format!("{:x}", Sha256::digest(&fallback_bytes)),
                 data_base64: if include_image_data {
                     png_base64.to_string()
                 } else {
@@ -98,9 +108,8 @@ pub(super) fn prepare_browser_capture(
                     details: None,
                 }],
             };
-            if let Ok(bytes) = BASE64.decode(png_base64)
-                && let Ok(size) =
-                    image::load_from_memory(&bytes).map(|img| (img.width(), img.height()))
+            if let Ok(size) =
+                image::load_from_memory(&fallback_bytes).map(|img| (img.width(), img.height()))
             {
                 fallback.width = size.0;
                 fallback.height = size.1;
@@ -221,7 +230,10 @@ fn process_capture_with_writer(
         String::new()
     };
 
+    let sha256 = format!("{:x}", Sha256::digest(&encoded));
     Ok(PreparedBrowserCapture {
+        bytes: Arc::from(encoded),
+        sha256,
         data_base64,
         mime_type: format.mime_type().to_string(),
         screenshot_path,
@@ -427,8 +439,13 @@ mod tests {
         assert_eq!(prepared.height, 80);
         assert_eq!(prepared.mime_type, "image/webp");
         assert!(!prepared.data_base64.is_empty());
-        let decoded = image::load_from_memory(&BASE64.decode(&prepared.data_base64).unwrap())
-            .expect("decode prepared capture");
+        let attached_bytes = BASE64.decode(&prepared.data_base64).unwrap();
+        assert_eq!(prepared.bytes.as_ref(), attached_bytes.as_slice());
+        assert_eq!(
+            prepared.sha256,
+            format!("{:x}", Sha256::digest(&attached_bytes))
+        );
+        let decoded = image::load_from_memory(&attached_bytes).expect("decode prepared capture");
         assert_eq!((decoded.width(), decoded.height()), (100, 80));
         if let Some(path) = prepared.screenshot_path.as_deref() {
             let _ = std::fs::remove_file(path);
@@ -448,6 +465,10 @@ mod tests {
             .as_deref()
             .expect("path-backed capture");
         assert!(std::path::Path::new(path).exists());
+        assert_eq!(
+            std::fs::read(path).unwrap().as_slice(),
+            prepared.bytes.as_ref()
+        );
         let _ = std::fs::remove_file(path);
     }
 

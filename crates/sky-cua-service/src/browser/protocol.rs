@@ -31,6 +31,8 @@ pub(super) const RESOLVE_ELEMENT_REQUEST_ID: &str = "sky-cua-browser-resolve-ele
 #[allow(dead_code)]
 pub(super) const ELEMENT_FOCUS_REQUEST_ID: &str = "sky-cua-browser-element-focus";
 pub(super) const NAVIGATE_REQUEST_ID: &str = "sky-cua-browser-navigate";
+pub(super) const NAVIGATION_METADATA_REQUEST_ID: &str = "sky-cua-browser-navigation-metadata";
+pub(super) const NAVIGATION_RENDER_REQUEST_ID: &str = "sky-cua-browser-navigation-render";
 pub(super) const CLAIM_TAB_REQUEST_ID: &str = "sky-cua-browser-claim-tab";
 pub(super) const CLAIM_TAB_RETRY_REQUEST_ID: &str = "sky-cua-browser-claim-tab-retry";
 pub(super) const RECLAIM_SESSION_TABS_REQUEST_ID: &str = "sky-cua-browser-reclaim-session-tabs";

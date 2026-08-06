@@ -12,11 +12,14 @@ mod phone_features;
 mod service;
 
 pub use appshot::{
-    AppShotActionSnapshot, AppShotCapture, AppShotConsistency, AppShotCoverage, AppShotEnvelope,
-    AppShotRejectionReason, AppShotRequired, AppShotSurface, AppShotTrigger,
+    AppShotActionSnapshot, AppShotBrowserCaptureOutcome, AppShotBrowserCaptureStatus,
+    AppShotBrowserReadiness, AppShotBrowserReadinessState, AppShotCapture, AppShotConsistency,
+    AppShotCoverage, AppShotEnvelope, AppShotRejectionReason, AppShotRequired, AppShotSurface,
+    AppShotTrigger,
 };
 
 pub use browser::{
+    BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS, BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS,
     BROWSER_EVAL_ENV, BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT, BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT,
     BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT, BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserActionResponse,
     BrowserAppShotResponse, BrowserCallerKind, BrowserCallerProvenance, BrowserClaimTabResponse,
@@ -25,7 +28,8 @@ pub use browser::{
     BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequest, BrowserRequestContext,
     BrowserResponse, BrowserScreenshotResponse, BrowserSessionIdentity, BrowserSnapshotResponse,
     BrowserStatusReport, BrowserTab, BrowserTargetAvailability, BrowserTargetKind,
-    browser_diagnostic_is_error_code, browser_eval_enabled, normalize_browser_open_url,
+    browser_diagnostic_is_error_code, browser_eval_enabled,
+    is_valid_browser_appshot_capture_timeout_ms, normalize_browser_open_url,
 };
 pub use browser_control::{
     BROWSER_CONTROL_CANONICAL_SESSION_ID, BROWSER_CONTROL_CANONICAL_TURN_ID,

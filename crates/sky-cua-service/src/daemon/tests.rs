@@ -1703,6 +1703,89 @@ async fn browser_snapshot_rejects_oversized_element_limit_at_service_boundary() 
 }
 
 #[tokio::test]
+async fn browser_observe_rejects_oversized_projection_limits_at_service_boundary() {
+    let daemon = daemon_with(
+        snapshot(Some(capture_with_rect()), Vec::new()),
+        success_outcome(),
+    );
+    let requests = [
+        BrowserRequest::ObserveAppShot {
+            target: Some(BrowserTargetKind::UserChrome),
+            tab_id: "tab-1".to_string(),
+            text_limit: Some(BROWSER_SNAPSHOT_MAX_TEXT_LIMIT + 1),
+            element_offset: None,
+            element_limit: None,
+            element_query: None,
+            capture_timeout_ms: None,
+            include_image_data: false,
+        },
+        BrowserRequest::ObserveAppShot {
+            target: Some(BrowserTargetKind::UserChrome),
+            tab_id: "tab-1".to_string(),
+            text_limit: None,
+            element_offset: None,
+            element_limit: Some(BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT + 1),
+            element_query: None,
+            capture_timeout_ms: None,
+            include_image_data: false,
+        },
+    ];
+
+    for request in requests {
+        match daemon
+            .handle(ServiceRequest::Browser {
+                identity: None,
+                context: None,
+                request,
+            })
+            .await
+        {
+            ServiceResponse::Error { code, .. } => assert_eq!(code, "InvalidRequest"),
+            other => panic!("expected invalid request response, got: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn browser_observe_rejects_invalid_capture_timeout_at_service_boundary() {
+    let daemon = daemon_with(
+        snapshot(Some(capture_with_rect()), Vec::new()),
+        success_outcome(),
+    );
+
+    match daemon
+        .handle(ServiceRequest::Browser {
+            identity: None,
+            context: None,
+            request: BrowserRequest::ObserveAppShot {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "tab-1".to_string(),
+                text_limit: None,
+                element_offset: None,
+                element_limit: None,
+                element_query: None,
+                capture_timeout_ms: Some(
+                    sky_cua_platform::model::BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS - 1,
+                ),
+                include_image_data: false,
+            },
+        })
+        .await
+    {
+        ServiceResponse::Error { code, message, .. } => {
+            assert_eq!(code, "InvalidRequest");
+            assert!(message.contains(
+                &sky_cua_platform::model::BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS.to_string()
+            ));
+            assert!(message.contains(
+                &sky_cua_platform::model::BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS.to_string()
+            ));
+        }
+        other => panic!("expected invalid request response, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn service_runtime_serializes_desktop_lane_requests() {
     let backend = BlockingBackend::new(snapshot(Some(capture_with_rect()), Vec::new()));
     let first_started = backend.first_execute_started.clone();

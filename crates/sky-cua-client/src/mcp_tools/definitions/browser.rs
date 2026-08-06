@@ -194,6 +194,15 @@ pub(super) fn browser_snapshot_window_properties() -> Value {
     })
 }
 
+pub(super) fn browser_capture_timeout_property() -> Value {
+    optional_null_schema(json!({
+        "type": "integer",
+        "minimum": sky_cua_platform::model::BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS,
+        "maximum": sky_cua_platform::model::BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS,
+        "description": "Browser AppShot capture deadline in milliseconds. Defaults to the service budget."
+    }))
+}
+
 pub(super) fn browser_url_schema() -> Value {
     json!({
         "type": "string",

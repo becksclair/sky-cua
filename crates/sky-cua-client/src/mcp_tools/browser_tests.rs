@@ -3,8 +3,9 @@ use std::collections::VecDeque;
 
 use serde_json::json;
 use sky_cua_platform::model::{
-    AppShotActionSnapshot, AppShotCapture, AppShotConsistency, AppShotCoverage, AppShotEnvelope,
-    AppShotTrigger, BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
+    AppShotActionSnapshot, AppShotBrowserCaptureOutcome, AppShotBrowserCaptureStatus,
+    AppShotCapture, AppShotConsistency, AppShotCoverage, AppShotEnvelope, AppShotTrigger,
+    BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT, BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT,
     BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserActionResponse, BrowserAppShotResponse,
     BrowserClaimTabResponse, BrowserControlEventWindow, BrowserControlPlaneSnapshot,
     BrowserControlSchedulerSnapshot, BrowserEvalResponse, BrowserListTabsResponse,
@@ -19,9 +20,10 @@ use crate::mcp_server::ModelSessionInfo;
 
 use super::browser::{
     BROWSER_EVAL_ENV, BrowserTabTextFilter, browser_list_tabs_summary, browser_open_summary,
-    browser_snapshot_summary, browser_status_summary, parse_browser_open_url, parse_browser_point,
-    parse_browser_scroll, parse_browser_tab_id, parse_browser_target, parse_required_browser_url,
-    parse_required_literal_string, parse_required_string,
+    browser_snapshot_summary, browser_status_summary, parse_browser_capture_timeout_ms,
+    parse_browser_open_url, parse_browser_point, parse_browser_scroll, parse_browser_tab_id,
+    parse_browser_target, parse_required_browser_url, parse_required_literal_string,
+    parse_required_string,
 };
 use super::{McpService, build_tool_definitions, handle_tool_call};
 
@@ -190,6 +192,66 @@ fn browser_action_schemas_explain_simple_control_contract() {
             .expect("browser_scroll x description")
             .contains("Wheel event")
     );
+}
+
+#[test]
+fn observe_schema_keeps_browser_window_fields_and_rejects_desktop_detail() {
+    use super::definitions::{schema_accepts, validation_tool_definitions};
+
+    let advertised = build_tool_definitions(false, false);
+    let observe = advertised
+        .as_array()
+        .expect("tools")
+        .iter()
+        .find(|tool| tool["name"] == "observe")
+        .expect("observe tool");
+    let timeout_schema = &observe["inputSchema"]["properties"]["capture_timeout_ms"];
+    assert_eq!(
+        timeout_schema["anyOf"]
+            .as_array()
+            .expect("nullable timeout schema")[0]["minimum"],
+        1_000
+    );
+    assert_eq!(
+        timeout_schema["anyOf"]
+            .as_array()
+            .expect("nullable timeout schema")[0]["maximum"],
+        30_000
+    );
+    assert!(observe["inputSchema"]["properties"]["element_query"].is_object());
+    assert!(observe["inputSchema"]["properties"]["element_offset"].is_object());
+    assert!(
+        observe["inputSchema"]["properties"]["detail"]["anyOf"][0]["description"]
+            .as_str()
+            .expect("detail description")
+            .starts_with("Desktop only")
+    );
+
+    let validation = validation_tool_definitions(false, false);
+    let observe_schema = &validation
+        .as_array()
+        .expect("validation tools")
+        .iter()
+        .find(|tool| tool["name"] == "observe")
+        .expect("observe validation tool")["inputSchema"];
+    assert!(schema_accepts(
+        observe_schema,
+        &json!({
+            "surface": "browser",
+            "tab_id": "tab-1",
+            "element_query": "submit",
+            "element_offset": 4,
+            "capture_timeout_ms": 5_000
+        })
+    ));
+    assert!(!schema_accepts(
+        observe_schema,
+        &json!({"surface": "browser", "tab_id": "tab-1", "detail": "compact"})
+    ));
+    assert!(!schema_accepts(
+        observe_schema,
+        &json!({"surface": "browser", "tab_id": "tab-1", "capture_timeout_ms": 999})
+    ));
 }
 
 #[test]
@@ -406,6 +468,21 @@ fn parses_browser_action_arguments() {
     );
     assert!(parse_browser_scroll(&json!({"delta_x": 0, "delta_y": 0})).is_err());
     assert!(parse_browser_scroll(&json!({"delta_y": 500, "x": 10})).is_err());
+}
+
+#[test]
+fn browser_capture_timeout_parser_enforces_the_shared_bounds() {
+    assert_eq!(
+        parse_browser_capture_timeout_ms(&json!({"capture_timeout_ms": 1_000})).unwrap(),
+        Some(1_000)
+    );
+    assert_eq!(
+        parse_browser_capture_timeout_ms(&json!({"capture_timeout_ms": null})).unwrap(),
+        None
+    );
+    assert!(parse_browser_capture_timeout_ms(&json!({"capture_timeout_ms": 999})).is_err());
+    assert!(parse_browser_capture_timeout_ms(&json!({"capture_timeout_ms": 30_001})).is_err());
+    assert!(parse_browser_capture_timeout_ms(&json!({"capture_timeout_ms": "1000"})).is_err());
 }
 
 #[test]
@@ -754,6 +831,7 @@ fn browser_list_tabs_summary_mentions_target_and_diagnostics() {
             url: Some("https://example.com".to_string()),
             active: true,
         }],
+        total: 1,
         diagnostics: vec![DiagnosticEntry {
             code: "BrowserBridgeDisconnected".to_string(),
             message: "No browser bridge is connected.".to_string(),
@@ -774,6 +852,7 @@ fn browser_list_tabs_summary_defaults_to_user_chrome_target() {
     let response = BrowserListTabsResponse {
         target: None,
         tabs: Vec::new(),
+        total: 0,
         diagnostics: Vec::new(),
     };
 
@@ -803,6 +882,7 @@ fn browser_list_tabs_summary_filters_text_visible_matches() {
                 active: true,
             },
         ],
+        total: 1,
         diagnostics: Vec::new(),
     };
 
@@ -842,6 +922,7 @@ fn browser_list_tabs_filters_structured_content_when_filter_is_present() {
                     active: true,
                 },
             ],
+            total: 2,
             diagnostics: Vec::new(),
         },
     }));
@@ -864,6 +945,7 @@ fn browser_list_tabs_filters_structured_content_when_filter_is_present() {
         1
     );
     assert_eq!(result["structuredContent"]["tabs"][0]["tab_id"], "tab-2");
+    assert_eq!(result["structuredContent"]["total"], 1);
     assert!(!result.to_string().contains("Private unrelated tab"));
 }
 
@@ -882,6 +964,7 @@ fn browser_list_tabs_truncates_structured_content_to_limit() {
         response: BrowserListTabsResponse {
             target: Some(BrowserTargetKind::UserChrome),
             tabs,
+            total: 5,
             diagnostics: Vec::new(),
         },
     }));
@@ -900,6 +983,7 @@ fn browser_list_tabs_truncates_structured_content_to_limit() {
     assert_eq!(returned.len(), 2);
     assert_eq!(returned[0]["tab_id"], "tab-0");
     assert_eq!(returned[1]["tab_id"], "tab-1");
+    assert_eq!(result["structuredContent"]["total"], 5);
 }
 
 #[test]
@@ -917,6 +1001,7 @@ fn browser_list_tabs_limit_zero_returns_all_tabs() {
         response: BrowserListTabsResponse {
             target: Some(BrowserTargetKind::UserChrome),
             tabs,
+            total: 3,
             diagnostics: Vec::new(),
         },
     }));
@@ -954,6 +1039,7 @@ fn browser_list_tabs_limit_summary_reports_true_total_not_capped_count() {
         response: BrowserListTabsResponse {
             target: Some(BrowserTargetKind::UserChrome),
             tabs,
+            total: 5,
             diagnostics: Vec::new(),
         },
     }));
@@ -977,6 +1063,10 @@ fn browser_list_tabs_limit_summary_reports_true_total_not_capped_count() {
     assert!(
         text.contains("Showing first 2 tab"),
         "summary should note the cap, got: {text}"
+    );
+    assert!(
+        text.contains("3 more not shown"),
+        "summary should subtract the actual shown count, got: {text}"
     );
     assert_eq!(
         result["structuredContent"]["tabs"]
@@ -1660,6 +1750,7 @@ fn browser_list_tabs_marks_bridge_failure_as_mcp_error() {
         response: BrowserListTabsResponse {
             target: Some(BrowserTargetKind::UserChrome),
             tabs: Vec::new(),
+            total: 0,
             diagnostics: vec![DiagnosticEntry {
                 code: "BrowserBridgeDisconnected".to_string(),
                 message: "No browser bridge is connected.".to_string(),
@@ -1690,6 +1781,7 @@ fn browser_list_tabs_marks_unsupported_bridge_as_mcp_error() {
         response: BrowserListTabsResponse {
             target: Some(BrowserTargetKind::UserChrome),
             tabs: Vec::new(),
+            total: 0,
             diagnostics: vec![DiagnosticEntry {
                 code: "BrowserBridgeUnsupported".to_string(),
                 message: "Browser MCP tools require the native-host socket bridge.".to_string(),
@@ -1932,6 +2024,83 @@ fn browser_screenshot_with_empty_data_reports_error() {
     assert_eq!(result["content"].as_array().unwrap().len(), 1);
 }
 
+fn browser_appshot_outcome_fixture(
+    status: AppShotBrowserCaptureStatus,
+    retryable: bool,
+    pixels_complete: bool,
+    semantics_complete: bool,
+    diagnostics: Vec<DiagnosticEntry>,
+) -> AppShotEnvelope {
+    AppShotEnvelope {
+        appshot_id: "shot-outcome".into(),
+        trigger: AppShotTrigger::Observe,
+        captured_at: chrono::Utc::now(),
+        consistency: if pixels_complete && semantics_complete {
+            AppShotConsistency::Stable
+        } else {
+            AppShotConsistency::Partial
+        },
+        capture: AppShotCapture::Browser {
+            tab_id: "tab-outcome".into(),
+            url: "https://example.test/".into(),
+            title: Some("Example".into()),
+            viewport: PixelSize {
+                width: if pixels_complete { 800 } else { 0 },
+                height: if pixels_complete { 600 } else { 0 },
+            },
+            document_generation: 7,
+            semantic_snapshot: if semantics_complete {
+                json!({"elements": [{"ref": "el-1"}]})
+            } else {
+                json!({})
+            },
+            readiness: Default::default(),
+            capture_outcome: AppShotBrowserCaptureOutcome {
+                status,
+                retryable,
+                phase: Some("semantics".into()),
+                timeout_ms: (status == AppShotBrowserCaptureStatus::DeadlineExceeded)
+                    .then_some(1_000),
+            },
+        },
+        image: ContentRef {
+            content_id: "content-outcome".into(),
+            device_id: None,
+            link_epoch: None,
+            mime_type: if pixels_complete {
+                "image/png".into()
+            } else {
+                "application/octet-stream".into()
+            },
+            filename: None,
+            size_bytes: if pixels_complete { 3 } else { 0 },
+            sha256: if pixels_complete {
+                "11".repeat(32)
+            } else {
+                "00".repeat(32)
+            },
+            source: ContentSource::Screenshot,
+            expires_at_ms: None,
+            persistence: ContentPersistence::Temporary,
+        },
+        action_snapshot: AppShotActionSnapshot {
+            snapshot_id: "actions-outcome".into(),
+            session_id: None,
+            subject_generation: Some(7),
+        },
+        coverage: AppShotCoverage {
+            pixels_complete,
+            semantics_complete,
+            secure_regions_redacted: false,
+            projection_truncated: false,
+            total_semantic_nodes: semantics_complete.then_some(1),
+            projected_semantic_nodes: semantics_complete.then_some(1),
+        },
+        capability_profile_id: "browser-v1".into(),
+        diagnostics,
+    }
+}
+
 #[test]
 fn grouped_browser_observe_attaches_exact_appshot_image_and_envelope() {
     let envelope = AppShotEnvelope {
@@ -1949,6 +2118,13 @@ fn grouped_browser_observe_attaches_exact_appshot_image_and_envelope() {
             },
             document_generation: 7,
             semantic_snapshot: json!({"elements": [{"ref": "el-1"}]}),
+            readiness: Default::default(),
+            capture_outcome: AppShotBrowserCaptureOutcome {
+                status: AppShotBrowserCaptureStatus::Complete,
+                retryable: false,
+                phase: None,
+                timeout_ms: None,
+            },
         },
         image: ContentRef {
             content_id: "content-1".into(),
@@ -1992,7 +2168,14 @@ fn grouped_browser_observe_attaches_exact_appshot_image_and_envelope() {
             supports_images: Some(true),
         },
         "browser_appshot",
-        json!({"tab_id": "tab-1", "target": "user_chrome"}),
+        json!({
+            "tab_id": "tab-1",
+            "target": "user_chrome",
+            "element_offset": 4,
+            "element_limit": 12,
+            "element_query": "submit",
+            "capture_timeout_ms": 5_000
+        }),
     )
     .expect("grouped browser observe should dispatch");
     assert_eq!(result["isError"], false);
@@ -2003,4 +2186,97 @@ fn grouped_browser_observe_attaches_exact_appshot_image_and_envelope() {
         result["structuredContent"]["image"]["content_id"],
         "content-1"
     );
+    assert_eq!(
+        service.take_requests(),
+        vec![ServiceRequest::Browser {
+            identity: None,
+            context: None,
+            request: BrowserRequest::ObserveAppShot {
+                target: Some(BrowserTargetKind::UserChrome),
+                tab_id: "tab-1".into(),
+                text_limit: Some(BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT),
+                element_offset: Some(4),
+                element_limit: Some(12),
+                element_query: Some("submit".into()),
+                capture_timeout_ms: Some(5_000),
+                include_image_data: true,
+            },
+        }]
+    );
+}
+
+#[test]
+fn grouped_browser_observe_marks_empty_capture_as_error() {
+    let service = FakeService::with_response(browser_service_response!(AppShot {
+        response: BrowserAppShotResponse {
+            appshot: browser_appshot_outcome_fixture(
+                AppShotBrowserCaptureStatus::Partial,
+                false,
+                false,
+                false,
+                vec![DiagnosticEntry {
+                    code: "BrowserBridgeRequestFailed".into(),
+                    message: "The browser debugger is unattached.".into(),
+                    details: None,
+                }],
+            ),
+            image_data_base64: String::new(),
+            image_mime_type: "application/octet-stream".into(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo {
+            supports_images: Some(true),
+        },
+        "browser_appshot",
+        json!({"tab_id": "tab-outcome"}),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], true);
+    assert_eq!(result["content"].as_array().unwrap().len(), 1);
+    assert!(
+        result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Could not capture a usable browser AppShot")
+    );
+}
+
+#[test]
+fn grouped_browser_observe_surfaces_retryable_partial_deadline_without_tool_error() {
+    let service = FakeService::with_response(browser_service_response!(AppShot {
+        response: BrowserAppShotResponse {
+            appshot: browser_appshot_outcome_fixture(
+                AppShotBrowserCaptureStatus::DeadlineExceeded,
+                true,
+                false,
+                true,
+                vec![DiagnosticEntry {
+                    code: "BrowserCaptureDeadlineExceeded".into(),
+                    message: "Capture deadline reached during semantics.".into(),
+                    details: None,
+                }],
+            ),
+            image_data_base64: String::new(),
+            image_mime_type: "application/octet-stream".into(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo::default(),
+        "browser_appshot",
+        json!({"tab_id": "tab-outcome"}),
+    )
+    .unwrap();
+
+    assert_eq!(result["isError"], false);
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("partial evidence was preserved"));
+    assert!(text.contains("retried once"));
 }

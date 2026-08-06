@@ -10,6 +10,7 @@ mod keepalive;
 mod model_image;
 mod probe;
 mod protocol;
+mod readiness;
 mod resolve;
 mod session;
 mod snapshot;

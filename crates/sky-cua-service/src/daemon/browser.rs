@@ -11,6 +11,11 @@ impl ServiceDaemon {
             text_limit,
             element_limit,
             ..
+        }
+        | BrowserRequest::ObserveAppShot {
+            text_limit,
+            element_limit,
+            ..
         } = &request
         {
             if text_limit.is_some_and(|value| value > BROWSER_SNAPSHOT_MAX_TEXT_LIMIT) {
@@ -29,6 +34,21 @@ impl ServiceDaemon {
                     ),
                 );
             }
+        }
+        if let BrowserRequest::ObserveAppShot {
+            capture_timeout_ms: Some(value),
+            ..
+        } = &request
+            && !sky_cua_platform::model::is_valid_browser_appshot_capture_timeout_ms(*value)
+        {
+            return error_response(
+                "InvalidRequest",
+                format!(
+                    "browser observe capture_timeout_ms must be between {} and {}",
+                    sky_cua_platform::model::BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS,
+                    sky_cua_platform::model::BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS,
+                ),
+            );
         }
         // Any browser request marks the session active so the daemon's idle
         // exit cannot kill the heartbeat keepalive (and with it every tab's
@@ -154,16 +174,22 @@ impl ServiceDaemon {
                 target,
                 tab_id,
                 text_limit,
+                element_offset,
                 element_limit,
+                element_query,
                 include_image_data,
+                capture_timeout_ms,
             } => ServiceResponse::Browser {
                 response: BrowserResponse::AppShot {
                     response: crate::browser::observe_appshot_with_identity(
                         target,
                         tab_id,
                         text_limit,
+                        element_offset,
                         element_limit,
+                        element_query,
                         include_image_data,
+                        capture_timeout_ms,
                         identity,
                     )
                     .await,

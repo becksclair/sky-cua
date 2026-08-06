@@ -376,6 +376,26 @@ async fn open_tab_creates_session_owned_tab_and_navigates_requested_url() {
         .await
         .unwrap();
 
+        let metadata = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(metadata["params"]["method"], "Runtime.evaluate");
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": metadata["id"],
+                "result": {"result": {"value": {
+                    "url": "about:blank",
+                    "documentGeneration": "old-document",
+                    "readyState": "complete",
+                    "bodyPresent": true,
+                    "paintObserved": true,
+                    "viewport": {"width": 800, "height": 600}
+                }}}
+            }),
+        )
+        .await
+        .unwrap();
+
         let navigate = read_frame(&mut stream).await.unwrap().unwrap();
         assert_eq!(
             navigate.get("method").and_then(Value::as_str),
@@ -392,6 +412,39 @@ async fn open_tab_creates_session_owned_tab_and_navigates_requested_url() {
                 "jsonrpc": "2.0",
                 "id": navigate["id"],
                 "result": {"frameId": "frame-1"}
+            }),
+        )
+        .await
+        .unwrap();
+
+        let readiness = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(readiness["params"]["method"], "Runtime.evaluate");
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": readiness["id"],
+                "result": {"result": {"value": {
+                    "url": "https://example.test/",
+                    "documentGeneration": "new-document",
+                    "readyState": "complete",
+                    "bodyPresent": true,
+                    "paintObserved": true,
+                    "viewport": {"width": 800, "height": 600}
+                }}}
+            }),
+        )
+        .await
+        .unwrap();
+
+        let render = read_frame(&mut stream).await.unwrap().unwrap();
+        assert_eq!(render["params"]["method"], "Runtime.evaluate");
+        write_frame(
+            &mut stream,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": render["id"],
+                "result": {"result": {"value": true}}
             }),
         )
         .await

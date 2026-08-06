@@ -108,8 +108,11 @@ async fn require_appshot(
         Some(target),
         tab_id.to_owned(),
         Some(4_000),
+        None,
         Some(200),
+        None,
         false,
+        None,
         Some(identity.clone()),
     )
     .await;
@@ -358,8 +361,11 @@ pub(crate) async fn execute_high_level(
                     Some(response.target),
                     tab.tab_id.clone(),
                     Some(4_000),
+                    None,
                     Some(200),
+                    None,
                     false,
+                    None,
                     identity.clone(),
                 )
                 .await;
@@ -420,8 +426,11 @@ pub(crate) async fn execute_high_level(
                 Some(response.target),
                 tab_id,
                 Some(4_000),
+                None,
                 Some(200),
+                None,
                 false,
+                None,
                 identity.clone(),
             )
             .await;
@@ -454,15 +463,21 @@ pub(crate) async fn execute_high_level(
             target,
             tab_id,
             text_limit,
+            element_offset,
             element_limit,
+            element_query,
             include_image_data,
+            capture_timeout_ms,
         } => {
             let response = crate::browser::observe_appshot_with_identity(
                 target,
                 tab_id,
                 text_limit,
+                element_offset,
                 element_limit,
+                element_query,
                 include_image_data,
+                capture_timeout_ms,
                 identity,
             )
             .await;
@@ -701,6 +716,8 @@ mod appshot_fence_tests {
                     },
                     document_generation: generation,
                     semantic_snapshot: serde_json::json!({}),
+                    readiness: Default::default(),
+                    capture_outcome: Default::default(),
                 },
                 image: ContentRef {
                     content_id: "image".into(),

@@ -43,6 +43,7 @@ dialogs, and desktop windows. Use `phone-use` for Android or phone-browser UI.
 
 - Prefer `observe(surface="browser", tab_id=...)` for the screenshot, title, URL, viewport, visible text, actionable bounds, per-element `ref` values, document generation, and canonical `appshot_id` captured together.
 - Defaults are compact; on dense pages use element query, offset, and limit controls, use `text_limit: 0` for controls-only snapshots, and raise text limits only when page text is the task.
+- If an AppShot reports `capture_outcome.status="deadline_exceeded"` with `retryable=true`, retry observation once, optionally with a larger `capture_timeout_ms`; do not treat that structured capture deadline as a debugger attachment failure.
 - Use the image attached to browser `observe` for visual layout and pixel targeting; `capture_screen` remains a focused screenshot call but does not replace the AppShot action fence.
 - Pass the latest matching `appshot_id` to every state-changing browser input. `AppShotRequired` proves the rejected side effect did not run and includes a fresh recovery AppShot; continue from that new id.
 - Tool success means only that input was dispatched, so verify consequential changes with a fresh observation or screenshot.

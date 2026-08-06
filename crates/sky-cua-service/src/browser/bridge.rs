@@ -1,17 +1,21 @@
 use base64::Engine as _;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::path::Path;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{fs, path::Path};
 
 use sky_cua_platform::appshot_artifacts_dir;
 use sky_cua_platform::model::{
-    AppShotActionSnapshot, AppShotCapture, AppShotConsistency, AppShotCoverage, AppShotEnvelope,
-    AppShotTrigger, BrowserActionResponse, BrowserAppShotResponse, BrowserClaimTabResponse,
-    BrowserEvalResponse, BrowserListTabsResponse, BrowserMoveMouseResponse,
-    BrowserNavigateResponse, BrowserOpenResponse, BrowserScreenshotResponse,
-    BrowserSessionIdentity, BrowserSnapshotResponse, BrowserTargetKind, ContentPersistence,
-    ContentRef, ContentSource, DiagnosticEntry, PixelSize, normalize_browser_open_url,
+    APPSHOT_ARTIFACT_DEFAULT_LEASE_MS, AppShotActionSnapshot, AppShotBrowserCaptureOutcome,
+    AppShotBrowserCaptureStatus, AppShotBrowserReadiness, AppShotBrowserReadinessState,
+    AppShotCapture, AppShotConsistency, AppShotCoverage, AppShotEnvelope, AppShotTrigger,
+    BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS, BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS,
+    BrowserActionResponse, BrowserAppShotResponse, BrowserClaimTabResponse, BrowserEvalResponse,
+    BrowserListTabsResponse, BrowserMoveMouseResponse, BrowserNavigateResponse,
+    BrowserOpenResponse, BrowserScreenshotResponse, BrowserSessionIdentity,
+    BrowserSnapshotResponse, BrowserTargetKind, ContentPersistence, ContentRef, ContentSource,
+    DiagnosticEntry, PixelSize, normalize_browser_open_url,
 };
 use tokio::time::Instant as TokioInstant;
 
@@ -194,6 +198,7 @@ pub(crate) async fn list_tabs_with_identity(
         Err(diagnostic) => BrowserListTabsResponse {
             target: Some(resolved_target),
             tabs: Vec::new(),
+            total: 0,
             diagnostics: vec![diagnostic],
         },
     }
@@ -453,145 +458,240 @@ pub(crate) async fn snapshot_with_identity(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn observe_appshot_with_identity(
     target: Option<BrowserTargetKind>,
     tab_id: String,
     text_limit: Option<usize>,
+    element_offset: Option<usize>,
     element_limit: Option<usize>,
+    element_query: Option<String>,
     include_image_data: bool,
-    identity: Option<BrowserSessionIdentity>,
-) -> BrowserAppShotResponse {
-    let fallback_tab = tab_id.clone();
-    match tokio::time::timeout(
-        Duration::from_secs(2),
-        observe_appshot_with_identity_inner(
-            target,
-            tab_id,
-            text_limit,
-            element_limit,
-            include_image_data,
-            identity.clone(),
-        ),
-    )
-    .await
-    {
-        Ok(response) => response,
-        Err(_) => BrowserAppShotResponse {
-            appshot: AppShotEnvelope {
-                appshot_id: uuid::Uuid::new_v4().to_string(),
-                trigger: AppShotTrigger::Observe,
-                captured_at: chrono::Utc::now(),
-                consistency: AppShotConsistency::Partial,
-                capture: AppShotCapture::Browser {
-                    tab_id: fallback_tab,
-                    url: String::new(),
-                    title: None,
-                    viewport: PixelSize {
-                        width: 0,
-                        height: 0,
-                    },
-                    document_generation: 0,
-                    semantic_snapshot: serde_json::json!({}),
-                },
-                image: ContentRef {
-                    content_id: uuid::Uuid::new_v4().to_string(),
-                    device_id: None,
-                    link_epoch: None,
-                    mime_type: "application/octet-stream".into(),
-                    filename: None,
-                    size_bytes: 0,
-                    sha256: "00".repeat(32),
-                    source: ContentSource::Screenshot,
-                    expires_at_ms: None,
-                    persistence: ContentPersistence::Temporary,
-                },
-                action_snapshot: AppShotActionSnapshot {
-                    snapshot_id: uuid::Uuid::new_v4().to_string(),
-                    session_id: identity.map(|value| value.session_id),
-                    subject_generation: None,
-                },
-                coverage: AppShotCoverage {
-                    pixels_complete: false,
-                    semantics_complete: false,
-                    secure_regions_redacted: false,
-                    projection_truncated: false,
-                    total_semantic_nodes: None,
-                    projected_semantic_nodes: None,
-                },
-                capability_profile_id: "browser-v1".into(),
-                diagnostics: vec![DiagnosticEntry {
-                    code: "BrowserCaptureDeadlineExceeded".into(),
-                    message: "Browser AppShot capture exceeded its two-second aggregate deadline."
-                        .into(),
-                    details: None,
-                }],
-            },
-            image_data_base64: String::new(),
-            image_mime_type: "application/octet-stream".into(),
-        },
-    }
-}
-
-async fn observe_appshot_with_identity_inner(
-    target: Option<BrowserTargetKind>,
-    tab_id: String,
-    text_limit: Option<usize>,
-    element_limit: Option<usize>,
-    include_image_data: bool,
+    capture_timeout_ms: Option<u64>,
     identity: Option<BrowserSessionIdentity>,
 ) -> BrowserAppShotResponse {
     let target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let tab_id = tab_id.trim().to_string();
-    let mut last: Option<AppShotEnvelope> = None;
+    let timeout_ms = capture_timeout_ms
+        .unwrap_or_else(|| {
+            adaptive_capture_timeout_ms(
+                text_limit,
+                element_offset,
+                element_limit,
+                include_image_data,
+            )
+        })
+        .clamp(
+            BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS,
+            BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS,
+        );
+    let deadline = TokioInstant::now() + Duration::from_millis(timeout_ms);
+    let mut progress = CaptureProgress::new(tab_id.clone(), include_image_data, identity.clone());
+
     for attempt in 0..2 {
-        let snapshot = snapshot_with_identity(
-            Some(target),
-            tab_id.clone(),
-            text_limit,
-            None,
-            element_limit,
-            None,
+        if attempt > 0 {
+            progress.snapshot = None;
+            progress.screenshot = None;
+            progress.fence_metadata = None;
+        }
+        if progress.metadata.is_none() {
+            progress.phase = Some("metadata".into());
+            match run_cdp_action_until(
+                target,
+                &tab_id,
+                BrowserCdpAction::Metadata,
+                deadline,
+                identity.clone(),
+            )
+            .await
+            {
+                Ok(BrowserCdpResult::Metadata { metadata }) => {
+                    progress.metadata = Some(metadata);
+                }
+                Ok(_) => unreachable!("metadata action returns metadata result"),
+                Err(diagnostic) => {
+                    let deadline_exceeded = is_capture_deadline(&diagnostic, deadline);
+                    return progress_response(
+                        progress,
+                        deadline,
+                        timeout_ms,
+                        diagnostic,
+                        deadline_exceeded,
+                    );
+                }
+            }
+        }
+        if deadline <= TokioInstant::now() {
+            return progress_response(
+                progress,
+                deadline,
+                timeout_ms,
+                deadline_diagnostic("metadata", timeout_ms),
+                true,
+            );
+        }
+
+        progress.phase = Some("semantics".into());
+        let snapshot = match run_cdp_action_until(
+            target,
+            &tab_id,
+            BrowserCdpAction::Snapshot {
+                text_limit,
+                element_offset,
+                element_limit,
+                element_query: element_query.clone(),
+            },
+            deadline,
             identity.clone(),
         )
-        .await;
-        let screenshot = screenshot_with_identity(
-            Some(target),
-            tab_id.clone(),
-            include_image_data,
-            identity.clone(),
-        )
-        .await;
-        // Fence the capture against navigation/document replacement: a second
-        // semantic read after pixels must agree on URL and viewport before the
-        // envelope can claim stable consistency.
-        let after = snapshot_with_identity(
-            Some(target),
-            tab_id.clone(),
-            Some(0),
-            None,
-            Some(0),
-            None,
-            identity.clone(),
-        )
-        .await;
-        let url = snapshot.url.clone().unwrap_or_default();
-        let width = screenshot.width.unwrap_or(0);
-        let height = screenshot.height.unwrap_or(0);
-        let bytes = if !screenshot.data_base64.is_empty() {
-            base64::engine::general_purpose::STANDARD
-                .decode(&screenshot.data_base64)
-                .unwrap_or_default()
-        } else {
-            screenshot
-                .screenshot_path
-                .as_deref()
-                .and_then(|path| fs::read(path).ok())
-                .unwrap_or_default()
+        .await
+        {
+            Ok(BrowserCdpResult::Snapshot {
+                title,
+                url,
+                snapshot,
+            }) => {
+                let response = BrowserSnapshotResponse {
+                    target,
+                    tab_id: tab_id.clone(),
+                    title,
+                    url,
+                    snapshot: Some(snapshot),
+                    diagnostics: Vec::new(),
+                };
+                progress.snapshot = Some(response.clone());
+                response
+            }
+            Ok(_) => unreachable!("snapshot action returns snapshot result"),
+            Err(diagnostic) => {
+                return progress_response(
+                    progress,
+                    deadline,
+                    timeout_ms,
+                    diagnostic.clone(),
+                    is_capture_deadline(&diagnostic, deadline),
+                );
+            }
         };
-        let semantic_viewport = snapshot
-            .snapshot
+
+        if deadline <= TokioInstant::now() {
+            return progress_response(
+                progress,
+                deadline,
+                timeout_ms,
+                deadline_diagnostic("semantics", timeout_ms),
+                true,
+            );
+        }
+
+        progress.phase = Some("pixels".into());
+        let screenshot = match run_cdp_action_until(
+            target,
+            &tab_id,
+            BrowserCdpAction::Screenshot,
+            deadline,
+            identity.clone(),
+        )
+        .await
+        {
+            Ok(BrowserCdpResult::Screenshot {
+                data_base64,
+                css_width,
+                css_height,
+            }) => {
+                let tab_id_for_task = tab_id.clone();
+                let task = tokio::task::spawn_blocking(move || {
+                    super::model_image::prepare_browser_capture(
+                        &tab_id_for_task,
+                        &data_base64,
+                        css_width,
+                        css_height,
+                        include_image_data,
+                    )
+                });
+                match tokio::time::timeout_at(deadline, task).await {
+                    Ok(Ok(prepared)) => {
+                        progress.screenshot = Some(prepared.clone());
+                        prepared
+                    }
+                    Ok(Err(join_error)) => {
+                        let diagnostic = DiagnosticEntry {
+                            code: "BrowserScreenshotDegraded".into(),
+                            message: format!(
+                                "Browser screenshot post-processing task failed to join cleanly: {join_error}"
+                            ),
+                            details: None,
+                        };
+                        return progress_response(
+                            progress, deadline, timeout_ms, diagnostic, false,
+                        );
+                    }
+                    Err(_) => {
+                        return progress_response(
+                            progress,
+                            deadline,
+                            timeout_ms,
+                            deadline_diagnostic("pixel_post_processing", timeout_ms),
+                            true,
+                        );
+                    }
+                }
+            }
+            Ok(_) => unreachable!("screenshot action returns screenshot result"),
+            Err(diagnostic) => {
+                return progress_response(
+                    progress,
+                    deadline,
+                    timeout_ms,
+                    diagnostic.clone(),
+                    is_capture_deadline(&diagnostic, deadline),
+                );
+            }
+        };
+
+        if deadline <= TokioInstant::now() {
+            return progress_response(
+                progress,
+                deadline,
+                timeout_ms,
+                deadline_diagnostic("pixels", timeout_ms),
+                true,
+            );
+        }
+
+        progress.phase = Some("fence".into());
+        let after = match run_cdp_action_until(
+            target,
+            &tab_id,
+            BrowserCdpAction::Metadata,
+            deadline,
+            identity.clone(),
+        )
+        .await
+        {
+            Ok(BrowserCdpResult::Metadata { metadata }) => metadata,
+            Ok(_) => unreachable!("metadata action returns metadata result"),
+            Err(diagnostic) => {
+                return progress_response(
+                    progress,
+                    deadline,
+                    timeout_ms,
+                    diagnostic.clone(),
+                    is_capture_deadline(&diagnostic, deadline),
+                );
+            }
+        };
+        progress.fence_metadata = Some(after.clone());
+
+        let bytes = screenshot.bytes.as_ref();
+        let metadata = progress
+            .fence_metadata
             .as_ref()
-            .and_then(|value| value.get("viewport"));
+            .or(progress.metadata.as_ref());
+        let snapshot_value = snapshot.snapshot.as_ref();
+        let semantic_viewport = snapshot_value.and_then(|value| value.get("viewport"));
+        let width = screenshot.width;
+        let height = screenshot.height;
         let viewport_matches = semantic_viewport
             .and_then(|value| value.get("width"))
             .and_then(|value| value.as_u64())
@@ -601,22 +701,21 @@ async fn observe_appshot_with_identity_inner(
                     .and_then(|value| value.as_u64()),
             )
             .is_some_and(|(width, height)| {
-                Some(width as u32) == screenshot.width && Some(height as u32) == screenshot.height
+                width as u32 == screenshot.width && height as u32 == screenshot.height
             });
-        let decoded_dimensions = image::load_from_memory(&bytes)
-            .ok()
-            .map(|image| (image.width(), image.height()));
-        let image_matches_viewport = decoded_dimensions.is_some_and(|(width, height)| {
-            Some(width) == screenshot.width && Some(height) == screenshot.height
-        });
+        let image_matches_viewport = !bytes.is_empty();
         let mut hasher = Sha256::new();
         hasher.update(
-            snapshot
-                .snapshot
-                .as_ref()
+            snapshot_value
                 .and_then(|v| v.get("documentGeneration"))
                 .and_then(|v| v.as_str())
-                .unwrap_or(&url)
+                .or_else(|| {
+                    metadata
+                        .and_then(|v| v.get("documentGeneration"))
+                        .and_then(Value::as_str)
+                })
+                .or(snapshot.url.as_deref())
+                .unwrap_or("")
                 .as_bytes(),
         );
         let digest = hasher.finalize();
@@ -625,21 +724,15 @@ async fn observe_appshot_with_identity_inner(
         diagnostics.extend(screenshot.diagnostics.clone());
         let mut consistency = classify_document_capture(
             snapshot.url.as_deref(),
-            after.url.as_deref(),
-            snapshot.snapshot.as_ref(),
-            after.snapshot.as_ref(),
+            after.get("url").and_then(Value::as_str),
+            snapshot_value,
+            Some(&after),
             screenshot.diagnostics.is_empty()
                 && !bytes.is_empty()
                 && viewport_matches
                 && image_matches_viewport
-                && semantic_viewport
-                    == after
-                        .snapshot
-                        .as_ref()
-                        .and_then(|value| value.get("viewport"))
-                && screenshot.target == target
+                && semantic_viewport == after.get("viewport")
                 && snapshot.target == target
-                && screenshot.tab_id == tab_id
                 && snapshot.tab_id == tab_id,
             attempt,
         );
@@ -653,59 +746,50 @@ async fn observe_appshot_with_identity_inner(
         let expires_at_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .ok()
-            .map(|d| d.as_millis() as u64 + 60 * 60 * 1000);
-        let sha = Sha256::digest(&bytes);
-        let final_artifact = if consistency == AppShotConsistency::Stable || attempt == 1 {
-            persist_browser_appshot_artifact(&bytes, &screenshot.mime_type).ok()
-        } else {
-            None
+            .map(|d| (d.as_millis() as u64).saturating_add(APPSHOT_ARTIFACT_DEFAULT_LEASE_MS));
+        let capture_was_consistent = consistency == AppShotConsistency::Stable;
+        progress.phase = Some("artifact".into());
+        let artifact_bytes = screenshot.bytes.clone();
+        let artifact_mime_type = screenshot.mime_type.clone();
+        let artifact_task = tokio::task::spawn_blocking(move || {
+            persist_browser_appshot_artifact(&artifact_bytes, &artifact_mime_type)
+        });
+        let final_artifact = match tokio::time::timeout_at(deadline, artifact_task).await {
+            Ok(Ok(Ok(path))) => Some(path),
+            Ok(Ok(Err(error))) => {
+                diagnostics.push(DiagnosticEntry {
+                    code: "BrowserArtifactPersistFailed".into(),
+                    message: format!(
+                        "Browser AppShot pixels could not be committed to a private artifact: {error}"
+                    ),
+                    details: None,
+                });
+                None
+            }
+            Ok(Err(join_error)) => {
+                diagnostics.push(DiagnosticEntry {
+                    code: "BrowserArtifactPersistFailed".into(),
+                    message: format!(
+                        "Browser AppShot artifact task failed to join cleanly: {join_error}"
+                    ),
+                    details: None,
+                });
+                None
+            }
+            Err(_) => {
+                return progress_response(
+                    progress,
+                    deadline,
+                    timeout_ms,
+                    deadline_diagnostic("artifact_persistence", timeout_ms),
+                    true,
+                );
+            }
         };
         if final_artifact.is_none() && consistency == AppShotConsistency::Stable {
             consistency = AppShotConsistency::Partial;
-            diagnostics.push(DiagnosticEntry {
-                code: "BrowserArtifactPersistFailed".into(),
-                message: "Browser AppShot pixels could not be committed to a private artifact."
-                    .into(),
-                details: None,
-            });
         }
-        let image = ContentRef {
-            content_id: uuid::Uuid::new_v4().to_string(),
-            device_id: None,
-            link_epoch: None,
-            mime_type: screenshot.mime_type.clone(),
-            filename: screenshot
-                .screenshot_path
-                .as_deref()
-                .and_then(|path| Path::new(path).file_name())
-                .map(|name| name.to_string_lossy().into_owned()),
-            size_bytes: bytes.len() as u64,
-            sha256: format!("{sha:x}"),
-            source: ContentSource::HostPrivateArtifact,
-            expires_at_ms,
-            persistence: ContentPersistence::Temporary,
-        };
-        let image = final_artifact
-            .as_ref()
-            .and_then(|path| fs::metadata(path).ok().map(|metadata| (path, metadata)))
-            .map(|(path, metadata)| ContentRef {
-                content_id: uuid::Uuid::new_v4().to_string(),
-                device_id: None,
-                link_epoch: None,
-                mime_type: screenshot.mime_type.clone(),
-                filename: path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned()),
-                size_bytes: metadata.len(),
-                sha256: Sha256::digest(&bytes)
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect(),
-                source: ContentSource::HostPrivateArtifact,
-                expires_at_ms,
-                persistence: ContentPersistence::Temporary,
-            })
-            .unwrap_or(image);
+        let image = capture_content_ref(&screenshot, final_artifact.as_deref(), expires_at_ms);
         let envelope = AppShotEnvelope {
             appshot_id: uuid::Uuid::new_v4().to_string(),
             trigger: AppShotTrigger::Observe,
@@ -713,7 +797,16 @@ async fn observe_appshot_with_identity_inner(
             consistency,
             capture: AppShotCapture::Browser {
                 tab_id: tab_id.clone(),
-                url,
+                url: snapshot
+                    .url
+                    .clone()
+                    .or_else(|| {
+                        metadata
+                            .and_then(|value| value.get("url"))
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned)
+                    })
+                    .unwrap_or_default(),
                 title: snapshot.title.clone(),
                 viewport: PixelSize { width, height },
                 document_generation: generation,
@@ -721,6 +814,17 @@ async fn observe_appshot_with_identity_inner(
                     .snapshot
                     .clone()
                     .unwrap_or_else(|| serde_json::json!({})),
+                readiness: readiness_from_metadata(Some(&after)),
+                capture_outcome: AppShotBrowserCaptureOutcome {
+                    status: if consistency == AppShotConsistency::Stable {
+                        AppShotBrowserCaptureStatus::Complete
+                    } else {
+                        AppShotBrowserCaptureStatus::Partial
+                    },
+                    retryable: false,
+                    phase: None,
+                    timeout_ms: None,
+                },
             },
             image,
             action_snapshot: AppShotActionSnapshot {
@@ -753,20 +857,365 @@ async fn observe_appshot_with_identity_inner(
             capability_profile_id: "browser-v1".to_string(),
             diagnostics,
         };
-        if attempt == 1 || envelope.consistency == AppShotConsistency::Stable {
+        if attempt == 1 || capture_was_consistent {
             return BrowserAppShotResponse {
                 appshot: envelope,
-                image_data_base64: attachment_data(&bytes, include_image_data),
+                image_data_base64: attachment_data(bytes, include_image_data),
                 image_mime_type: screenshot.mime_type,
             };
         }
-        last = Some(envelope);
+        progress.last_screenshot = Some(screenshot);
+        progress.last_envelope = Some(envelope);
+        progress.metadata = Some(after);
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
+    progress_response(
+        progress,
+        deadline,
+        timeout_ms,
+        deadline_diagnostic("consistency_retry", timeout_ms),
+        true,
+    )
+}
+
+#[derive(Debug)]
+struct CaptureProgress {
+    tab_id: String,
+    identity: Option<BrowserSessionIdentity>,
+    include_image_data: bool,
+    metadata: Option<Value>,
+    fence_metadata: Option<Value>,
+    snapshot: Option<BrowserSnapshotResponse>,
+    screenshot: Option<super::model_image::PreparedBrowserCapture>,
+    last_envelope: Option<AppShotEnvelope>,
+    last_screenshot: Option<super::model_image::PreparedBrowserCapture>,
+    phase: Option<String>,
+}
+
+impl CaptureProgress {
+    fn new(
+        tab_id: String,
+        include_image_data: bool,
+        identity: Option<BrowserSessionIdentity>,
+    ) -> Self {
+        Self {
+            tab_id,
+            identity,
+            include_image_data,
+            metadata: None,
+            fence_metadata: None,
+            snapshot: None,
+            screenshot: None,
+            last_envelope: None,
+            last_screenshot: None,
+            phase: None,
+        }
+    }
+}
+
+fn adaptive_capture_timeout_ms(
+    text_limit: Option<usize>,
+    element_offset: Option<usize>,
+    element_limit: Option<usize>,
+    include_image_data: bool,
+) -> u64 {
+    let text_units = text_limit.unwrap_or(4_000).saturating_add(3_999) / 4_000;
+    let element_end = element_offset
+        .unwrap_or(0)
+        .saturating_add(element_limit.unwrap_or(200))
+        .min(5_000);
+    let element_units = element_end.saturating_add(199) / 200;
+    let image_ms = if include_image_data { 500 } else { 0 };
+    6_000_u64
+        .saturating_add((text_units as u64).saturating_mul(500))
+        .saturating_add((element_units as u64).saturating_mul(250))
+        .saturating_add(image_ms)
+        .clamp(6_000, 15_000)
+}
+
+fn is_capture_deadline(diagnostic: &DiagnosticEntry, deadline: TokioInstant) -> bool {
+    TokioInstant::now() >= deadline
+        || diagnostic.code == "BrowserBridgeRequestTimedOut"
+        || (diagnostic.code == "BrowserBridgeRequestFailed"
+            && diagnostic.message.contains("Timed out after"))
+}
+
+fn deadline_diagnostic(phase: &str, timeout_ms: u64) -> DiagnosticEntry {
+    DiagnosticEntry {
+        code: "BrowserCaptureDeadlineExceeded".into(),
+        message: format!(
+            "Browser AppShot capture exceeded its {timeout_ms} ms aggregate deadline during {phase}."
+        ),
+        details: None,
+    }
+}
+
+fn capture_content_ref(
+    capture: &super::model_image::PreparedBrowserCapture,
+    private_artifact: Option<&Path>,
+    private_expires_at_ms: Option<u64>,
+) -> ContentRef {
+    let private_filename = private_artifact
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned());
+    let fallback_filename = capture
+        .screenshot_path
+        .as_deref()
+        .and_then(|path| Path::new(path).file_name())
+        .map(|name| name.to_string_lossy().into_owned());
+    ContentRef {
+        content_id: uuid::Uuid::new_v4().to_string(),
+        device_id: None,
+        link_epoch: None,
+        mime_type: capture.mime_type.clone(),
+        filename: private_filename.or(fallback_filename),
+        size_bytes: capture.bytes.len() as u64,
+        sha256: capture.sha256.clone(),
+        source: if private_artifact.is_some() {
+            ContentSource::HostPrivateArtifact
+        } else {
+            ContentSource::Screenshot
+        },
+        expires_at_ms: private_artifact
+            .is_some()
+            .then_some(private_expires_at_ms)
+            .flatten(),
+        persistence: ContentPersistence::Temporary,
+    }
+}
+
+fn readiness_from_metadata(metadata: Option<&Value>) -> AppShotBrowserReadiness {
+    let Some(metadata) = metadata else {
+        return AppShotBrowserReadiness::default();
+    };
+    let raw_ready_state = metadata
+        .get("readyState")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let state = if matches!(raw_ready_state.as_deref(), Some("interactive" | "complete"))
+        && metadata.get("bodyPresent").and_then(Value::as_bool) == Some(true)
+    {
+        AppShotBrowserReadinessState::Ready
+    } else if raw_ready_state.is_some() {
+        AppShotBrowserReadinessState::Loading
+    } else {
+        AppShotBrowserReadinessState::Unknown
+    };
+    AppShotBrowserReadiness {
+        state,
+        raw_ready_state,
+    }
+}
+
+fn metadata_viewport(metadata: Option<&Value>) -> Option<PixelSize> {
+    let viewport = metadata?.get("viewport")?;
+    Some(PixelSize {
+        width: viewport.get("width")?.as_u64()?.try_into().ok()?,
+        height: viewport.get("height")?.as_u64()?.try_into().ok()?,
+    })
+}
+
+fn generation_for_capture(
+    snapshot: Option<&BrowserSnapshotResponse>,
+    metadata: Option<&Value>,
+    url: &str,
+) -> u64 {
+    let source = snapshot
+        .and_then(|value| value.snapshot.as_ref())
+        .and_then(|value| value.get("documentGeneration"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            metadata
+                .and_then(|value| value.get("documentGeneration"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or(url);
+    let digest = Sha256::digest(source.as_bytes());
+    u64::from_le_bytes(digest[..8].try_into().unwrap_or([0; 8]))
+}
+
+fn progress_response(
+    mut progress: CaptureProgress,
+    _deadline: TokioInstant,
+    timeout_ms: u64,
+    diagnostic: DiagnosticEntry,
+    deadline_exceeded: bool,
+) -> BrowserAppShotResponse {
+    let phase = progress.phase.clone();
+    let outcome = AppShotBrowserCaptureOutcome {
+        status: if deadline_exceeded {
+            AppShotBrowserCaptureStatus::DeadlineExceeded
+        } else {
+            AppShotBrowserCaptureStatus::Partial
+        },
+        retryable: deadline_exceeded,
+        phase,
+        timeout_ms: deadline_exceeded.then_some(timeout_ms),
+    };
+    let deadline_entry = deadline_exceeded
+        .then(|| deadline_diagnostic(progress.phase.as_deref().unwrap_or("unknown"), timeout_ms));
+    if let Some(mut envelope) = progress.last_envelope.take() {
+        if !envelope
+            .diagnostics
+            .iter()
+            .any(|item| item.code == diagnostic.code)
+        {
+            envelope.diagnostics.push(diagnostic);
+        }
+        if let Some(deadline_entry) = deadline_entry
+            && !envelope
+                .diagnostics
+                .iter()
+                .any(|item| item.code == deadline_entry.code)
+        {
+            envelope.diagnostics.push(deadline_entry);
+        }
+        if let AppShotCapture::Browser {
+            capture_outcome, ..
+        } = &mut envelope.capture
+        {
+            *capture_outcome = outcome;
+        }
+        let bytes = progress
+            .last_screenshot
+            .as_ref()
+            .map(|capture| capture.bytes.as_ref())
+            .unwrap_or_default();
+        return BrowserAppShotResponse {
+            image_data_base64: attachment_data(bytes, progress.include_image_data),
+            image_mime_type: progress
+                .last_screenshot
+                .as_ref()
+                .map(|value| value.mime_type.clone())
+                .unwrap_or_else(|| envelope.image.mime_type.clone()),
+            appshot: envelope,
+        };
+    }
+
+    let metadata = progress
+        .fence_metadata
+        .as_ref()
+        .or(progress.metadata.as_ref());
+    let snapshot = progress.snapshot.as_ref();
+    let url = snapshot
+        .and_then(|value| value.url.clone())
+        .or_else(|| {
+            metadata
+                .and_then(|value| value.get("url"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_default();
+    let title = snapshot.and_then(|value| value.title.clone()).or_else(|| {
+        metadata
+            .and_then(|value| value.get("title"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    });
+    let screenshot = progress.screenshot.as_ref();
+    let bytes = screenshot
+        .map(|capture| capture.bytes.as_ref())
+        .unwrap_or_default();
+    let viewport = snapshot
+        .and_then(|value| value.snapshot.as_ref())
+        .and_then(|value| value.get("viewport"))
+        .and_then(|value| {
+            Some(PixelSize {
+                width: value.get("width")?.as_u64()?.try_into().ok()?,
+                height: value.get("height")?.as_u64()?.try_into().ok()?,
+            })
+        })
+        .or_else(|| metadata_viewport(metadata))
+        .or_else(|| {
+            screenshot.map(|value| PixelSize {
+                width: value.width,
+                height: value.height,
+            })
+        })
+        .unwrap_or(PixelSize {
+            width: 0,
+            height: 0,
+        });
+    let expires_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|value| value.as_millis() as u64 + 60 * 60 * 1000);
+    let image = screenshot.map_or_else(
+        || ContentRef {
+            content_id: uuid::Uuid::new_v4().to_string(),
+            device_id: None,
+            link_epoch: None,
+            mime_type: "application/octet-stream".into(),
+            filename: None,
+            size_bytes: 0,
+            sha256: "00".repeat(32),
+            source: ContentSource::Screenshot,
+            expires_at_ms: None,
+            persistence: ContentPersistence::Temporary,
+        },
+        |capture| capture_content_ref(capture, None, expires_at_ms),
+    );
+    let mut diagnostics = snapshot
+        .map(|value| value.diagnostics.clone())
+        .unwrap_or_default();
+    if !diagnostics.iter().any(|item| item.code == diagnostic.code) {
+        diagnostics.push(diagnostic);
+    }
+    if let Some(deadline_entry) = deadline_entry
+        && !diagnostics
+            .iter()
+            .any(|item| item.code == deadline_entry.code)
+    {
+        diagnostics.push(deadline_entry);
+    }
+    let semantic_snapshot = snapshot
+        .and_then(|value| value.snapshot.clone())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let envelope = AppShotEnvelope {
+        appshot_id: uuid::Uuid::new_v4().to_string(),
+        trigger: AppShotTrigger::Observe,
+        captured_at: chrono::Utc::now(),
+        consistency: AppShotConsistency::Partial,
+        capture: AppShotCapture::Browser {
+            tab_id: progress.tab_id,
+            url: url.clone(),
+            title,
+            viewport,
+            document_generation: generation_for_capture(snapshot, metadata, &url),
+            semantic_snapshot: semantic_snapshot.clone(),
+            readiness: readiness_from_metadata(metadata),
+            capture_outcome: outcome,
+        },
+        image,
+        action_snapshot: AppShotActionSnapshot {
+            snapshot_id: uuid::Uuid::new_v4().to_string(),
+            session_id: progress.identity.map(|value| value.session_id),
+            subject_generation: Some(generation_for_capture(snapshot, metadata, &url)),
+        },
+        coverage: AppShotCoverage {
+            pixels_complete: !bytes.is_empty(),
+            semantics_complete: snapshot.and_then(|value| value.snapshot.as_ref()).is_some(),
+            secure_regions_redacted: false,
+            projection_truncated: semantic_snapshot
+                .get("textTruncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            total_semantic_nodes: semantic_snapshot
+                .get("elementCount")
+                .and_then(Value::as_u64),
+            projected_semantic_nodes: semantic_snapshot
+                .get("elements")
+                .and_then(Value::as_array)
+                .map(|value| value.len() as u64),
+        },
+        capability_profile_id: "browser-v1".into(),
+        diagnostics,
+    };
+    let image_mime_type = envelope.image.mime_type.clone();
     BrowserAppShotResponse {
-        appshot: last.expect("observe always produces an envelope"),
-        image_data_base64: String::new(),
-        image_mime_type: "image/png".into(),
+        image_data_base64: attachment_data(bytes, progress.include_image_data),
+        image_mime_type,
+        appshot: envelope,
     }
 }
 
@@ -798,10 +1247,22 @@ fn attachment_data(bytes: &[u8], include_image_data: bool) -> String {
     }
 }
 
+const BROWSER_APPSHOT_MAX_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
+
 fn persist_browser_appshot_artifact(
     bytes: &[u8],
     mime_type: &str,
 ) -> std::io::Result<std::path::PathBuf> {
+    if bytes.is_empty() || bytes.len() > BROWSER_APPSHOT_MAX_ARTIFACT_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "browser AppShot artifact size {} is outside the 1-{} byte range",
+                bytes.len(),
+                BROWSER_APPSHOT_MAX_ARTIFACT_BYTES
+            ),
+        ));
+    }
     use std::io::Write;
     use std::time::{Duration, SystemTime};
     let root = appshot_artifacts_dir();
@@ -812,9 +1273,9 @@ fn persist_browser_appshot_artifact(
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
     }
     let expiry = SystemTime::now()
-        .checked_sub(Duration::from_secs(60 * 60))
+        .checked_sub(Duration::from_millis(APPSHOT_ARTIFACT_DEFAULT_LEASE_MS))
         .unwrap_or(SystemTime::UNIX_EPOCH);
-    for entry in std::fs::read_dir(&root)?.flatten() {
+    for entry in std::fs::read_dir(&root)?.flatten().take(256) {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -1277,8 +1738,24 @@ async fn run_cdp_action(
     action: BrowserCdpAction,
     identity: Option<BrowserSessionIdentity>,
 ) -> Result<BrowserCdpResult, DiagnosticEntry> {
-    let executor =
-        BrowserBridgeExecutor::from_env(TokioInstant::now() + browser_open_timeout(), identity)?;
+    run_cdp_action_until(
+        target,
+        tab_id,
+        action,
+        TokioInstant::now() + browser_open_timeout(),
+        identity,
+    )
+    .await
+}
+
+async fn run_cdp_action_until(
+    target: BrowserTargetKind,
+    tab_id: &str,
+    action: BrowserCdpAction,
+    deadline: TokioInstant,
+    identity: Option<BrowserSessionIdentity>,
+) -> Result<BrowserCdpResult, DiagnosticEntry> {
+    let executor = BrowserBridgeExecutor::from_env(deadline, identity)?;
     executor.bind_tab(target, tab_id).run_cdp(action).await
 }
 
@@ -1286,6 +1763,64 @@ async fn run_cdp_action(
 mod appshot_capture_tests {
     use super::*;
     use serde_json::json;
+
+    fn prepared_capture(bytes: &[u8]) -> super::super::model_image::PreparedBrowserCapture {
+        super::super::model_image::PreparedBrowserCapture {
+            bytes: std::sync::Arc::from(bytes.to_vec()),
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+            data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            mime_type: "image/png".into(),
+            screenshot_path: None,
+            width: 10,
+            height: 10,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    fn browser_envelope(
+        capture: &super::super::model_image::PreparedBrowserCapture,
+    ) -> AppShotEnvelope {
+        AppShotEnvelope {
+            appshot_id: "shot-1".into(),
+            trigger: AppShotTrigger::Observe,
+            captured_at: chrono::Utc::now(),
+            consistency: AppShotConsistency::Partial,
+            capture: AppShotCapture::Browser {
+                tab_id: "tab-1".into(),
+                url: "https://example.test/".into(),
+                title: Some("Example".into()),
+                viewport: PixelSize {
+                    width: 10,
+                    height: 10,
+                },
+                document_generation: 7,
+                semantic_snapshot: json!({"elementCount": 1, "elements": [{}]}),
+                readiness: AppShotBrowserReadiness::default(),
+                capture_outcome: AppShotBrowserCaptureOutcome {
+                    status: AppShotBrowserCaptureStatus::Partial,
+                    retryable: false,
+                    phase: None,
+                    timeout_ms: None,
+                },
+            },
+            image: capture_content_ref(capture, None, None),
+            action_snapshot: AppShotActionSnapshot {
+                snapshot_id: "actions-1".into(),
+                session_id: Some("session-1".into()),
+                subject_generation: Some(7),
+            },
+            coverage: AppShotCoverage {
+                pixels_complete: true,
+                semantics_complete: true,
+                secure_regions_redacted: false,
+                projection_truncated: false,
+                total_semantic_nodes: Some(1),
+                projected_semantic_nodes: Some(1),
+            },
+            capability_profile_id: "browser-v1".into(),
+            diagnostics: Vec::new(),
+        }
+    }
 
     #[test]
     fn stable_generation_is_accepted() {
@@ -1338,8 +1873,145 @@ mod appshot_capture_tests {
     }
 
     #[test]
+    fn browser_artifact_rejects_empty_bytes() {
+        let error = persist_browser_appshot_artifact(b"", "image/png").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
     fn image_attachment_is_omitted_for_text_only_capture() {
         assert!(attachment_data(b"pixels", false).is_empty());
         assert_eq!(attachment_data(b"pixels", true), "cGl4ZWxz");
+    }
+
+    #[test]
+    fn adaptive_capture_budget_scales_and_clamps_requested_work() {
+        assert_eq!(
+            adaptive_capture_timeout_ms(Some(4_000), Some(0), Some(200), true),
+            7_250
+        );
+        assert_eq!(
+            adaptive_capture_timeout_ms(Some(20_000), Some(4_900), Some(5_000), true),
+            15_000
+        );
+        assert_eq!(
+            adaptive_capture_timeout_ms(Some(20_000), Some(usize::MAX), Some(usize::MAX), true),
+            15_000
+        );
+    }
+
+    #[test]
+    fn wrapped_cdp_timeout_is_retryable_but_attach_failure_is_not() {
+        let deadline = TokioInstant::now() + Duration::from_secs(1);
+        assert!(is_capture_deadline(
+            &DiagnosticEntry {
+                code: "BrowserBridgeRequestFailed".into(),
+                message: "Timed out after 1ms waiting for CDP command Runtime.evaluate.".into(),
+                details: None,
+            },
+            deadline,
+        ));
+        assert!(!is_capture_deadline(
+            &DiagnosticEntry {
+                code: "BrowserBridgeRequestFailed".into(),
+                message: "The browser debugger is unattached.".into(),
+                details: None,
+            },
+            deadline,
+        ));
+    }
+
+    #[test]
+    fn retry_deadline_returns_matching_first_attempt_envelope_and_pixels() {
+        let first = prepared_capture(b"first-attempt");
+        let second = prepared_capture(b"second-attempt");
+        let mut progress = CaptureProgress::new("tab-1".into(), true, None);
+        progress.phase = Some("fence".into());
+        progress.last_envelope = Some(browser_envelope(&first));
+        progress.last_screenshot = Some(first.clone());
+        progress.screenshot = Some(second);
+
+        let response = progress_response(
+            progress,
+            TokioInstant::now() + Duration::from_secs(1),
+            1_000,
+            deadline_diagnostic("fence", 1_000),
+            true,
+        );
+
+        assert_eq!(
+            response.image_data_base64,
+            base64::engine::general_purpose::STANDARD.encode(b"first-attempt")
+        );
+        assert_eq!(response.appshot.image.sha256, first.sha256);
+    }
+
+    #[test]
+    fn content_ref_claims_private_artifact_only_when_one_exists() {
+        let capture = prepared_capture(b"pixels");
+        let fallback = capture_content_ref(&capture, None, Some(123));
+        assert_eq!(fallback.source, ContentSource::Screenshot);
+        assert_eq!(fallback.expires_at_ms, None);
+
+        let artifact = persist_browser_appshot_artifact(b"pixels", "image/png").unwrap();
+        let private = capture_content_ref(&capture, Some(&artifact), Some(123));
+        assert_eq!(private.source, ContentSource::HostPrivateArtifact);
+        assert_eq!(private.expires_at_ms, Some(123));
+        assert_eq!(
+            private.filename.as_deref(),
+            artifact.file_name().and_then(|name| name.to_str())
+        );
+        let _ = std::fs::remove_file(artifact);
+    }
+
+    #[test]
+    fn deadline_progress_preserves_metadata_and_is_retryable() {
+        let mut progress = CaptureProgress::new("tab-1".into(), false, None);
+        progress.phase = Some("semantics".into());
+        progress.metadata = Some(serde_json::json!({
+            "title": "Loading",
+            "url": "https://example.test/messages",
+            "documentGeneration": "doc-1",
+            "readyState": "interactive",
+            "bodyPresent": true,
+            "paintObserved": true,
+            "viewport": {"width": 1400, "height": 885}
+        }));
+        let response = progress_response(
+            progress,
+            TokioInstant::now() + Duration::from_secs(1),
+            1_000,
+            deadline_diagnostic("semantics", 1_000),
+            true,
+        );
+        let AppShotCapture::Browser {
+            url,
+            viewport,
+            document_generation,
+            readiness,
+            capture_outcome,
+            ..
+        } = response.appshot.capture
+        else {
+            panic!("expected browser AppShot");
+        };
+        assert_eq!(url, "https://example.test/messages");
+        assert_eq!(viewport.width, 1400);
+        assert_eq!(viewport.height, 885);
+        assert_ne!(document_generation, 0);
+        assert_eq!(readiness.state, AppShotBrowserReadinessState::Ready);
+        assert_eq!(
+            capture_outcome.status,
+            AppShotBrowserCaptureStatus::DeadlineExceeded
+        );
+        assert!(capture_outcome.retryable);
+        assert_eq!(capture_outcome.phase.as_deref(), Some("semantics"));
+        assert!(
+            response
+                .appshot
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "BrowserCaptureDeadlineExceeded")
+        );
     }
 }

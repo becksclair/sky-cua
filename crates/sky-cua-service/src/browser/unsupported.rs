@@ -72,6 +72,7 @@ pub(crate) fn browser_session_lingering() -> bool {
 pub(crate) async fn list_tabs(target: Option<BrowserTargetKind>) -> BrowserListTabsResponse {
     BrowserListTabsResponse {
         target: Some(target.unwrap_or(BrowserTargetKind::UserChrome)),
+        total: 0,
         tabs: Vec::new(),
         diagnostics: vec![browser_bridge_unsupported_diagnostic()],
     }

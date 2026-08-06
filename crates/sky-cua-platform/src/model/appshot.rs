@@ -34,6 +34,62 @@ pub enum AppShotConsistency {
     Partial,
 }
 
+/// Readiness reported by a browser page while an AppShot is being captured.
+/// `Unknown` is the compatibility default for older AppShots.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AppShotBrowserReadinessState {
+    Ready,
+    Loading,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AppShotBrowserReadiness {
+    #[serde(default)]
+    pub state: AppShotBrowserReadinessState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_ready_state: Option<String>,
+}
+
+/// Result of the browser capture pipeline, independent of the older
+/// `AppShotConsistency` field (which describes mutation during capture).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AppShotBrowserCaptureStatus {
+    /// The producer predates structured browser capture outcomes or did not
+    /// report one. Callers must not infer success from absence of evidence.
+    #[default]
+    Unknown,
+    Complete,
+    Partial,
+    DeadlineExceeded,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AppShotBrowserCaptureOutcome {
+    #[serde(default)]
+    pub status: AppShotBrowserCaptureStatus,
+    #[serde(default)]
+    pub retryable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+impl Default for AppShotBrowserCaptureOutcome {
+    fn default() -> Self {
+        Self {
+            status: AppShotBrowserCaptureStatus::Unknown,
+            retryable: false,
+            phase: None,
+            timeout_ms: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "surface", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AppShotCapture {
@@ -53,6 +109,10 @@ pub enum AppShotCapture {
         viewport: PixelSize,
         document_generation: u64,
         semantic_snapshot: serde_json::Value,
+        #[serde(default)]
+        readiness: AppShotBrowserReadiness,
+        #[serde(default)]
+        capture_outcome: AppShotBrowserCaptureOutcome,
     },
     Phone {
         device_id: String,
@@ -208,5 +268,60 @@ mod tests {
             "tab_id": "foreign-browser-tab"
         });
         assert!(serde_json::from_value::<AppShotCapture>(value).is_err());
+    }
+
+    #[test]
+    fn browser_appshot_defaults_new_fields_for_old_payloads() {
+        let value = serde_json::json!({
+            "surface": "browser",
+            "tab_id": "tab-1",
+            "url": "https://example.test/",
+            "viewport": {"width": 800, "height": 600},
+            "document_generation": 7,
+            "semantic_snapshot": {"elements": []}
+        });
+        let decoded: AppShotCapture = serde_json::from_value(value).expect("legacy payload");
+        let AppShotCapture::Browser {
+            readiness,
+            capture_outcome,
+            ..
+        } = decoded
+        else {
+            panic!("expected browser capture");
+        };
+        assert_eq!(readiness.state, AppShotBrowserReadinessState::Unknown);
+        assert_eq!(capture_outcome.status, AppShotBrowserCaptureStatus::Unknown);
+        assert!(!capture_outcome.retryable);
+    }
+
+    #[test]
+    fn browser_appshot_serializes_structured_readiness_and_outcome() {
+        let capture = AppShotCapture::Browser {
+            tab_id: "tab-1".into(),
+            url: "https://example.test/".into(),
+            title: None,
+            viewport: PixelSize {
+                width: 800,
+                height: 600,
+            },
+            document_generation: 7,
+            semantic_snapshot: serde_json::json!({"elements": []}),
+            readiness: AppShotBrowserReadiness {
+                state: AppShotBrowserReadinessState::Loading,
+                raw_ready_state: Some("interactive".into()),
+            },
+            capture_outcome: AppShotBrowserCaptureOutcome {
+                status: AppShotBrowserCaptureStatus::DeadlineExceeded,
+                retryable: true,
+                phase: Some("semantic_snapshot".into()),
+                timeout_ms: Some(5000),
+            },
+        };
+        let value = serde_json::to_value(capture).expect("serialize browser capture");
+        assert_eq!(value["readiness"]["state"], "loading");
+        assert_eq!(value["readiness"]["raw_ready_state"], "interactive");
+        assert_eq!(value["capture_outcome"]["status"], "deadline_exceeded");
+        assert_eq!(value["capture_outcome"]["retryable"], true);
+        assert_eq!(value["capture_outcome"]["timeout_ms"], 5000);
     }
 }
