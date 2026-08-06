@@ -552,6 +552,7 @@ def test_stage_bundle_preserves_existing_other_platform_binaries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
     bundle_root = tmp_path / "dist" / "plugin" / "sky-cua"
     current_binaries = runtime_binary_names()
     current_runtime_paths = [
@@ -641,6 +642,7 @@ def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
     bundle_root = tmp_path / "dist" / "plugin" / "sky-cua"
     current_binaries = runtime_binary_names()
     current_runtime_paths = [
@@ -1172,6 +1174,7 @@ def test_version_from_tag_updates_plugin_manifest(tmp_path: Path) -> None:
 def test_build_release_binaries_retries_windows_sccache_shim_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
     calls: list[dict[str, str] | None] = []
     stamps: list[Path] = []
 
