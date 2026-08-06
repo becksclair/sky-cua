@@ -297,6 +297,7 @@ def build_payload(
     output_root: Path,
     *,
     create_archive: bool,
+    portable_x86_64_v3: bool,
     runner: Callable[[Sequence[str]], None] = _run,
 ) -> tuple[Path, Path | None]:
     """Own every generated input, assemble one payload, and optionally archive it."""
@@ -331,14 +332,15 @@ def build_payload(
             "--json",
         )
     )
-    runner(
-        (
-            sys.executable,
-            str(REPO_ROOT / "scripts/build_plugin.py"),
-            "--dist-root",
-            str(core),
-        )
-    )
+    build_plugin_command = [
+        sys.executable,
+        str(REPO_ROOT / "scripts/build_plugin.py"),
+        "--dist-root",
+        str(core),
+    ]
+    if portable_x86_64_v3:
+        build_plugin_command.append("--portable-x86-64-v3")
+    runner(tuple(build_plugin_command))
     payload = output_root / "standalone" / PAYLOAD_DIR_NAME
     assemble_payload(payload, core_root=core, cua_node_root=cua_node)
     archive = output_root / ARCHIVE_NAME if create_archive else None
@@ -713,7 +715,9 @@ def release_command(
 
 
 def build_command() -> int:
-    payload, archive = build_payload(REPO_ROOT / "dist", create_archive=True)
+    payload, archive = build_payload(
+        REPO_ROOT / "dist", create_archive=True, portable_x86_64_v3=True
+    )
     assert archive is not None
     print(
         json.dumps(
@@ -726,7 +730,9 @@ def build_command() -> int:
 
 def install_command() -> int:
     if _is_checkout(REPO_ROOT):
-        payload, _archive = build_payload(REPO_ROOT / "dist", create_archive=False)
+        payload, _archive = build_payload(
+            REPO_ROOT / "dist", create_archive=False, portable_x86_64_v3=False
+        )
         report = install_payload(payload)
     else:
         report = install_payload(REPO_ROOT)

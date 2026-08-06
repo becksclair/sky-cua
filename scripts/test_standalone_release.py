@@ -181,7 +181,12 @@ def test_build_owns_generated_inputs_and_emits_one_fixed_archive(
         source = cua_fixture if output_flag == "--output-root" else core_fixture
         standalone_release._copy_tree(source, output)
 
-    payload, archive = build_payload(tmp_path / "dist", create_archive=True, runner=fake_runner)
+    payload, archive = build_payload(
+        tmp_path / "dist",
+        create_archive=True,
+        portable_x86_64_v3=True,
+        runner=fake_runner,
+    )
 
     assert archive == tmp_path / "dist" / ARCHIVE_NAME
     assert archive is not None
@@ -196,6 +201,7 @@ def test_build_owns_generated_inputs_and_emits_one_fixed_archive(
         "assemble_cua_node.py",
         "build_plugin.py",
     ]
+    assert calls[-1][-1] == "--portable-x86-64-v3"
     assert (payload / "browser/browser-client.mjs").is_file()
     assert (payload / "scripts/_standalone_release_command.py").is_file()
     assert (payload / "docs/inventories/routing-inventory.json").is_file()
@@ -254,6 +260,35 @@ def test_build_owns_generated_inputs_and_emits_one_fixed_archive(
     adapter = (browser_plugin / "scripts/browser-client.mjs").read_text(encoding="utf-8")
     assert "paths?.browser_client" in adapter
     assert "setupBrowserRuntime" in adapter
+
+
+def test_local_build_payload_omits_portable_release_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    core_fixture, cua_fixture = _fixture_repo(repo)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", repo)
+
+    calls: list[tuple[str, ...]] = []
+
+    def fake_runner(command: Sequence[str]) -> None:
+        calls.append(tuple(command))
+        if command[0] == "bun" or "build_model_documentation.py" in command[1]:
+            return
+        output_flag = "--output-root" if "assemble_cua_node.py" in command[1] else "--dist-root"
+        output = Path(command[command.index(output_flag) + 1])
+        source = cua_fixture if output_flag == "--output-root" else core_fixture
+        standalone_release._copy_tree(source, output)
+
+    build_payload(
+        tmp_path / "dist",
+        create_archive=False,
+        portable_x86_64_v3=False,
+        runner=fake_runner,
+    )
+
+    assert Path(calls[-1][1]).name == "build_plugin.py"
+    assert "--portable-x86-64-v3" not in calls[-1]
 
 
 def test_install_replaces_one_tree_and_projects_stable_paths(

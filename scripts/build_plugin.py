@@ -102,6 +102,18 @@ CARGO_BUILD_COMMAND = [
 ]
 
 RELEASE_CORE_INPUT_PROVENANCE = Path("resources") / "release" / "CORE_BUILD_INPUTS.json"
+PORTABLE_X86_64_V3_TARGET_DIR_NAME = "portable-x86-64-v3"
+PORTABLE_X86_64_V3_C_FLAGS = "-march=x86-64-v3"
+PORTABLE_X86_64_V3_NATIVE_FLAG_ENV = (
+    "HOST_CFLAGS",
+    "HOST_CXXFLAGS",
+    "TARGET_CFLAGS",
+    "TARGET_CXXFLAGS",
+    "CFLAGS_x86_64-unknown-linux-gnu",
+    "CXXFLAGS_x86_64-unknown-linux-gnu",
+    "CFLAGS_x86_64_unknown_linux_gnu",
+    "CXXFLAGS_x86_64_unknown_linux_gnu",
+)
 
 
 def run_cargo_build(env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -155,11 +167,33 @@ def release_client_binary_path() -> Path:
     )
 
 
-def build_release_binaries() -> None:
+def portable_x86_64_v3_target_root() -> Path:
+    """Return an isolated portable target beneath the caller's durable Cargo root."""
+    base = cargo_target_root()
+    if base.name == PORTABLE_X86_64_V3_TARGET_DIR_NAME:
+        return base
+    return base / PORTABLE_X86_64_V3_TARGET_DIR_NAME
+
+
+def configure_portable_x86_64_v3_build() -> None:
+    """Own the deterministic portable Linux x64 build environment."""
+    if sys.platform != "linux" or current_runtime_platform() != "linux-x64":
+        raise ValueError("--portable-x86-64-v3 is only valid for Linux x64 builds")
+    os.environ["CARGO_TARGET_DIR"] = str(portable_x86_64_v3_target_root())
+    os.environ["RUSTFLAGS"] = "-Ctarget-cpu=x86-64-v3"
+    os.environ.pop("CARGO_ENCODED_RUSTFLAGS", None)
+    os.environ.pop("CARGO_BUILD_RUSTFLAGS", None)
+    for key in PORTABLE_X86_64_V3_NATIVE_FLAG_ENV:
+        os.environ.pop(key, None)
+    os.environ["CFLAGS"] = PORTABLE_X86_64_V3_C_FLAGS
+    os.environ["CXXFLAGS"] = PORTABLE_X86_64_V3_C_FLAGS
+
+
+def build_release_binaries(*, validate_portable_x86_64_v3: bool = False) -> None:
     result = run_cargo_build()
     if result.returncode == 0:
         emit_cargo_output(result)
-        if current_runtime_platform() == "linux-x64":
+        if validate_portable_x86_64_v3 and current_runtime_platform() == "linux-x64":
             validate_x86_64_v3_paths(
                 [cargo_target_root() / "release" / name for name in LINUX_X64_RUNTIME_NAMES]
             )
@@ -174,7 +208,7 @@ def build_release_binaries() -> None:
         retry = run_cargo_build(env=cargo_env_without_rustc_wrappers())
         if retry.returncode == 0:
             emit_cargo_output(retry)
-            if current_runtime_platform() == "linux-x64":
+            if validate_portable_x86_64_v3 and current_runtime_platform() == "linux-x64":
                 validate_x86_64_v3_paths(
                     [cargo_target_root() / "release" / name for name in LINUX_X64_RUNTIME_NAMES]
                 )
@@ -897,6 +931,14 @@ def main() -> int:
         help="Bundle output directory (default: dist/plugin/sky-cua).",
     )
     parser.add_argument(
+        "--portable-x86-64-v3",
+        action="store_true",
+        help=(
+            "build Linux x64 runtime binaries in an isolated x86-64-v3 target directory "
+            "and validate that no newer ISA instructions are present"
+        ),
+    )
+    parser.add_argument(
         "--release-core-commit",
         help=(
             "build an isolated complete-release core from exactly this clean Git commit, "
@@ -930,7 +972,9 @@ def main() -> int:
         if args.dist_root.exists() or args.dist_root.is_symlink():
             raise ValueError("release core output must be an isolated nonexistent path")
 
-    build_release_binaries()
+    if args.portable_x86_64_v3:
+        configure_portable_x86_64_v3_build()
+    build_release_binaries(validate_portable_x86_64_v3=args.portable_x86_64_v3)
     args.dist_root.parent.mkdir(parents=True, exist_ok=True)
     stage_bundle(args.dist_root, release_core_commit=args.release_core_commit)
     print(args.dist_root)

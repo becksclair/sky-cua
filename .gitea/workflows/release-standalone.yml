@@ -10,7 +10,7 @@ on:
         required: true
 jobs:
   release:
-    runs-on: asgard-build-1
+    runs-on: saga-sky-cua-build
     env:
       TAG: ${{ inputs.tag || gitea.ref_name }}
       ARCHIVE: dist/sky-cua-linux-x64-glibc.tar.gz
@@ -67,9 +67,7 @@ jobs:
         run: |
           git diff --exit-code
           git diff --cached --exit-code
-          env -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_RUSTFLAGS \
-            RUSTFLAGS=-Ctarget-cpu=x86-64-v3 \
-            python3 install.py build
+          python3 install.py build
           git diff --exit-code
           git diff --cached --exit-code
           test -f "$ARCHIVE"

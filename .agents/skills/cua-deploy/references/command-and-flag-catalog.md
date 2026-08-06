@@ -16,14 +16,11 @@ The standalone installer exposes no deployment flags or other subcommands.
 Never add release IDs, manifest hashes, generation-store paths, activation
 verification, rollback, staging, host-selector, or marketplace-selector options.
 
-When a global Cargo configuration sets `target-cpu=native` and the target CPU
-cannot run those instructions, a build may use an explicit portable override:
-
-```bash
-RUSTFLAGS=-Ctarget-cpu=x86-64-v3 python3 install.py build
-```
-
-This is a machine-specific build input, not a required install argument.
+`python3 install.py build` owns the portable Linux x64 build profile. It uses an
+isolated Cargo target directory and pins the runtime build to `x86-64-v3`, so
+callers must not supply a machine-specific `RUSTFLAGS` override. Checkout-local
+`python3 install.py install` remains a local build and may use the host's normal
+Cargo configuration.
 
 Validate the Hermes target with `hermes mcp test sky_cua`,
 `hermes mcp test node_repl`, and `python3 scripts/live_hermes_mcp_smoke.py`.

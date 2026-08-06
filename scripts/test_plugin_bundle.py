@@ -1214,6 +1214,98 @@ def test_build_release_binaries_retries_windows_sccache_shim_failure(
     assert stamps == [build_plugin.REPO_ROOT / "target" / "release" / "sky-cua-client.exe"]
 
 
+def test_portable_build_mode_owns_cpu_target_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(build_plugin.sys, "platform", "linux")
+    monkeypatch.setattr(build_plugin, "current_runtime_platform", lambda: "linux-x64")
+    monkeypatch.setenv("CARGO_TARGET_DIR", "/tmp/foreign-target")
+    monkeypatch.setenv("RUSTFLAGS", "-Ctarget-cpu=native")
+    monkeypatch.setenv("CARGO_ENCODED_RUSTFLAGS", "encoded")
+    monkeypatch.setenv("CARGO_BUILD_RUSTFLAGS", "build-flags")
+    monkeypatch.setenv("CFLAGS", "-march=native")
+    monkeypatch.setenv("CXXFLAGS", "-march=native")
+    for key in build_plugin.PORTABLE_X86_64_V3_NATIVE_FLAG_ENV:
+        monkeypatch.setenv(key, "-march=skylake-avx512")
+
+    build_plugin.configure_portable_x86_64_v3_build()
+
+    assert Path(build_plugin.os.environ["CARGO_TARGET_DIR"]) == (
+        Path("/tmp/foreign-target") / "portable-x86-64-v3"
+    )
+    assert build_plugin.os.environ["RUSTFLAGS"] == "-Ctarget-cpu=x86-64-v3"
+    assert "CARGO_ENCODED_RUSTFLAGS" not in build_plugin.os.environ
+    assert "CARGO_BUILD_RUSTFLAGS" not in build_plugin.os.environ
+    assert build_plugin.os.environ["CFLAGS"] == "-march=x86-64-v3"
+    assert build_plugin.os.environ["CXXFLAGS"] == "-march=x86-64-v3"
+    for key in build_plugin.PORTABLE_X86_64_V3_NATIVE_FLAG_ENV:
+        assert key not in build_plugin.os.environ
+
+
+def test_portable_build_mode_rejects_non_linux_x64_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(build_plugin.sys, "platform", "darwin")
+    monkeypatch.setattr(build_plugin, "current_runtime_platform", lambda: "linux-x64")
+
+    with pytest.raises(ValueError, match="only valid for Linux x64"):
+        build_plugin.configure_portable_x86_64_v3_build()
+
+
+def test_local_runtime_build_skips_portable_validator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validations: list[tuple[Path, ...]] = []
+    monkeypatch.setattr(build_plugin, "current_runtime_platform", lambda: "linux-x64")
+    monkeypatch.setattr(
+        build_plugin,
+        "run_cargo_build",
+        lambda env=None: subprocess.CompletedProcess(build_plugin.CARGO_BUILD_COMMAND, 0, "", ""),
+    )
+    monkeypatch.setattr(
+        build_plugin,
+        "validate_x86_64_v3_paths",
+        lambda paths: validations.append(tuple(paths)),
+    )
+    monkeypatch.setattr(build_plugin, "write_build_stamp", lambda _path: None)
+
+    build_plugin.build_release_binaries()
+
+    assert validations == []
+
+
+def test_portable_runtime_build_validates_exact_isolated_binaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "portable-target"
+    validations: list[tuple[Path, ...]] = []
+    monkeypatch.setattr(build_plugin.sys, "platform", "linux")
+    monkeypatch.setattr(build_plugin, "current_runtime_platform", lambda: "linux-x64")
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(target))
+    build_plugin.configure_portable_x86_64_v3_build()
+    monkeypatch.setattr(
+        build_plugin,
+        "run_cargo_build",
+        lambda env=None: subprocess.CompletedProcess(build_plugin.CARGO_BUILD_COMMAND, 0, "", ""),
+    )
+    monkeypatch.setattr(
+        build_plugin,
+        "validate_x86_64_v3_paths",
+        lambda paths: validations.append(tuple(paths)),
+    )
+    monkeypatch.setattr(build_plugin, "write_build_stamp", lambda _path: None)
+
+    build_plugin.build_release_binaries(validate_portable_x86_64_v3=True)
+
+    assert validations == [
+        tuple(
+            target / "portable-x86-64-v3" / "release" / name
+            for name in portable_elf.LINUX_X64_RUNTIME_NAMES
+        )
+    ]
+
+
 def test_portable_elf_rejects_gfni(tmp_path: Path) -> None:
     path = tmp_path / "runtime"
     header = bytearray(64)

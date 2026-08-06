@@ -37,9 +37,9 @@ the Gitea-to-Saga pipeline after pushing its commit and tag.
   the canonical durable build outputs.
 - Installation validates the artifact, replaces the fixed tree directly, and
   projects integrations. Do not add backup or power-loss machinery.
-- Build portability overrides such as `RUSTFLAGS=-Ctarget-cpu=x86-64-v3` are
-  allowed when a machine-wide Cargo configuration selects unsupported native
-  CPU instructions. Do not make them part of the artifact contract.
+- `python3 install.py build` owns its portable Linux x64 profile and must not
+  rely on caller-supplied CPU `RUSTFLAGS`. Checkout-local `install` may use the
+  host's normal Cargo configuration, including native CPU tuning.
 - Deploy/build/install/restart do not authorize `git commit` or `git push`.
   Each Git action requires explicit wording. Preserve unrelated work.
 

@@ -7,7 +7,7 @@ on:
 
 jobs:
   rust:
-    runs-on: asgard-build-1
+    runs-on: saga-sky-cua-build
     steps:
       - uses: actions/checkout@v4
         with:
@@ -17,7 +17,7 @@ jobs:
         run: just verify-rust
 
   python:
-    runs-on: asgard-build-1
+    runs-on: saga-sky-cua-build
     steps:
       - uses: actions/checkout@v4
         with:

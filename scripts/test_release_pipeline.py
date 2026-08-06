@@ -402,6 +402,7 @@ def test_dispatch_uses_reviewed_main_workflow_definition() -> None:
 
 def test_release_workflow_publishes_tags_and_keeps_manual_retry() -> None:
     release_workflow = (REPO_ROOT / ".gitea/workflows/release-standalone.yml").read_text()
+    verify_workflow = (REPO_ROOT / ".gitea/workflows/verify.yml").read_text()
     deploy_workflow = (REPO_ROOT / ".gitea/workflows/deploy-saga.yml").read_text()
 
     assert "workflow_dispatch:" in release_workflow
@@ -409,8 +410,12 @@ def test_release_workflow_publishes_tags_and_keeps_manual_retry() -> None:
     assert "tags:" in release_workflow
     assert "- standalone-v*" in release_workflow
     assert "${{ inputs.tag || gitea.ref_name }}" in release_workflow
-    assert "env -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_RUSTFLAGS" in release_workflow
-    assert "RUSTFLAGS=-Ctarget-cpu=x86-64-v3" in release_workflow
+    assert "runs-on: saga-sky-cua-build" in release_workflow
+    assert verify_workflow.count("runs-on: saga-sky-cua-build") == 2
+    assert "runs-on: asgard-build-1" not in verify_workflow
+    assert "python3 install.py build" in release_workflow
+    assert "RUSTFLAGS=-Ctarget-cpu=x86-64-v3" not in release_workflow
+    assert "CARGO_ENCODED_RUSTFLAGS" not in release_workflow
     assert "ssh -o BatchMode=yes saga" in deploy_workflow
     assert not (REPO_ROOT / ".github/workflows/verify.yml").exists()
 
