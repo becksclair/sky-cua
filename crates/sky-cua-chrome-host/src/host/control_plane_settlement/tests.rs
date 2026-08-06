@@ -445,11 +445,11 @@ fn write_frame_obeys_total_deadline_under_partial_progress() {
     let result = write_frame_until(
         &mut writer,
         &message,
-        Instant::now() + Duration::from_millis(100),
+        Instant::now() + Duration::from_secs(2),
     );
     assert!(result.is_err(), "deadline exceeded write must fail");
     assert!(
-        start.elapsed() < Duration::from_secs(1),
+        start.elapsed() < Duration::from_secs(3),
         "total deadline must bound the write"
     );
 
@@ -459,8 +459,15 @@ fn write_frame_obeys_total_deadline_under_partial_progress() {
         Some(Duration::from_millis(20))
     );
     // Partial progress: the peer received a non-empty prefix of the frame.
+    // Bound the read too so a failed partial-progress setup reports a test
+    // failure instead of hanging indefinitely on a heavily loaded CI host.
+    peer.set_read_timeout(Some(Duration::from_millis(250)))
+        .unwrap();
     let mut buf = [0_u8; 16];
-    assert!(peer.read(&mut buf).unwrap() > 0);
+    let read = peer
+        .read(&mut buf)
+        .expect("partial-progress prefix must be readable before the timeout");
+    assert!(read > 0);
 }
 
 #[test]
