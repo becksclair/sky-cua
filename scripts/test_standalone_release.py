@@ -42,6 +42,28 @@ def test_bundled_codex_mcp_servers_are_preapproved() -> None:
         assert config["mcpServers"][server_name]["default_tools_approval_mode"] == "approve"
 
 
+def test_bundled_computer_use_forwards_canonical_environment_allowlist() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    canonical = json.loads((repo_root / ".mcp.json").read_text(encoding="utf-8"))
+    compat = json.loads(
+        (
+            repo_root
+            / "resources/codex-compat/openai-bundled/plugins/computer-use/.mcp.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    canonical_env_vars = canonical["mcpServers"]["computer-use"]["env_vars"]
+    compat_env_vars = compat["mcpServers"]["computer-use"]["env_vars"]
+    assert compat_env_vars == canonical_env_vars
+    assert "DESKTOP_SESSION" in compat_env_vars
+    assert "DISPLAY" in compat_env_vars
+    assert "WAYLAND_DISPLAY" in compat_env_vars
+    assert "DBUS_SESSION_BUS_ADDRESS" in compat_env_vars
+    assert "XDG_CURRENT_DESKTOP" in compat_env_vars
+    assert "XDG_RUNTIME_DIR" in compat_env_vars
+    assert "XDG_SESSION_TYPE" in compat_env_vars
+
+
 def _fixture_repo(root: Path) -> tuple[Path, Path]:
     for relative in (
         "packages/browser-use/build/browser-client.mjs",

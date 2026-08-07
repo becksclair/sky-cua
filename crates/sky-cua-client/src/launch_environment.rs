@@ -328,16 +328,7 @@ fn graphical_session_environment() -> Option<HashMap<String, String>> {
     if let Some(systemd_env) = systemd_user_environment() {
         fill_missing_selected_session_systemd_environment(&mut environment, systemd_env);
     }
-    if let Some(session_type) = session.session_type.filter(|value| !value.is_empty()) {
-        environment.insert("XDG_SESSION_TYPE".to_string(), session_type);
-    }
-    if let Some(desktop) = session.desktop.filter(|value| !value.is_empty()) {
-        insert_if_missing_or_empty(&mut environment, "XDG_CURRENT_DESKTOP", desktop.clone());
-        insert_if_missing_or_empty(&mut environment, "DESKTOP_SESSION", desktop);
-    }
-    if let Some(display) = session.display.filter(|value| !value.is_empty()) {
-        insert_if_missing_or_empty(&mut environment, "DISPLAY", display);
-    }
+    apply_logind_session_metadata(&mut environment, &session);
     if environment.is_empty() {
         None
     } else {
@@ -405,6 +396,30 @@ fn local_x11_display_number(display: &str) -> Option<&str> {
     let number = value.split('.').next()?;
     (!number.is_empty() && number.chars().all(|character| character.is_ascii_digit()))
         .then_some(number)
+}
+
+fn apply_logind_session_metadata(
+    environment: &mut HashMap<String, String>,
+    session: &LogindSession,
+) {
+    if let Some(session_type) = session
+        .session_type
+        .as_ref()
+        .filter(|value| !value.is_empty())
+    {
+        environment.insert("XDG_SESSION_TYPE".to_string(), session_type.clone());
+    }
+    if let Some(desktop) = session.desktop.as_ref().filter(|value| !value.is_empty()) {
+        // logind's Desktop field names the desktop environment (for example
+        // "KDE"), which is valid XDG_CURRENT_DESKTOP data but is not the
+        // display manager's DESKTOP_SESSION value (for Plasma that is commonly
+        // "plasma"). Inventing DESKTOP_SESSION from Desktop makes detached MCP
+        // clients reject an otherwise healthy shared daemon.
+        insert_if_missing_or_empty(environment, "XDG_CURRENT_DESKTOP", desktop.clone());
+    }
+    if let Some(display) = session.display.as_ref().filter(|value| !value.is_empty()) {
+        insert_if_missing_or_empty(environment, "DISPLAY", display.clone());
+    }
 }
 
 fn insert_if_missing_or_empty(environment: &mut HashMap<String, String>, key: &str, value: String) {
@@ -1451,6 +1466,35 @@ mod tests {
         assert_eq!(graphical.session_type.as_deref(), Some("wayland"));
         assert_eq!(graphical.desktop.as_deref(), Some("KDE"));
         assert_eq!(graphical.leader, Some(26330));
+    }
+
+    #[test]
+    fn logind_desktop_metadata_does_not_invent_desktop_session() {
+        let session = parse_logind_session_properties(
+            "5",
+            "Id=5\nUser=1000\nRemote=no\nClass=user\nType=wayland\nDesktop=KDE\nDisplay=:0\nActive=yes\nState=active\n",
+        );
+        let mut environment = HashMap::new();
+
+        apply_logind_session_metadata(&mut environment, &session);
+
+        assert_eq!(
+            environment.get("XDG_CURRENT_DESKTOP").map(String::as_str),
+            Some("KDE")
+        );
+        assert_eq!(
+            environment.get("XDG_SESSION_TYPE").map(String::as_str),
+            Some("wayland")
+        );
+        assert_eq!(environment.get("DISPLAY").map(String::as_str), Some(":0"));
+        assert!(!environment.contains_key("DESKTOP_SESSION"));
+
+        environment.insert("DESKTOP_SESSION".to_string(), "plasma".to_string());
+        apply_logind_session_metadata(&mut environment, &session);
+        assert_eq!(
+            environment.get("DESKTOP_SESSION").map(String::as_str),
+            Some("plasma")
+        );
     }
 
     #[test]
