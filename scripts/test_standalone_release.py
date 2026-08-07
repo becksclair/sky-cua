@@ -28,6 +28,23 @@ def _write(path: Path, content: str = "fixture\n", *, executable: bool = False) 
         path.chmod(0o755)
 
 
+def test_standalone_durable_surface_policy_selects_skills(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    config = home / ".config/sky-cua/sky-cua.toml"
+    _write(
+        config,
+        "[surfaces]\ndesktop = true\nbrowser = false\nphone = true\n\n[phone]\nenabled = false\n",
+    )
+    assert standalone_release._durable_skill_names(
+        home,
+        {"HOME": str(home), "SKY_CUA_SURFACES": "browser"},
+    ) == ("computer-use",)
+
+    _write(config, "[surfaces]\nbrowesr = false\n")
+    with pytest.raises(ValueError, match="browesr"):
+        standalone_release._durable_skill_names(home, {"HOME": str(home)})
+
+
 def test_bundled_codex_mcp_servers_are_preapproved() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     for plugin_name, server_name in (("computer-use", "computer-use"), ("browser", "node_repl")):
@@ -168,18 +185,20 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
     return core, cua_node
 
 
-def test_computer_use_marketplace_metadata_includes_phone_capability() -> None:
+def test_computer_use_marketplace_metadata_is_surface_neutral() -> None:
     manifest_path = (
         standalone_release.REPO_ROOT
         / "resources/codex-compat/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json"
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert {"android", "phone", "mobile-automation"} <= set(manifest["keywords"])
+    assert {"computer-use", "mcp"} <= set(manifest["keywords"])
     interface = manifest["interface"]
-    assert interface["shortDescription"] == "Control desktop apps and Android devices"
-    assert "connected Android devices" in interface["longDescription"]
-    assert any("Android phone" in prompt for prompt in interface["defaultPrompt"])
+    assert interface["shortDescription"] == "Use the configured Sky CUA surfaces"
+    assert "independently projected" in interface["longDescription"]
+    joined_prompts = " ".join(interface["defaultPrompt"])
+    for permanently_advertised_surface in ("desktop app", "Android phone"):
+        assert permanently_advertised_surface not in joined_prompts
 
 
 def test_build_owns_generated_inputs_and_emits_one_fixed_archive(

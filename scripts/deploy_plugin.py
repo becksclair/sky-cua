@@ -28,6 +28,7 @@ from _companion import (
     print_companion_setup_status,
 )
 from _install_shared import DEFAULT_LOCAL_INSTALL_DIR, MCP_HOST_CHOICES
+from _install_shared import enabled_skill_names as durable_enabled_skill_names
 from _kwin_effect import (
     deploy_kwin_effect,
     installed_effect_ids,
@@ -340,6 +341,7 @@ def fast_deploy(args: argparse.Namespace) -> int:
     run_browser_preflight(destination, args.codex_home)
 
     config_path = args.codex_home / "config.toml"
+    enabled_skills = durable_enabled_skill_names()
     # Compat-first: the preflight above retargets the computer-use compat plugin
     # at this local payload; the channel id stays disabled. When the bundle ships
     # no openai-bundled resources (no compat root), update_codex_config falls back
@@ -347,6 +349,7 @@ def fast_deploy(args: argparse.Namespace) -> int:
     update_codex_config(
         config_path,
         compat_enablement=compat_plugin_targets_payload(args.codex_home, destination),
+        enabled_skill_names=enabled_skills,
     )
     # Fold in the installed MCP-server refresh so a single command also updates
     # the runtime used by Claude Code and other non-Codex hosts.
@@ -399,8 +402,10 @@ def fast_deploy(args: argparse.Namespace) -> int:
     # not install it onto a phone or enable its services (a runtime step). Emit a
     # status the calling agent acts on — which devices are connected, and to ask
     # the user which to set up via phone_connect + phone_install_companion.
-    if not args.no_companion:
+    if not args.no_companion and "phone-use" in enabled_skills:
         print_companion_setup_status(companion_setup_status())
+    elif not args.no_companion:
+        print("phone surface disabled; skipping phone companion setup handoff")
     return 0
 
 

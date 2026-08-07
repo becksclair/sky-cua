@@ -70,6 +70,32 @@ def test_sync_missing_source_fails_and_leaves_destination_alone(tmp_path: Path) 
     assert Path(str(existing.readlink())) == tmp_path / "somewhere"
 
 
+def test_sync_removes_only_disabled_managed_surface_links(tmp_path: Path) -> None:
+    names = ["computer-use", "browser-use", "phone-use"]
+    source = _make_source(tmp_path, names)
+    for name in names:
+        (source / name / "SKILL.md").write_text(f"# sky-cua {name}\n", encoding="utf-8")
+    dest = tmp_path / "agents-skills"
+
+    sync_skills.sync_agents_skill_symlinks(
+        source,
+        dest,
+        names,
+        enabled_surfaces=frozenset({"desktop", "browser", "phone"}),
+    )
+    assert (dest / "browser-use").is_symlink()
+
+    sync_skills.sync_agents_skill_symlinks(
+        source,
+        dest,
+        names,
+        enabled_surfaces=frozenset({"desktop", "phone"}),
+    )
+    assert not (dest / "browser-use").exists()
+    assert (dest / "computer-use").is_symlink()
+    assert (dest / "phone-use").is_symlink()
+
+
 def test_sync_does_not_touch_unrelated_destination_entries(tmp_path: Path) -> None:
     names = ["browser-use"]
     source = _make_source(tmp_path, names)

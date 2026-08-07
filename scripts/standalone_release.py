@@ -29,7 +29,12 @@ TARGET = "linux-x64-glibc"
 PRODUCT_VERSION = "0.5.3"
 ARCHIVE_NAME = f"sky-cua-{TARGET}.tar.gz"
 PAYLOAD_DIR_NAME = f"sky-cua-{TARGET}"
-SKILL_NAMES = ("computer-use", "browser-use", "phone-use")
+SURFACE_SKILL_MAP = {
+    "desktop": "computer-use",
+    "browser": "browser-use",
+    "phone": "phone-use",
+}
+SKILL_NAMES = tuple(SURFACE_SKILL_MAP.values())
 PLUGIN_NAMES = ("computer-use", "browser")
 LAUNCHER_NAMES = (
     "sky-cua-client",
@@ -409,19 +414,80 @@ def _install_native_manifests(home: Path, launcher: Path) -> tuple[Path, ...]:
     return tuple(paths)
 
 
-def _project_skills(install_root: Path, home: Path) -> tuple[Path, ...]:
+def _durable_skill_names(home: Path, env: Mapping[str, str]) -> tuple[str, ...]:
+    explicit = env.get("SKY_CUA_CONFIG_PATH")
+    if explicit is not None:
+        config_path = Path(explicit) if explicit else None
+    else:
+        xdg = env.get("XDG_CONFIG_HOME")
+        config_path = (Path(xdg) if xdg else home / ".config") / "sky-cua/sky-cua.toml"
+    if config_path is None or not config_path.exists():
+        return SKILL_NAMES
+    try:
+        parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise ValueError(
+            f"cannot read durable sky-cua surface policy from {config_path}: {error}"
+        ) from error
+    surfaces = parsed.get("surfaces", {})
+    if not isinstance(surfaces, dict):
+        raise ValueError(f"[surfaces] must be a TOML table in {config_path}")
+    unknown_surfaces = set(surfaces) - set(SURFACE_SKILL_MAP)
+    if unknown_surfaces:
+        raise ValueError(
+            f"unknown [surfaces] key(s) in {config_path}: {', '.join(sorted(unknown_surfaces))}"
+        )
+    enabled = set(SURFACE_SKILL_MAP)
+    for surface in SURFACE_SKILL_MAP:
+        value = surfaces.get(surface, True)
+        if not isinstance(value, bool):
+            raise ValueError(f"[surfaces].{surface} must be boolean in {config_path}")
+        if not value:
+            enabled.discard(surface)
+    phone = parsed.get("phone", {})
+    if phone is not None and not isinstance(phone, dict):
+        raise ValueError(f"[phone] must be a TOML table in {config_path}")
+    if isinstance(phone, dict) and "enabled" in phone:
+        value = phone["enabled"]
+        if not isinstance(value, bool):
+            raise ValueError(f"[phone].enabled must be boolean in {config_path}")
+        if not value:
+            enabled.discard("phone")
+    return tuple(skill for surface, skill in SURFACE_SKILL_MAP.items() if surface in enabled)
+
+
+def _project_skill_roots(
+    install_root: Path,
+    roots: Sequence[Path],
+    enabled_names: tuple[str, ...],
+) -> tuple[Path, ...]:
+    projected: list[Path] = []
+    enabled = set(enabled_names)
+    for root in roots:
+        for name in SKILL_NAMES:
+            destination = root / name
+            source = install_root / "skills" / name
+            if name in enabled:
+                _replace_symlink(source, destination)
+                projected.append(destination)
+            elif destination.is_symlink() and destination.resolve(strict=False) == source.resolve(
+                strict=False
+            ):
+                destination.unlink()
+    return tuple(projected)
+
+
+def _project_skills(
+    install_root: Path,
+    home: Path,
+    enabled_names: tuple[str, ...],
+) -> tuple[Path, ...]:
     roots = [home / ".agents/skills"]
     if (home / ".codex").exists():
         roots.append(home / ".codex/skills")
     if (home / ".openclaw").exists():
         roots.append(home / ".openclaw/skills")
-    projected: list[Path] = []
-    for root in roots:
-        for name in SKILL_NAMES:
-            destination = root / name
-            _replace_symlink(install_root / "skills" / name, destination)
-            projected.append(destination)
-    return tuple(projected)
+    return _project_skill_roots(install_root, roots, enabled_names)
 
 
 def _install_codex_plugins(
@@ -631,7 +697,8 @@ def install_payload(
     manifests = _install_native_manifests(
         install_home, install_home / ".local/bin/sky-cua-chrome-host"
     )
-    skills = _project_skills(install_root, install_home)
+    durable_skill_names = _durable_skill_names(install_home, active_env)
+    skills = _project_skills(install_root, install_home, durable_skill_names)
     opencode_report = _opencode_config.install_opencode_config(
         install_root, home=install_home, env=active_env
     )
@@ -656,6 +723,14 @@ def install_payload(
                 home=install_home,
                 env=active_env,
             ).report()
+            skills = (
+                *skills,
+                *_project_skill_roots(
+                    install_root,
+                    [hermes_config.config_path.parent / "skills"],
+                    durable_skill_names,
+                ),
+            )
         plugins = _install_codex_plugins(install_root, env=active_env, which=which)
         openclaw_bin = which("openclaw")
         if openclaw_bin is not None:

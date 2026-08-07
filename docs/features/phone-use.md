@@ -259,11 +259,12 @@ and consumed by the service. Each is a no-op at its default value, so default
 behavior is unchanged.
 
 - `enabled` (default `true`; env `SKY_CUA_PHONE`): the master switch for the
-  phone-use subsystem. Phone-use is **on by default** — the `phone_*` tools are
-  always advertised and device-control dispatch is allowed without any opt-in.
-  Set `[phone] enabled = false` to turn it off; the tools then return the
-  `PhoneUseDisabled` diagnostic instead of dispatching. The config file is the
-  intended control; the `SKY_CUA_PHONE` env var is only a per-process override.
+  phone-use subsystem. Phone-use is **on by default**. Setting `[phone]
+  enabled = false` (or the process override to false) also removes the phone MCP
+  surface: `phone_*` names disappear and shared tools no longer advertise phone
+  branches. `[surfaces].phone = false` has the same model-facing effect and also
+  forces the resolved phone manager disabled. The config file is the intended
+  durable control; environment values are per-process overrides.
 - `visible_overlay` (default `true`; env `SKY_CUA_PHONE_VISIBLE_OVERLAY`):
   whether the on-phone agent overlay (edge glow, cursor, per-action gesture
   animation) is shown. When `false`, the host suppresses every companion

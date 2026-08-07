@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import re
 import shutil
@@ -11,6 +12,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import tomllib
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -95,6 +97,7 @@ DEFAULT_COMPUTER_USE_ENV_VARS = [
     "SKY_CUA_SERVICE_PATH",
     "SKY_CUA_SERVICE_TCP_ADDR",
     "SKY_CUA_SERVICE_SOCKET_PATH",
+    "SKY_CUA_SURFACES",
     "SKY_CUA_VIRTUAL_INPUT_HEIGHT",
     "SKY_CUA_VIRTUAL_INPUT_SCALE",
     "SKY_CUA_VIRTUAL_INPUT_WIDTH",
@@ -335,20 +338,20 @@ def sync_computer_use_compat_plugin(source_root: Path, codex_home: Path) -> None
     compat_manifest = {
         "name": COMPUTER_USE_PLUGIN_NAME,
         "version": compat_version,
-        "description": "Control desktop apps on Linux from Codex through sky-cua Computer Use.",
+        "description": "Expose the machine-configured Sky CUA control surfaces through one MCP runtime.",
         "author": sky_manifest.get("author", {"name": "Rebecca Clair"}),
         "homepage": sky_manifest.get("homepage", "https://github.com/becksclair/sky-cua"),
         "repository": sky_manifest.get("repository", "https://github.com/becksclair/sky-cua"),
         "license": sky_manifest.get("license", "MIT"),
-        "keywords": ["computer-use", "desktop-control", "linux", "wayland", "accessibility"],
+        "keywords": ["computer-use", "sky-cua", "mcp", "linux", "wayland"],
         "mcpServers": "./.mcp.json",
         "interface": {
             "displayName": "Computer Use",
-            "shortDescription": "Control Linux desktop apps from Codex",
+            "shortDescription": "Use the configured Sky CUA surfaces",
             "longDescription": (
-                "Linux Computer Use lets Codex inspect and control desktop apps"
-                " through the sky-cua native backend. It may use screenshots,"
-                " accessibility metadata, and input events after you allow it."
+                "Computer Use hosts the Sky CUA MCP runtime. Desktop, browser,"
+                " and phone capabilities are independently projected by machine"
+                " configuration, while diagnostics remain available."
             ),
             "developerName": "Rebecca Clair",
             "category": "Productivity",
@@ -357,8 +360,8 @@ def sync_computer_use_compat_plugin(source_root: Path, codex_home: Path) -> None
             "termsOfServiceURL": "https://openai.com/policies/row-terms-of-use/",
             "logo": "./assets/app-icon.png",
             "defaultPrompt": [
-                "Check whether Linux Computer Use is ready",
-                "List running desktop apps",
+                "Check which Sky CUA capabilities are available",
+                "Inspect the currently enabled Sky CUA surfaces",
             ],
             "brandColor": "#0F172A",
             "screenshots": [],
@@ -766,6 +769,46 @@ def upsert_toml_key(config_text: str, header: str, key: str, rendered_value: str
     return config_text[: match.start(2)] + new_body + config_text[match.end(2) :]
 
 
+def machine_config_path() -> Path | None:
+    explicit = os.environ.get("SKY_CUA_CONFIG_PATH")
+    if explicit is not None:
+        return Path(explicit) if explicit else None
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        base = Path(appdata) if appdata else None
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        home = os.environ.get("HOME")
+        base = Path(xdg) if xdg else (Path(home) / ".config" if home else None)
+    return None if base is None else base / "sky-cua" / "sky-cua.toml"
+
+
+def durable_browser_surface_enabled() -> bool:
+    """Read only durable browser policy; transient SKY_CUA_SURFACES is ignored."""
+    path = machine_config_path()
+    if path is None or not path.exists():
+        return True
+    try:
+        parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise ValueError(
+            f"cannot read durable sky-cua surface policy from {path}: {error}"
+        ) from error
+    surfaces = parsed.get("surfaces", {})
+    if not isinstance(surfaces, dict):
+        raise ValueError(f"[surfaces] must be a TOML table in {path}")
+    known_surfaces = {"desktop", "browser", "phone"}
+    unknown_surfaces = set(surfaces) - known_surfaces
+    if unknown_surfaces:
+        raise ValueError(
+            f"unknown [surfaces] key(s) in {path}: {', '.join(sorted(unknown_surfaces))}"
+        )
+    enabled = surfaces.get("browser", True)
+    if not isinstance(enabled, bool):
+        raise ValueError(f"[surfaces].browser must be boolean in {path}")
+    return enabled
+
+
 def update_codex_config(codex_home: Path) -> None:
     config_path = codex_home / "config.toml"
     try:
@@ -793,17 +836,19 @@ def update_codex_config(codex_home: Path) -> None:
         "source",
         toml_string(marketplace_root),
     )
+    browser_surface_enabled = durable_browser_surface_enabled()
+    browser_enabled = "true" if browser_surface_enabled else "false"
     config_text = upsert_toml_key(
         config_text,
         f'plugins."{CHROME_PLUGIN_NAME}@{OPENAI_BUNDLED_MARKETPLACE}"',
         "enabled",
-        "true",
+        browser_enabled,
     )
     config_text = upsert_toml_key(
         config_text,
         f'plugins."{BROWSER_USE_PLUGIN_NAME}@{OPENAI_BUNDLED_MARKETPLACE}"',
         "enabled",
-        "true",
+        browser_enabled,
     )
     # Codex Desktop detects Computer Use plugins by the built-in plugin name
     # "computer-use", so the compat plugin id is the single enabled

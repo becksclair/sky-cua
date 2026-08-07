@@ -6,9 +6,10 @@ description: "Use sky-cua browser MCP tools for page content in a claimed/open d
 # Browser Use
 
 Use browser tools only for page content in a claimed or opened desktop
-Chrome-family tab. Use `computer-use` for browser chrome or toolbars, Chrome
-internal pages, extension pages or permission UI, native file pickers, OS
-dialogs, and desktop windows. Use `phone-use` for Android or phone-browser UI.
+Chrome-family tab. Browser chrome/toolbars, Chrome internal pages, extension or
+permission UI, native file pickers, OS dialogs, and desktop windows require the
+desktop surface when it is enabled; Android or phone-browser UI requires the phone
+surface when enabled. Otherwise report that the task requires a disabled surface.
 
 ## Ownership
 

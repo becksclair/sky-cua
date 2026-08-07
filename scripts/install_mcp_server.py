@@ -448,6 +448,7 @@ def generate_mcp_config(
                     "SKY_CUA_SERVICE_PATH",
                     "SKY_CUA_SERVICE_TCP_ADDR",
                     "SKY_CUA_SERVICE_SOCKET_PATH",
+                    "SKY_CUA_SURFACES",
                     "SKY_CUA_VIRTUAL_INPUT_HEIGHT",
                     "SKY_CUA_VIRTUAL_INPUT_SCALE",
                     "SKY_CUA_VIRTUAL_INPUT_WIDTH",

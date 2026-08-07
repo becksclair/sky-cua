@@ -723,13 +723,16 @@ def test_mcp_launch_policy_rejects_invalid_recognized_env(
         install_mcp_server.resolve_mcp_launch_policy(tmp_path / "installed")
 
 
-def test_generic_mcp_config_pins_canonical_launch_policy(tmp_path: Path) -> None:
+def test_generic_mcp_config_pins_canonical_launch_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     target_dir = tmp_path / "installed"
     client_path = target_dir / "bin" / "sky-cua-client"
     policy = install_mcp_server.McpLaunchPolicy(
         browser_eval="on",
         model_supports_images="false",
     )
+    monkeypatch.setenv("SKY_CUA_SURFACES", "browser")
 
     config = install_mcp_server.generate_mcp_config(client_path, target_dir, launch_policy=policy)
     server = config["mcpServers"]["computer-use"]  # type: ignore[index]
@@ -738,6 +741,8 @@ def test_generic_mcp_config_pins_canonical_launch_policy(tmp_path: Path) -> None
     assert server["env"][install_mcp_server.MCP_BROWSER_EVAL_ENV] == "on"  # type: ignore[index]
     assert server["env"][install_mcp_server.MCP_MODEL_SUPPORTS_IMAGES_ENV] == "false"  # type: ignore[index]
     assert server["env"][install_mcp_server.MCP_PRESENCE_ENABLED_ENV] == "1"  # type: ignore[index]
+    assert "SKY_CUA_SURFACES" not in server["env"]  # type: ignore[operator]
+    assert "SKY_CUA_SURFACES" in server["env_vars"]  # type: ignore[operator]
     for name in install_mcp_server.RECOGNIZED_MCP_LAUNCH_ENV:
         assert name in server["env_vars"]  # type: ignore[operator]
 
@@ -1157,6 +1162,43 @@ def test_install_local_mcp_server_threads_claude_config_dir(
     assert received["claude_config_dir"] == config_dir
     assert received["resource_root"] == _install_shared.REPO_ROOT.resolve()
     assert isinstance(received["launch_policy"], install_mcp_server.McpLaunchPolicy)
+
+
+def test_durable_surface_policy_reconciles_installed_skills(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "sky-cua.toml"
+    monkeypatch.setenv(_install_shared.MACHINE_CONFIG_PATH_ENV, str(config_path))
+    monkeypatch.setenv("SKY_CUA_SURFACES", "browser")
+    config_path.write_text(
+        "[surfaces]\ndesktop = true\nbrowser = false\nphone = true\n",
+        encoding="utf-8",
+    )
+    assert _install_shared.durable_enabled_surfaces() == frozenset({"desktop", "phone"})
+
+    skills_dir = tmp_path / "skills"
+    unrelated = skills_dir / "my-own-skill"
+    unrelated.mkdir(parents=True)
+    (unrelated / "SKILL.md").write_text("mine", encoding="utf-8")
+    _install_shared.install_sky_cua_skills(skills_dir)
+    assert (skills_dir / "computer-use/SKILL.md").is_file()
+    assert not (skills_dir / "browser-use").exists()
+    assert (skills_dir / "phone-use/SKILL.md").is_file()
+    assert unrelated.is_dir()
+
+    config_path.write_text(
+        "[surfaces]\ndesktop = true\nbrowser = true\nphone = true\n\n[phone]\nenabled = false\n",
+        encoding="utf-8",
+    )
+    _install_shared.install_sky_cua_skills(skills_dir)
+    assert (skills_dir / "computer-use/SKILL.md").is_file()
+    assert (skills_dir / "browser-use/SKILL.md").is_file()
+    assert not (skills_dir / "phone-use").exists()
+    assert unrelated.is_dir()
+
+    config_path.write_text("[surfaces]\nbrowesr = false\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="browesr"):
+        _install_shared.durable_enabled_surfaces()
 
 
 def test_machine_config_seeding_writes_and_updates_browser(

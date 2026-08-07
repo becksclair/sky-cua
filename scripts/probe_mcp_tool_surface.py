@@ -23,23 +23,13 @@ from _plugin_bundle import DEFAULT_CODEX_HOME, installed_plugin_root
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEV_CLIENT = REPO_ROOT / "bin" / "sky-cua-client"
 
-GROUPED_TOOLS: frozenset[str] = frozenset(
+SHARED_TOOLS = frozenset({"doctor", "status", "list_resources", "observe"})
+DESKTOP_TOOLS = frozenset(
     {
-        "activate_window",
-        "browser_claim_tab",
-        "browser_input",
-        "browser_move_mouse",
-        "browser_navigate",
-        "browser_open",
-        "browser_scroll",
-        "doctor",
-        "status",
-        "list_resources",
-        "observe",
-        "capture_screen",
         "capture_desktop",
         "setup_desktop",
         "session_presence",
+        "activate_window",
         "desktop_pointer",
         "desktop_keyboard",
         "desktop_action",
@@ -48,6 +38,20 @@ GROUPED_TOOLS: frozenset[str] = frozenset(
         "desktop_semantic",
         "desktop_set_value",
         "desktop_toggle",
+    }
+)
+BROWSER_TOOLS = frozenset(
+    {
+        "browser_claim_tab",
+        "browser_input",
+        "browser_move_mouse",
+        "browser_navigate",
+        "browser_open",
+        "browser_scroll",
+    }
+)
+PHONE_TOOLS = frozenset(
+    {
         "phone_connection",
         "phone_pair_wireless",
         "phone_setup",
@@ -60,10 +64,22 @@ GROUPED_TOOLS: frozenset[str] = frozenset(
         "phone_notification_reply",
         "phone_notifications",
         "phone_accessibility_tree",
+        "phone_content",
+        "phone_clipboard",
+        "phone_editor",
+        "phone_camera",
+        "phone_storage",
     }
 )
-
 BROWSER_EVAL_TOOL = "browser_eval"
+SURFACE_NAMES = frozenset({"desktop", "browser", "phone"})
+GROUPED_TOOLS = frozenset(
+    set(SHARED_TOOLS)
+    | set(DESKTOP_TOOLS)
+    | set(BROWSER_TOOLS)
+    | set(PHONE_TOOLS)
+    | {"capture_screen"}
+)
 
 
 class ProbeFailure(Exception):
@@ -96,9 +112,19 @@ def tool_names(tools: Iterable[dict[str, Any]]) -> set[str]:
     return names
 
 
-def require_exact_grouped_tools(names: set[str]) -> None:
-    expected = set(GROUPED_TOOLS)
-    if BROWSER_EVAL_TOOL in names:
+def require_exact_grouped_tools(names: set[str], surfaces: frozenset[str] = SURFACE_NAMES) -> None:
+    expected = {"doctor"}
+    if surfaces:
+        expected.update(SHARED_TOOLS - {"doctor"})
+    if "desktop" in surfaces:
+        expected.update(DESKTOP_TOOLS)
+    if "browser" in surfaces:
+        expected.update(BROWSER_TOOLS)
+    if "phone" in surfaces:
+        expected.update(PHONE_TOOLS)
+    if surfaces.intersection({"browser", "phone"}):
+        expected.add("capture_screen")
+    if "browser" in surfaces and BROWSER_EVAL_TOOL in names:
         expected.add(BROWSER_EVAL_TOOL)
     missing = sorted(expected - names)
     extra = sorted(names - expected)
@@ -109,6 +135,54 @@ def require_exact_grouped_tools(names: set[str]) -> None:
         if extra:
             details.append(f"extra={extra!r}")
         raise ProbeFailure("tools/list does not match grouped surface: " + " ".join(details))
+
+
+def require_projected_shared_shapes(
+    tools: Iterable[dict[str, Any]], surfaces: frozenset[str]
+) -> None:
+    by_name = {
+        tool["name"]: tool
+        for tool in tools
+        if isinstance(tool, dict) and isinstance(tool.get("name"), str)
+    }
+    if not surfaces:
+        if set(by_name) != {"doctor"}:
+            raise ProbeFailure(f"all-disabled policy must advertise only doctor: {set(by_name)!r}")
+        return
+
+    expected_surfaces = [name for name in ("desktop", "browser", "phone") if name in surfaces]
+    for tool_name in ("list_resources", "observe"):
+        schema = _tool_schema(by_name, tool_name)
+        enum = _properties(schema).get("surface", {}).get("enum")
+        if enum != expected_surfaces:
+            raise ProbeFailure(
+                f"{tool_name} surface enum mismatch: expected {expected_surfaces!r}, got {enum!r}"
+            )
+
+    expected_components: list[str] = []
+    if "browser" in surfaces:
+        expected_components.append("browser")
+    if "phone" in surfaces:
+        expected_components.extend(["phone", "phone_companion"])
+    if "desktop" in surfaces:
+        expected_components.append("session_presence")
+    status_enum = _properties(_tool_schema(by_name, "status")).get("component", {}).get("enum")
+    if status_enum != expected_components:
+        raise ProbeFailure(
+            f"status component enum mismatch: expected {expected_components!r}, got {status_enum!r}"
+        )
+
+    if surfaces.intersection({"browser", "phone"}):
+        expected_capture = [name for name in ("browser", "phone") if name in surfaces]
+        capture_enum = (
+            _properties(_tool_schema(by_name, "capture_screen")).get("surface", {}).get("enum")
+        )
+        if capture_enum != expected_capture:
+            raise ProbeFailure(
+                f"capture_screen surface enum mismatch: expected {expected_capture!r}, got {capture_enum!r}"
+            )
+    elif "capture_screen" in by_name:
+        raise ProbeFailure("desktop-only surface must not advertise capture_screen")
 
 
 def require_no_top_level_composition(tools: Iterable[dict[str, Any]]) -> None:
@@ -264,8 +338,11 @@ def require_hardened_schema_shape(by_name: dict[str, dict[str, Any]]) -> None:
     if "apk_path" in install_props:
         raise ProbeFailure("phone_app_install must not expose apk_path alias")
     install_required = _tool_schema(by_name, "phone_app_install").get("required")
-    if install_required != ["session_id", "apk_paths"]:
-        raise ProbeFailure("phone_app_install must require session_id and apk_paths")
+    if install_required != ["appshot_id"]:
+        raise ProbeFailure("phone_app_install must advertise the AppShot action fence")
+    for field in ("session_id", "apk_paths"):
+        if field not in install_props:
+            raise ProbeFailure(f"phone_app_install must advertise {field}")
     if "activity" in _properties(_tool_schema(by_name, "phone_app_action")):
         raise ProbeFailure("phone_app_action must not expose activity")
 
@@ -414,11 +491,22 @@ def resolve_client(installed: bool, codex_home: Path) -> Path:
     return client
 
 
-def make_client(*, installed: bool, phone_enabled: bool, codex_home: Path) -> McpClient:
+def make_client(
+    *,
+    installed: bool,
+    phone_enabled: bool,
+    codex_home: Path,
+    surfaces: frozenset[str],
+) -> McpClient:
     env = dict(os.environ)
     env.pop("SKY_CUA_MCP_TOOL_PROFILE", None)
     env.setdefault("SKY_CUA_MODEL_SUPPORTS_IMAGES", "false")
     env["SKY_CUA_ISOLATED_DESKTOP"] = "0"
+    env["SKY_CUA_SURFACES"] = ",".join(sorted(surfaces)) if surfaces else ""
+    if not surfaces:
+        # The runtime deliberately rejects an empty env allowlist; use a tiny
+        # temporary config for the all-disabled probe instead of widening it.
+        env.pop("SKY_CUA_SURFACES")
     if phone_enabled:
         env.setdefault("SKY_CUA_PHONE", "1")
     return McpClient(
@@ -428,16 +516,29 @@ def make_client(*, installed: bool, phone_enabled: bool, codex_home: Path) -> Mc
     )
 
 
-def probe_grouped(*, installed: bool, phone_enabled: bool, codex_home: Path) -> list[ProbeStep]:
+def probe_grouped(
+    *,
+    installed: bool,
+    phone_enabled: bool,
+    codex_home: Path,
+    surfaces: frozenset[str],
+) -> list[ProbeStep]:
     steps: list[ProbeStep] = []
-    client = make_client(installed=installed, phone_enabled=phone_enabled, codex_home=codex_home)
+    client = make_client(
+        installed=installed,
+        phone_enabled=phone_enabled,
+        codex_home=codex_home,
+        surfaces=surfaces,
+    )
     try:
         client.initialize()
         tools = client.tools_list()
         names = tool_names(tools)
-        require_exact_grouped_tools(names)
+        require_exact_grouped_tools(names, surfaces)
         require_no_top_level_composition(tools)
-        require_grouped_action_shape(tools)
+        require_projected_shared_shapes(tools, surfaces)
+        if surfaces == SURFACE_NAMES:
+            require_grouped_action_shape(tools)
         steps.append(step_pass("grouped.tools_list", f"tools={len(names)}"))
 
         invalid_cases = [
@@ -455,6 +556,7 @@ def probe_grouped(*, installed: bool, phone_enabled: bool, codex_home: Path) -> 
             ),
             (14, "desktop_launch_app", {"command": "true"}),
         ]
+        invalid_cases = [case for case in invalid_cases if case[1] in names]
         for request_id, tool, arguments in invalid_cases:
             invalid = client.tools_call(request_id, tool, arguments)
             expected_code = (
@@ -464,13 +566,28 @@ def probe_grouped(*, installed: bool, phone_enabled: bool, codex_home: Path) -> 
             grouped_error_payload(invalid, tool=tool, code=expected_code, branch=expected_branch)
         steps.append(step_pass("grouped.invalid_branch", f"cases={len(invalid_cases)}"))
 
-        for request_id, tool, arguments, branch in (
-            (20, "status", {"component": "browser"}, "browser"),
-            (21, "status", {"component": "phone"}, "phone"),
-            (22, "status", {"component": "session_presence"}, "session_presence"),
-            (23, "list_resources", {"surface": "desktop", "resource": "apps"}, "desktop/apps"),
-            (24, "list_resources", {"surface": "phone", "resource": "devices"}, "phone/devices"),
-        ):
+        live_cases = [
+            (20, "status", {"component": "browser"}, "browser", "browser"),
+            (21, "status", {"component": "phone"}, "phone", "phone"),
+            (22, "status", {"component": "session_presence"}, "session_presence", "desktop"),
+            (
+                23,
+                "list_resources",
+                {"surface": "desktop", "resource": "apps"},
+                "desktop/apps",
+                "desktop",
+            ),
+            (
+                24,
+                "list_resources",
+                {"surface": "phone", "resource": "devices"},
+                "phone/devices",
+                "phone",
+            ),
+        ]
+        for request_id, tool, arguments, branch, surface in live_cases:
+            if surface not in surfaces:
+                continue
             result = client.tools_call(request_id, tool, arguments)
             grouped_payload(result, tool=tool, branch=branch)
             result_error = result.get("isError") is True
@@ -505,6 +622,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not set SKY_CUA_PHONE=1 for the probe process.",
     )
     parser.add_argument(
+        "--surfaces",
+        default="desktop,browser,phone",
+        help="Comma-separated MCP surface allowlist: desktop,browser,phone.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Emit the result as JSON instead of PASS lines.",
@@ -512,10 +634,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def parse_surfaces(value: str) -> frozenset[str]:
+    parts = frozenset(part.strip() for part in value.split(",") if part.strip())
+    unknown = parts - SURFACE_NAMES
+    if not parts or unknown:
+        raise ValueError(
+            f"--surfaces must contain one or more of desktop,browser,phone; unknown={sorted(unknown)!r}"
+        )
+    return parts
+
+
 def run(
-    *, installed: bool, phone_enabled: bool, codex_home: Path = DEFAULT_CODEX_HOME
+    *,
+    installed: bool,
+    phone_enabled: bool,
+    codex_home: Path = DEFAULT_CODEX_HOME,
+    surfaces: frozenset[str] = SURFACE_NAMES,
 ) -> list[ProbeStep]:
-    return probe_grouped(installed=installed, phone_enabled=phone_enabled, codex_home=codex_home)
+    return probe_grouped(
+        installed=installed,
+        phone_enabled=phone_enabled,
+        codex_home=codex_home,
+        surfaces=surfaces,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -524,6 +665,7 @@ def main(argv: list[str] | None = None) -> int:
         installed=bool(args.installed),
         phone_enabled=not args.no_phone,
         codex_home=args.codex_home,
+        surfaces=parse_surfaces(args.surfaces),
     )
     if args.json:
         print(json.dumps({"ok": True, "steps": [step.__dict__ for step in steps]}, indent=2))

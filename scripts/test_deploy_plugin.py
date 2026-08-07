@@ -17,6 +17,8 @@ from _plugin_bundle import (
     PLUGIN_ID,
     SHARED_AGENT_SKILL_OVERRIDES_BEGIN,
     SKY_CUA_SKILLS,
+    compat_plugin_cache_root,
+    installed_plugin_root,
     update_codex_config,
 )
 from deploy_plugin import drop_retired_channel_caches, sync_and_verify_codex_browser_client
@@ -229,6 +231,53 @@ def test_update_codex_config_disables_shared_agent_skill_copies(tmp_path: Path) 
     ]
 
 
+def test_update_codex_config_disables_plugin_skills_for_disabled_surfaces(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    skills_root = tmp_path / ".agents" / "skills"
+    config_path.write_text(
+        '[plugins."browser-use@openai-bundled"]\nenabled = true\n\n'
+        '[plugins."chrome@openai-bundled"]\nenabled = true\n',
+        encoding="utf-8",
+    )
+    update_codex_config(
+        config_path,
+        shared_agent_skills_root=skills_root,
+        enabled_skill_names=("computer-use", "phone-use"),
+    )
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["plugins"]["browser-use@openai-bundled"]["enabled"] is False
+    assert parsed["plugins"]["chrome@openai-bundled"]["enabled"] is False
+    entries = parsed["skills"]["config"]
+    disabled_paths = {entry["path"] for entry in entries if entry.get("enabled") is False}
+    assert str(installed_plugin_root(tmp_path) / "skills/browser-use/SKILL.md") in disabled_paths
+    assert (
+        str(compat_plugin_cache_root(tmp_path) / "latest/skills/browser-use/SKILL.md")
+        in disabled_paths
+    )
+    assert not any(
+        path.endswith("/skills/computer-use/SKILL.md")
+        and ("plugins/cache" in path or "plugins/cache" in path.replace("\\", "/"))
+        for path in disabled_paths
+    )
+
+    update_codex_config(
+        config_path,
+        shared_agent_skills_root=skills_root,
+        enabled_skill_names=SKY_CUA_SKILLS,
+    )
+    reparsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert reparsed["plugins"]["browser-use@openai-bundled"]["enabled"] is True
+    assert reparsed["plugins"]["chrome@openai-bundled"]["enabled"] is True
+    plugin_disabled = [
+        entry
+        for entry in reparsed["skills"]["config"]
+        if entry.get("enabled") is False and "plugins/cache" in entry.get("path", "")
+    ]
+    assert plugin_disabled == []
+
+
 def test_update_codex_config_disables_retired_channels(tmp_path: Path) -> None:
     # The single-active-computer-use invariant: update_codex_config is the
     # chokepoint every codex setup path (install_plugin, deploy_plugin, installer)
@@ -307,7 +356,7 @@ def test_drop_retired_channel_caches_noop_without_state(tmp_path: Path) -> None:
     assert not (tmp_path / "plugins").exists()
 
 
-def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
+def test_fast_deploy_offcompat_enables_local_refreshes_runtime_and_skips_disabled_phone(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -333,6 +382,11 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
     monkeypatch.setattr(deploy_plugin, "stop_unix_runtime_processes", lambda _roots: None)
     monkeypatch.setattr(deploy_plugin, "stop_windows_cache_processes", lambda _root: None)
     monkeypatch.setattr(deploy_plugin, "compat_plugin_targets_payload", lambda _home, _dest: False)
+    monkeypatch.setattr(
+        deploy_plugin,
+        "durable_enabled_skill_names",
+        lambda: ("computer-use",),
+    )
     # No KWin effect installed, so the effect step is skipped without touching DBus.
     monkeypatch.setattr(deploy_plugin, "installed_effect_ids", lambda: [])
 
@@ -363,10 +417,13 @@ def test_fast_deploy_offcompat_enables_local_and_refreshes_runtime(
         return target / "bin" / "sky-cua-client", target / "claude_code_mcp.json"
 
     monkeypatch.setattr(deploy_plugin, "install_local_mcp_server", fake_install_local)
-    # The companion device-setup handoff shells out to `adb`; stub it so the unit
-    # test stays device-free (the lane is covered by `test_companion.py`).
-    monkeypatch.setattr(deploy_plugin, "companion_setup_status", lambda: None)
-    monkeypatch.setattr(deploy_plugin, "print_companion_setup_status", lambda _status: None)
+    # Phone is durably disabled above. Any attempt to run the setup handoff is
+    # a provisioning bug, even though --no-companion was not requested.
+    monkeypatch.setattr(
+        deploy_plugin,
+        "companion_setup_status",
+        lambda: (_ for _ in ()).throw(AssertionError("disabled phone handoff ran")),
+    )
 
     args = argparse.Namespace(
         codex_home=codex_home,

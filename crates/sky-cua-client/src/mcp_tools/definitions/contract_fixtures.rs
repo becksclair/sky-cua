@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crate::mcp_server::ModelSessionInfo;
 
 use super::build_tool_registry;
-use super::fixture_tests::process_config;
+use super::fixture_tests::{process_config, process_config_with_surfaces};
 
 pub(super) fn generated_surface_matrix() -> Value {
     let mut rows = Vec::new();
@@ -35,6 +35,56 @@ pub(super) fn generated_surface_matrix() -> Value {
         "version": 1,
         "generated_by": "crates/sky-cua-client/src/mcp_tools/definitions.rs",
         "rows": rows
+    })
+}
+
+pub(super) fn generated_surface_policy_matrix() -> Value {
+    let mut rows = Vec::new();
+    for desktop in [false, true] {
+        for browser in [false, true] {
+            for phone in [false, true] {
+                let registry = build_tool_registry(
+                    &process_config_with_surfaces(desktop, browser, phone, false),
+                    &ModelSessionInfo::default(),
+                );
+                let tools = registry.tools.as_array().expect("tools");
+                let names: Vec<&str> = tools
+                    .iter()
+                    .filter_map(|tool| tool["name"].as_str())
+                    .collect();
+                let mut shared = serde_json::Map::new();
+                for name in ["status", "list_resources", "observe", "capture_screen"] {
+                    let Some(tool) = tools.iter().find(|tool| tool["name"] == name) else {
+                        continue;
+                    };
+                    let properties = tool["inputSchema"]["properties"]
+                        .as_object()
+                        .expect("properties");
+                    let property_names: Vec<&str> = properties.keys().map(String::as_str).collect();
+                    shared.insert(
+                        name.to_string(),
+                        json!({
+                            "property_names": property_names,
+                            "surface_enum": properties.get("surface").and_then(|value| value.get("enum")).cloned(),
+                            "component_enum": properties.get("component").and_then(|value| value.get("enum")).cloned(),
+                            "resource_enum": properties.get("resource").and_then(|value| value.get("enum")).cloned(),
+                        }),
+                    );
+                }
+                rows.push(json!({
+                    "desktop": desktop,
+                    "browser": browser,
+                    "phone": phone,
+                    "tool_names": names,
+                    "shared": shared,
+                }));
+            }
+        }
+    }
+    json!({
+        "version": 1,
+        "generated_by": "crates/sky-cua-client/src/mcp_tools/definitions.rs",
+        "rows": rows,
     })
 }
 

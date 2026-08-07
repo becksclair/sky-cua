@@ -1,6 +1,6 @@
 {
   "name": "sky-cua",
-  "description": "Cross-platform desktop and browser computer use: native app discovery, accessibility trees, screenshots, input actions, window targeting, and Chrome-family browser automation through MCP.",
+  "description": "Configurable cross-platform Sky CUA control runtime with independently projectable desktop, browser, and phone MCP surfaces.",
   "version": "0.1.0",
   "author": {
     "name": "Rebecca Clair",
@@ -11,8 +11,6 @@
   "license": "MIT",
   "keywords": [
     "computer-use",
-    "browser-use",
-    "desktop-control",
     "mcp",
     "linux",
     "windows",

@@ -1682,6 +1682,7 @@ mod tests {
     fn process_config(browser_eval_enabled: bool) -> McpProcessConfig {
         McpProcessConfig {
             browser_eval_enabled,
+            surfaces: sky_cua_platform::config::AgentSurfacePolicy::default(),
             model_supports_images_override: None,
             diagnostics: Vec::new(),
         }

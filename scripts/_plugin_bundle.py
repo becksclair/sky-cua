@@ -24,6 +24,7 @@ PLUGIN_ID = f"{PLUGIN_NAME}@{PLUGIN_CHANNEL}"
 # active payload is selected by retargeting the compat plugin root's .mcp.json
 # at the local cache payload (see docs/operations/plugin-release.md).
 COMPUTER_USE_COMPAT_PLUGIN_ID = "computer-use@openai-bundled"
+BROWSER_COMPAT_PLUGIN_IDS = ("browser-use@openai-bundled", "chrome@openai-bundled")
 SKY_CUA_SKILLS = ("computer-use", "browser-use", "phone-use")
 SHARED_AGENT_SKILL_OVERRIDES_BEGIN = "# BEGIN sky-cua managed shared-agent skill overrides"
 SHARED_AGENT_SKILL_OVERRIDES_END = "# END sky-cua managed shared-agent skill overrides"
@@ -677,8 +678,14 @@ def disable_retired_channels(config_text: str) -> str:
     return config_text
 
 
-def apply_shared_agent_skill_deduplication(config_text: str, skills_root: Path) -> str:
-    """Disable shared sky-cua skill copies inside Codex only.
+def apply_shared_agent_skill_deduplication(
+    config_text: str,
+    skills_root: Path,
+    *,
+    codex_home: Path | None = None,
+    enabled_skill_names: tuple[str, ...] = SKY_CUA_SKILLS,
+) -> str:
+    """Disable shared duplicates and plugin skills for disabled surfaces in Codex.
 
     sky-cua keeps canonical symlinks under ``~/.agents/skills`` so generic
     agents can discover the same skills. Codex also loads the copies bundled in
@@ -708,11 +715,44 @@ def apply_shared_agent_skill_deduplication(config_text: str, skills_root: Path) 
                 "",
             ]
         )
+
+    disabled = set(SKY_CUA_SKILLS) - set(enabled_skill_names)
+    if disabled:
+        home = (codex_home or DEFAULT_CODEX_HOME).expanduser()
+        plugin_roots = (
+            installed_plugin_root(home),
+            compat_plugin_cache_root(home) / "latest",
+        )
+        for plugin_root in plugin_roots:
+            for skill_name in SKY_CUA_SKILLS:
+                if skill_name not in disabled:
+                    continue
+                lines.extend(
+                    [
+                        "[[skills.config]]",
+                        f"path = {json.dumps(str(plugin_root / 'skills' / skill_name / 'SKILL.md'))}",
+                        "enabled = false",
+                        "",
+                    ]
+                )
     lines.append(SHARED_AGENT_SKILL_OVERRIDES_END)
     managed_block = "\n".join(lines)
     if not config_text:
         return f"{managed_block}\n"
     return f"{config_text}\n\n{managed_block}\n"
+
+
+def apply_browser_companion_enablement(config_text: str, *, enabled: bool) -> str:
+    """Project the browser surface onto already-materialized Codex browser plugins.
+
+    Chrome preflight owns creating these plugin stanzas. Do not synthesize ghost
+    plugins on hosts where preflight did not materialize them; only converge
+    existing stanzas when the sky-cua browser surface is enabled or disabled.
+    """
+    for plugin_id in BROWSER_COMPAT_PLUGIN_IDS:
+        if f'[plugins."{plugin_id}"]' in config_text:
+            config_text = set_plugin_enabled(config_text, plugin_id, enabled=enabled)
+    return config_text
 
 
 def update_codex_config(
@@ -724,6 +764,7 @@ def update_codex_config(
     plugin_enabled: bool = True,
     compat_enablement: bool = False,
     shared_agent_skills_root: Path | None = None,
+    enabled_skill_names: tuple[str, ...] = SKY_CUA_SKILLS,
 ) -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -756,8 +797,13 @@ def update_codex_config(
     # exactly one enabled computer-use plugin id, even on an in-place upgrade of a
     # box left in the old debug/Heliasar-enabled state.
     config_text = disable_retired_channels(config_text)
+    config_text = apply_browser_companion_enablement(
+        config_text, enabled="browser-use" in enabled_skill_names
+    )
     config_text = apply_shared_agent_skill_deduplication(
         config_text,
         shared_agent_skills_root or (Path.home() / ".agents" / "skills"),
+        codex_home=config_path.parent,
+        enabled_skill_names=enabled_skill_names,
     )
     config_path.write_text(config_text, encoding="utf-8")

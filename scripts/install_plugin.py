@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _install_shared import enabled_skill_names as durable_enabled_skill_names
 from _plugin_bundle import (
     DEFAULT_CODEX_HOME,
     DIST_PLUGIN_ROOT,
@@ -85,6 +86,7 @@ def main() -> int:
     update_codex_config(
         config_path,
         compat_enablement=compat_plugin_targets_payload(args.codex_home, destination),
+        enabled_skill_names=durable_enabled_skill_names(),
     )
     print(f"installed_path={destination}")
     print(f"config_path={config_path}")

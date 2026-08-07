@@ -46,16 +46,73 @@ DESKTOP_SESSION_ENV_KEYS = (
     "XAUTHORITY",
 )
 GATEWAY_AUTH_ENV_KEYS = ("OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD")
+SURFACE_SKILL_MAP = {
+    "desktop": "computer-use",
+    "browser": "browser-use",
+    "phone": "phone-use",
+}
 MODEL_SKILL_NAMES = ("browser-use", "computer-use", "phone-use")
 SKILL_PROJECTION_MARKER = "SKY_CUA_PROJECTION.json"
+SKILL_INSTALL_MARKER = ".sky-cua-managed"
 
 
-def project_model_skills(documentation_root: Path, skill_root: Path) -> tuple[Path, ...]:
-    """Materialize small host-discoverable routers to one exact documentation generation."""
+def durable_enabled_surfaces() -> frozenset[str]:
+    """Read durable machine policy only; transient runtime env never mutates skills."""
+    path = machine_config_path()
+    if path is None or not path.exists():
+        return frozenset(SURFACE_SKILL_MAP)
+    try:
+        parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise ValueError(
+            f"cannot read durable sky-cua surface policy from {path}: {error}"
+        ) from error
+
+    surfaces = parsed.get("surfaces", {})
+    if not isinstance(surfaces, dict):
+        raise ValueError(f"[surfaces] must be a TOML table in {path}")
+    unknown_surfaces = set(surfaces) - set(SURFACE_SKILL_MAP)
+    if unknown_surfaces:
+        raise ValueError(
+            f"unknown [surfaces] key(s) in {path}: {', '.join(sorted(unknown_surfaces))}"
+        )
+    enabled: set[str] = set()
+    for name in SURFACE_SKILL_MAP:
+        value = surfaces.get(name, True)
+        if not isinstance(value, bool):
+            raise ValueError(f"[surfaces].{name} must be boolean in {path}")
+        if value:
+            enabled.add(name)
+
+    phone = parsed.get("phone", {})
+    if phone is not None and not isinstance(phone, dict):
+        raise ValueError(f"[phone] must be a TOML table in {path}")
+    if isinstance(phone, dict) and "enabled" in phone:
+        phone_enabled = phone["enabled"]
+        if not isinstance(phone_enabled, bool):
+            raise ValueError(f"[phone].enabled must be boolean in {path}")
+        if not phone_enabled:
+            enabled.discard("phone")
+    return frozenset(enabled)
+
+
+def enabled_skill_names(enabled_surfaces: frozenset[str] | None = None) -> tuple[str, ...]:
+    surfaces = durable_enabled_surfaces() if enabled_surfaces is None else enabled_surfaces
+    enabled = {skill for surface, skill in SURFACE_SKILL_MAP.items() if surface in surfaces}
+    return tuple(name for name in MODEL_SKILL_NAMES if name in enabled)
+
+
+def project_model_skills(
+    documentation_root: Path,
+    skill_root: Path,
+    enabled_surfaces: frozenset[str] | None = None,
+) -> tuple[Path, ...]:
+    """Materialize only enabled host-discoverable routers to one documentation generation."""
     documentation_root = documentation_root.resolve(strict=True)
     skill_root.mkdir(parents=True, exist_ok=True)
-    destinations = tuple(skill_root / name for name in MODEL_SKILL_NAMES)
-    for name, destination in zip(MODEL_SKILL_NAMES, destinations, strict=True):
+    selected_names = enabled_skill_names(enabled_surfaces)
+    destinations = tuple(skill_root / name for name in selected_names)
+    for name, destination in zip(selected_names, destinations, strict=True):
         canonical = documentation_root / "skills" / name / "SKILL.md"
         if not canonical.is_file() or canonical.is_symlink():
             raise FileNotFoundError(f"canonical model skill is missing: {canonical}")
@@ -63,7 +120,16 @@ def project_model_skills(documentation_root: Path, skill_root: Path) -> tuple[Pa
             marker = destination / SKILL_PROJECTION_MARKER
             if destination.is_symlink() or not marker.is_file():
                 raise ValueError(f"refusing to replace an unmanaged model skill: {destination}")
-    for name, destination in zip(MODEL_SKILL_NAMES, destinations, strict=True):
+
+    for name in MODEL_SKILL_NAMES:
+        if name in selected_names:
+            continue
+        destination = skill_root / name
+        marker = destination / SKILL_PROJECTION_MARKER
+        if destination.is_dir() and marker.is_file():
+            remove_path(destination)
+
+    for name, destination in zip(selected_names, destinations, strict=True):
         canonical = documentation_root / "skills" / name / "SKILL.md"
         temp = atomic_sibling_path(destination, "tmp")
         backup = atomic_sibling_path(destination, "backup")
@@ -418,11 +484,35 @@ def seed_machine_config_from_environment() -> Path | None:
     return _seed_machine_config(values)
 
 
-def install_sky_cua_skills(skills_dir: Path) -> None:
+def _installed_skill_is_sky_cua_managed(destination: Path) -> bool:
+    marker = destination / SKILL_INSTALL_MARKER
+    if marker.is_file():
+        return True
+    skill_file = destination / "SKILL.md"
+    try:
+        text = skill_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    # Compatibility with installs made before the explicit marker existed.
+    return "sky-cua" in text[:2048].lower()
+
+
+def install_sky_cua_skills(
+    skills_dir: Path,
+    enabled_surfaces: frozenset[str] | None = None,
+) -> None:
     skills_dir.mkdir(parents=True, exist_ok=True)
+    selected_names = set(enabled_skill_names(enabled_surfaces))
     for skill_name in SKY_CUA_SKILLS:
+        destination = skills_dir / skill_name
+        if skill_name not in selected_names:
+            if destination.is_dir() and _installed_skill_is_sky_cua_managed(destination):
+                remove_path(destination)
+            continue
         source = REPO_ROOT / "skills" / skill_name
         if not source.exists():
             raise FileNotFoundError(f"sky-cua skill source not found: {source}")
-        destination = skills_dir / skill_name
         replace_tree_atomically(source, destination)
+        (destination / SKILL_INSTALL_MARKER).write_text(
+            "managed by sky-cua provisioning\n", encoding="utf-8"
+        )

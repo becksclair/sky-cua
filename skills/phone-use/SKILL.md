@@ -6,8 +6,9 @@ description: "Use for sky-cua MCP phone control through an ADB or ADB-independen
 # Phone Use
 
 Use this skill for real Android phone sessions through sky-cua MCP tools.
-Use `computer-use` or `browser-use` for desktop windows, host browser chrome,
-or other host UI.
+Desktop windows, host browser chrome, and other host UI require the desktop or
+browser surface when that surface is enabled; otherwise report that the task
+requires a disabled surface.
 
 ## Mandatory execution contract
 

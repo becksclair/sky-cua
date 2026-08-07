@@ -23,6 +23,7 @@ pub const MACHINE_CONFIG_PATH_ENV: &str = "SKY_CUA_CONFIG_PATH";
 pub const REPO_ROOT_ENV: &str = "SKY_CUA_REPO_ROOT";
 
 pub const BROWSER_SELECTION_ENV: &str = "SKY_CUA_BROWSER";
+pub const AGENT_SURFACES_ENV: &str = "SKY_CUA_SURFACES";
 pub const BROWSER_CONTROL_MODE_ENV: &str = "SKY_CUA_BROWSER_CONTROL_MODE";
 pub const CODEX_BROWSER_SOCKET_PATH_ENV: &str = "SKY_CUA_CODEX_BROWSER_SOCKET_PATH";
 
@@ -96,6 +97,9 @@ pub struct MachineConfig {
     /// Chrome-family browser selection: `brave`, `chrome`, `chromium`, or
     /// `all`. Unset means probe every Chrome-family browser.
     pub browser: Option<String>,
+    /// Agent-facing MCP surfaces. Absent means all three are enabled.
+    #[serde(default)]
+    pub surfaces: AgentSurfaceConfig,
     /// Durable ownership for the service-level browser control ingress.
     #[serde(default)]
     pub browser_control: BrowserControlConfig,
@@ -106,6 +110,35 @@ pub struct MachineConfig {
     /// env overrides.
     #[serde(default)]
     pub isolated_desktop: IsolatedDesktopConfig,
+}
+
+/// Parsed `[surfaces]` table. Every field defaults to enabled.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSurfaceConfig {
+    pub desktop: Option<bool>,
+    pub browser: Option<bool>,
+    pub phone: Option<bool>,
+}
+
+/// Fully resolved agent-facing surface policy. The MCP process snapshots this
+/// at initialize time; provisioning reads only the durable table and ignores
+/// process-scoped overrides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentSurfacePolicy {
+    pub desktop: bool,
+    pub browser: bool,
+    pub phone: bool,
+}
+
+impl Default for AgentSurfacePolicy {
+    fn default() -> Self {
+        Self {
+            desktop: true,
+            browser: true,
+            phone: true,
+        }
+    }
 }
 
 /// Parsed `[browser_control]` table. Environment values override these fields
@@ -313,6 +346,7 @@ pub fn all_env_keys() -> &'static [&'static str] {
         MACHINE_CONFIG_PATH_ENV,
         REPO_ROOT_ENV,
         BROWSER_SELECTION_ENV,
+        AGENT_SURFACES_ENV,
         BROWSER_CONTROL_MODE_ENV,
         CODEX_BROWSER_SOCKET_PATH_ENV,
         PHONE_ENABLED_ENV,
@@ -443,6 +477,66 @@ fn normalize_browser_selection_alias(value: String) -> String {
     }
 }
 
+/// Resolve the effective agent-facing surface policy. `SKY_CUA_SURFACES`, when
+/// present, is an exact comma-separated allowlist and overrides `[surfaces]`.
+/// The existing phone master switch is then intersected with the phone surface,
+/// so `[phone].enabled=false` / `SKY_CUA_PHONE=0` removes phone-use completely.
+pub fn resolved_agent_surface_policy() -> Result<AgentSurfacePolicy, String> {
+    let machine = load_machine_config()?;
+    let mut policy = resolve_agent_surface_policy(&machine.surfaces)?;
+    let phone_master = env_bool(PHONE_ENABLED_ENV)
+        .or(machine.phone.enabled)
+        .unwrap_or(true);
+    policy.phone &= phone_master;
+    Ok(policy)
+}
+
+/// Resolve an already-parsed `[surfaces]` table plus the process override.
+pub fn resolve_agent_surface_policy(
+    surfaces: &AgentSurfaceConfig,
+) -> Result<AgentSurfacePolicy, String> {
+    if let Some(raw) = std::env::var_os(AGENT_SURFACES_ENV) {
+        let raw = raw
+            .into_string()
+            .map_err(|_| format!("invalid {AGENT_SURFACES_ENV}: value is not valid UTF-8"))?;
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Err(format!(
+                "invalid {AGENT_SURFACES_ENV}: value must be a comma-separated allowlist"
+            ));
+        }
+        let mut policy = AgentSurfacePolicy {
+            desktop: false,
+            browser: false,
+            phone: false,
+        };
+        for item in raw.split(',') {
+            match item.trim().to_ascii_lowercase().as_str() {
+                "desktop" => policy.desktop = true,
+                "browser" => policy.browser = true,
+                "phone" => policy.phone = true,
+                "" => {
+                    return Err(format!(
+                        "invalid {AGENT_SURFACES_ENV}: empty surface name in {raw:?}"
+                    ));
+                }
+                other => {
+                    return Err(format!(
+                        "invalid {AGENT_SURFACES_ENV}: unknown surface {other:?}; use desktop, browser, or phone"
+                    ));
+                }
+            }
+        }
+        return Ok(policy);
+    }
+
+    Ok(AgentSurfacePolicy {
+        desktop: surfaces.desktop.unwrap_or(true),
+        browser: surfaces.browser.unwrap_or(true),
+        phone: surfaces.phone.unwrap_or(true),
+    })
+}
+
 /// Resolve service-level browser-control ownership per field. Explicit process
 /// environment wins over the machine file; absent values remain unset so the
 /// service preserves its legacy behavior.
@@ -542,8 +636,11 @@ fn env_u64(key: &str) -> Option<u64> {
 /// rest. Mirrors [`resolved_browser_selection`]; config-file errors are returned
 /// so the caller can attach a diagnostic.
 pub fn resolved_phone_selection() -> Result<ResolvedPhoneSelection, String> {
-    let phone = load_machine_config()?.phone;
-    Ok(resolve_phone_selection(&phone))
+    let machine = load_machine_config()?;
+    let surface_policy = resolve_agent_surface_policy(&machine.surfaces)?;
+    let mut resolved = resolve_phone_selection(&machine.phone);
+    resolved.enabled &= surface_policy.phone;
+    Ok(resolved)
 }
 
 /// Pure resolver over an already-parsed `[phone]` table plus the current
@@ -836,6 +933,65 @@ mod tests {
     }
 
     #[test]
+    fn surface_table_rejects_unknown_names_without_rejecting_unrelated_top_level_keys() {
+        assert!(
+            parse_machine_config("[surfaces]\nbrowesr = false\n").is_err(),
+            "surface typos must fail instead of silently widening capability"
+        );
+        assert!(
+            parse_machine_config("future_knob = 3\n[surfaces]\nbrowser = false\n").is_ok(),
+            "unrelated top-level keys remain forward-compatible"
+        );
+    }
+
+    #[test]
+    fn surface_policy_defaults_all_enabled_and_parses_table() {
+        let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = EnvGuard::clear(&[AGENT_SURFACES_ENV, PHONE_ENABLED_ENV]);
+        assert_eq!(
+            resolve_agent_surface_policy(&AgentSurfaceConfig::default()).unwrap(),
+            AgentSurfacePolicy::default()
+        );
+        let config =
+            parse_machine_config("[surfaces]\ndesktop = true\nbrowser = false\nphone = true\n")
+                .expect("valid surfaces config");
+        assert_eq!(
+            resolve_agent_surface_policy(&config.surfaces).unwrap(),
+            AgentSurfacePolicy {
+                desktop: true,
+                browser: false,
+                phone: true,
+            }
+        );
+    }
+
+    #[test]
+    fn surface_env_is_exact_strict_allowlist() {
+        let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = EnvGuard::set(&[(AGENT_SURFACES_ENV, "browser, phone")]);
+        assert_eq!(
+            resolve_agent_surface_policy(&AgentSurfaceConfig {
+                desktop: Some(true),
+                browser: Some(false),
+                phone: Some(false),
+            })
+            .unwrap(),
+            AgentSurfacePolicy {
+                desktop: false,
+                browser: true,
+                phone: true,
+            }
+        );
+        drop(_guard);
+        let _invalid = EnvGuard::set(&[(AGENT_SURFACES_ENV, "browser,telepathy")]);
+        assert!(
+            resolve_agent_surface_policy(&AgentSurfaceConfig::default())
+                .unwrap_err()
+                .contains("telepathy")
+        );
+    }
+
+    #[test]
     fn browser_selection_normalizes_legacy_origin_aliases_from_machine_config() {
         let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let path = std::env::temp_dir().join(format!(
@@ -967,6 +1123,32 @@ primary_target_models = ["Galaxy S26 Ultra", "Redmi Pad 15 Pro"]
             resolved.direct_enrollment_ttl_ms,
             PHONE_DEFAULT_DIRECT_ENROLLMENT_TTL_MS
         );
+    }
+
+    #[test]
+    fn resolved_phone_selection_intersects_surface_policy() {
+        let _serial = ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let path = std::env::temp_dir().join(format!(
+            "sky-cua-phone-surface-config-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "[surfaces]\nphone = false\n\n[phone]\nenabled = true\n",
+        )
+        .expect("write config");
+        let path_text = path.to_string_lossy().into_owned();
+        let _path = EnvGuard::set(&[(MACHINE_CONFIG_PATH_ENV, &path_text)]);
+        let _guard = EnvGuard::clear(&[AGENT_SURFACES_ENV, PHONE_ENABLED_ENV]);
+        assert!(!resolved_phone_selection().unwrap().enabled);
+
+        let _surface_override = EnvGuard::set(&[(AGENT_SURFACES_ENV, "phone")]);
+        assert!(resolved_phone_selection().unwrap().enabled);
+        drop(_surface_override);
+
+        let _phone_off = EnvGuard::set(&[(PHONE_ENABLED_ENV, "0")]);
+        assert!(!resolved_agent_surface_policy().unwrap().phone);
+        std::fs::remove_file(path).expect("remove config");
     }
 
     #[test]

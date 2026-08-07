@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Map, Value, json};
 
 use crate::mcp_server::ModelSessionInfo;
-use sky_cua_platform::model::BROWSER_EVAL_ENV;
+use sky_cua_platform::{config::AgentSurfacePolicy, model::BROWSER_EVAL_ENV};
 
 use super::annotations::{
     LOCAL_DESTRUCTIVE_ACTION, LOCAL_NAVIGATION_ACTION, LOCAL_STATEFUL_ACTION, READ_ONLY_TOOL,
@@ -40,6 +40,7 @@ pub(crate) enum McpConfigDiagnostic {
 #[derive(Debug, Clone)]
 pub(crate) struct McpProcessConfig {
     pub(crate) browser_eval_enabled: bool,
+    pub(crate) surfaces: AgentSurfacePolicy,
     pub(crate) model_supports_images_override: Option<bool>,
     #[allow(dead_code)]
     pub(crate) diagnostics: Vec<McpConfigDiagnostic>,
@@ -297,7 +298,7 @@ fn string_contains_embedded_argument_fields(value: &str) -> bool {
         || lower.contains("\"use_device_coordinates\"")
 }
 
-pub(crate) fn mcp_process_config_from_env() -> McpProcessConfig {
+pub(crate) fn mcp_process_config_from_env() -> Result<McpProcessConfig, String> {
     let mut diagnostics = Vec::new();
     // Enabled by default; only an explicit off/0/false disables it. An invalid
     // value is reported and falls back to the enabled default.
@@ -322,11 +323,12 @@ pub(crate) fn mcp_process_config_from_env() -> McpProcessConfig {
         Err(_) => None,
     };
 
-    McpProcessConfig {
+    Ok(McpProcessConfig {
         browser_eval_enabled,
+        surfaces: sky_cua_platform::config::resolved_agent_surface_policy()?,
         model_supports_images_override,
         diagnostics,
-    }
+    })
 }
 
 fn parse_bool_runtime(value: &str) -> Option<bool> {
@@ -350,11 +352,17 @@ pub(crate) fn build_tool_registry(
     model: &ModelSessionInfo,
 ) -> McpToolRegistry {
     let can_receive_images = model.can_receive_images();
-    let (tools, validation_schemas) =
-        build_tool_definitions_split(can_receive_images, process.browser_eval_enabled);
+    let (tools, validation_schemas) = build_tool_definitions_split(
+        can_receive_images,
+        process.browser_eval_enabled,
+        process.surfaces,
+    );
     let active_names = tool_names(&tools);
     let mut inactive_names = BTreeSet::new();
-    if !process.browser_eval_enabled && !active_names.contains("browser_eval") {
+    if process.surfaces.browser
+        && !process.browser_eval_enabled
+        && !active_names.contains("browser_eval")
+    {
         inactive_names.insert("browser_eval".to_string());
     }
 
@@ -397,7 +405,12 @@ pub(crate) fn build_tool_definitions(
     can_receive_images: bool,
     browser_eval_enabled: bool,
 ) -> Value {
-    build_tool_definitions_split(can_receive_images, browser_eval_enabled).0
+    build_tool_definitions_split(
+        can_receive_images,
+        browser_eval_enabled,
+        AgentSurfacePolicy::default(),
+    )
+    .0
 }
 
 /// Tool definitions whose `inputSchema` is the rich validation schema rather
@@ -408,8 +421,11 @@ pub(crate) fn validation_tool_definitions(
     can_receive_images: bool,
     browser_eval_enabled: bool,
 ) -> Value {
-    let (mut tools, validation) =
-        build_tool_definitions_split(can_receive_images, browser_eval_enabled);
+    let (mut tools, validation) = build_tool_definitions_split(
+        can_receive_images,
+        browser_eval_enabled,
+        AgentSurfacePolicy::default(),
+    );
     for tool in tools
         .as_array_mut()
         .expect("tool definitions must be an array")
@@ -437,8 +453,10 @@ pub(crate) fn validation_tool_definitions(
 fn build_tool_definitions_split(
     can_receive_images: bool,
     browser_eval_enabled: bool,
+    surfaces: AgentSurfacePolicy,
 ) -> (Value, BTreeMap<String, Value>) {
-    let mut tools = build_grouped_tool_definitions(can_receive_images, browser_eval_enabled);
+    let mut tools =
+        build_grouped_tool_definitions(can_receive_images, browser_eval_enabled, surfaces);
     let mut validation_schemas = BTreeMap::new();
     for tool in tools
         .as_array_mut()
@@ -468,46 +486,50 @@ fn flatten_advertised_input_schema(schema: &mut Map<String, Value>) {
     }
 }
 
-fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled: bool) -> Value {
+fn build_grouped_tool_definitions(
+    can_receive_images: bool,
+    browser_eval_enabled: bool,
+    surfaces: AgentSurfacePolicy,
+) -> Value {
     let mut tools = json!([
         grouped_tool(
             "doctor",
-            "Run sky-cua readiness diagnostics for desktop capture/input, browser integration, and session presence.",
+            "Run sky-cua runtime readiness diagnostics for the current machine.",
             READ_ONLY_TOOL,
             json!({}),
             json!([])
         ),
         grouped_tool_with_constraints(
             "status",
-            "Report browser, phone, phone_companion, or session_presence health.",
+            &status_description(surfaces),
             READ_ONLY_TOOL,
-            status_properties(),
+            status_properties(surfaces),
             json!(["component"]),
-            status_constraints()
+            status_constraints(surfaces)
         ),
         grouped_tool_with_constraints(
             "list_resources",
-            "List bounded resources. Valid pairs: desktop apps/windows/focused_window; browser tabs; phone devices/apps/current_app. Desktop windows include each window's display (its monitor: display_id, name, and primary flag); read it before capturing a specific app so you target the right monitor.",
+            &list_resources_description(surfaces),
             READ_ONLY_TOOL,
-            list_resources_properties(),
+            list_resources_properties(surfaces),
             json!(["surface", "resource"]),
-            list_resources_constraints()
+            list_resources_constraints(surfaces)
         ),
         grouped_tool_with_constraints(
             "observe",
-            "Capture one canonical AppShot for desktop, browser, or phone. The result binds surface identity, semantic state, action snapshot identity, consistency, and diagnostics; image-capable hosts also receive the same AppShot image as an attachment. Desktop supports exact window selectors and bounded semantic projection. Browser requires tab_id and binds pixels and semantics to one document generation. Phone requires session_id and can include accessibility and notifications.",
+            &observe_description(surfaces),
             READ_ONLY_TOOL,
-            observe_properties(can_receive_images),
+            observe_properties(can_receive_images, surfaces),
             json!(["surface"]),
-            observe_constraints(can_receive_images)
+            observe_constraints(can_receive_images, surfaces)
         ),
         grouped_tool_with_constraints(
             "capture_screen",
-            "Capture a browser-tab or phone image only. Browser requires tab_id. Use capture_desktop for desktop screenshots.",
+            &capture_screen_description(surfaces),
             READ_ONLY_TOOL,
-            capture_screen_properties(),
+            capture_screen_properties(surfaces),
             json!(["surface"]),
-            capture_screen_constraints()
+            capture_screen_constraints(surfaces)
         ),
         grouped_tool(
             "phone_accessibility_tree",
@@ -860,7 +882,7 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             ])
         )
     ]);
-    if browser_eval_enabled {
+    if surfaces.browser && browser_eval_enabled {
         tools.as_array_mut().expect("tool array").push(grouped_tool(
             "browser_eval",
             "Evaluate JavaScript in a claimed browser tab. This is hidden unless browser eval is explicitly enabled.",
@@ -872,7 +894,97 @@ fn build_grouped_tool_definitions(can_receive_images: bool, browser_eval_enabled
             json!(["tab_id", "expression", "appshot_id"]),
         ));
     }
+    tools.as_array_mut().expect("tool array").retain(|tool| {
+        tool.get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| tool_enabled_for_surfaces(name, surfaces))
+    });
     tools
+}
+
+fn tool_enabled_for_surfaces(name: &str, surfaces: AgentSurfacePolicy) -> bool {
+    match name {
+        "doctor" => true,
+        "status" | "list_resources" | "observe" => {
+            surfaces.desktop || surfaces.browser || surfaces.phone
+        }
+        "capture_screen" => surfaces.browser || surfaces.phone,
+        "capture_desktop" | "setup_desktop" | "session_presence" | "activate_window" => {
+            surfaces.desktop
+        }
+        name if name.starts_with("desktop_") => surfaces.desktop,
+        name if name.starts_with("browser_") => surfaces.browser,
+        name if name.starts_with("phone_") => surfaces.phone,
+        other => panic!(
+            "public MCP tool {other:?} has no surface classification; classify it before advertising it"
+        ),
+    }
+}
+
+fn enabled_surface_names(surfaces: AgentSurfacePolicy) -> Vec<&'static str> {
+    let mut names = Vec::new();
+    if surfaces.desktop {
+        names.push("desktop");
+    }
+    if surfaces.browser {
+        names.push("browser");
+    }
+    if surfaces.phone {
+        names.push("phone");
+    }
+    names
+}
+
+fn status_description(surfaces: AgentSurfacePolicy) -> String {
+    format!(
+        "Report health for enabled sky-cua components on the {} surface set.",
+        enabled_surface_names(surfaces).join(", ")
+    )
+}
+
+fn list_resources_description(surfaces: AgentSurfacePolicy) -> String {
+    let mut families = Vec::new();
+    if surfaces.desktop {
+        families.push("desktop apps/windows/focused_window");
+    }
+    if surfaces.browser {
+        families.push("browser tabs");
+    }
+    if surfaces.phone {
+        families.push("phone devices/apps/current_app");
+    }
+    format!(
+        "List bounded resources. Valid enabled families: {}.",
+        families.join("; ")
+    )
+}
+
+fn observe_description(surfaces: AgentSurfacePolicy) -> String {
+    let mut detail = Vec::new();
+    if surfaces.desktop {
+        detail.push("Desktop supports exact window selectors and bounded semantic projection.");
+    }
+    if surfaces.browser {
+        detail.push(
+            "Browser requires tab_id and binds pixels and semantics to one document generation.",
+        );
+    }
+    if surfaces.phone {
+        detail.push("Phone requires session_id and can include accessibility and notifications.");
+    }
+    format!(
+        "Capture one canonical AppShot on an enabled surface. The result binds surface identity, semantic state, action snapshot identity, consistency, and diagnostics; image-capable hosts also receive the same AppShot image as an attachment. {}",
+        detail.join(" ")
+    )
+}
+
+fn capture_screen_description(surfaces: AgentSurfacePolicy) -> String {
+    match (surfaces.browser, surfaces.phone) {
+        (true, true) => "Capture a browser-tab or phone image only. Browser requires tab_id. Use capture_desktop for desktop screenshots.".to_string(),
+        (true, false) => "Capture a browser-tab image only. Browser requires tab_id. Use capture_desktop for desktop screenshots when the desktop surface is enabled.".to_string(),
+        (false, true) => "Capture a phone image only. Phone requires session_id.".to_string(),
+        (false, false) => String::new(),
+    }
 }
 
 fn grouped_tool(

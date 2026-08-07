@@ -205,11 +205,29 @@ Supported keys:
 # Chrome-family browser selection: brave, chrome, chromium, or all.
 # Unset probes every Chrome-family browser.
 browser = "brave"
+
+# Agent-facing MCP surfaces. Each field defaults to true when omitted.
+[surfaces]
+desktop = true
+browser = true
+phone = true
 ```
 
+The surface policy is frozen when an MCP session initializes. The `[surfaces]`
+table is strict: misspelled or unknown surface keys are configuration errors
+rather than silently falling back to enabled. A disabled surface is removed from
+`tools/list`; shared tools such as `status`,
+`list_resources`, `observe`, and `capture_screen` also remove that surface's
+branches and fields. `capture_screen` disappears entirely when both browser and
+phone are disabled. `[phone].enabled = false` also disables the phone MCP
+surface.
+
 Environment variables stay per-process overrides on top of the file:
-`SKY_CUA_BROWSER` beats the file's `browser`, and `SKY_CUA_CONFIG_PATH`
-relocates the file itself (tests, fixtures). Browser selection is read on use,
+`SKY_CUA_BROWSER` beats the file's `browser`, `SKY_CUA_SURFACES` is an exact
+comma-separated temporary surface allowlist (for example `browser` or
+`desktop,phone`), and `SKY_CUA_CONFIG_PATH` relocates the file itself (tests,
+fixtures). Provisioning deliberately ignores `SKY_CUA_SURFACES` and projects
+skills only from the durable machine file. Browser selection is read on use,
 so browser changes apply without restarting the daemon. Longer-lived subsystem
 managers can resolve their own config at construction time; for example,
 phone-use changes apply after reconnecting/restarting the runtime that owns the
@@ -259,9 +277,10 @@ canonical and grouped by target/intent:
   `phone_app_force_stop`, `phone_app_install`, `phone_accessibility_tree`, and
   `phone_notifications`
 
-Browser tools do not require a host-specific enable flag. `browser_eval` is the
-security-gated exception and is advertised only when `SKY_CUA_BROWSER_EVAL` is
-`on`, `1`, or `true`.
+Browser tools need no host-specific opt-in because the browser surface defaults
+to enabled; `[surfaces].browser = false` removes them. `browser_eval` is the
+additional security gate and is advertised only when the browser surface exists
+and `SKY_CUA_BROWSER_EVAL` is `on`, `1`, or `true`.
 Codex Desktop may still use the companion Browser Use/Chrome plugin path until
 its adapter delegates to this shared browser surface, while host-specific
 configs emitted by `scripts/install_mcp_server.py` can pass browser-selection

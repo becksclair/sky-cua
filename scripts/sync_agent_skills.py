@@ -20,7 +20,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from _install_shared import SKY_CUA_SKILLS
+from _install_shared import SKY_CUA_SKILLS, enabled_skill_names
 from _plugin_bundle import remove_path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -60,17 +60,42 @@ def _replace_symlink(source: Path, destination: Path) -> None:
         remove_path(backup_path)
 
 
+def _managed_skill_symlink(destination: Path, skill_name: str) -> bool:
+    if not destination.is_symlink():
+        return False
+    try:
+        target = destination.resolve(strict=False)
+        skill_file = target / "SKILL.md"
+        if target.name == skill_name and skill_file.is_file():
+            return "sky-cua" in skill_file.read_text(encoding="utf-8")[:2048].lower()
+    except (OSError, UnicodeDecodeError):
+        pass
+    try:
+        raw_target = os.readlink(destination)
+    except OSError:
+        return False
+    return "sky-cua" in raw_target.lower() and raw_target.rstrip("/").endswith(
+        f"/skills/{skill_name}"
+    )
+
+
 def sync_agents_skill_symlinks(
     source_root: Path = DEFAULT_SOURCE_ROOT,
     dest_root: Path = DEFAULT_AGENTS_DEST_ROOT,
     skill_names: Sequence[str] = SKILL_NAMES,
+    enabled_surfaces: frozenset[str] | None = None,
 ) -> None:
-    """Link sky-cua-owned skills into the global agents skill root."""
+    """Link only durable-enabled sky-cua skills and remove stale managed links."""
     source_root = source_root.expanduser().resolve()
     dest_root = dest_root.expanduser()
-    _validate_source_skills(source_root, skill_names)
+    selected = set(enabled_skill_names(enabled_surfaces)).intersection(skill_names)
+    _validate_source_skills(source_root, tuple(selected))
     for skill_name in skill_names:
-        _replace_symlink(source_root / skill_name, dest_root / skill_name)
+        destination = dest_root / skill_name
+        if skill_name in selected:
+            _replace_symlink(source_root / skill_name, destination)
+        elif _managed_skill_symlink(destination, skill_name):
+            remove_path(destination)
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -95,8 +120,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     sync_agents_skill_symlinks(args.source_root, args.agents_dest_root)
+    selected = set(enabled_skill_names())
     for skill_name in SKILL_NAMES:
-        print(f"Linked {skill_name} to {args.agents_dest_root.expanduser() / skill_name}")
+        destination = args.agents_dest_root.expanduser() / skill_name
+        if skill_name in selected:
+            print(f"Linked {skill_name} to {destination}")
+        else:
+            print(f"Disabled {skill_name}; removed stale managed link at {destination}")
     return 0
 
 

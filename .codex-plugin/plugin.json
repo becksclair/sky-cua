@@ -1,7 +1,7 @@
 {
   "name": "sky-cua",
   "version": "0.1.0",
-  "description": "Codex adapter for the cross-platform sky-cua MCP Computer Use runtime.",
+  "description": "Codex adapter for the configurable cross-platform sky-cua MCP control runtime.",
   "author": {
     "name": "Rebecca Clair",
     "url": "https://github.com/becksclair"
@@ -12,7 +12,6 @@
   "keywords": [
     "codex",
     "computer-use",
-    "desktop-control",
     "mcp",
     "linux",
     "windows",
@@ -21,8 +20,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Sky CUA",
-    "shortDescription": "Computer Use runtime payload for Codex",
-    "longDescription": "Sky CUA is the payload plugin behind the Computer Use compat plugin. It ships the sky-cua MCP desktop-control runtime, built around native app discovery, screenshots, input, and structured diagnostics across supported platforms. The Computer Use plugin id stays the single enabled entry point; this plugin carries the runtime it points at.",
+    "shortDescription": "Configurable Sky CUA runtime payload for Codex",
+    "longDescription": "Sky CUA is the payload plugin behind the Computer Use compat plugin. It ships one configurable MCP control runtime whose desktop, browser, and phone surfaces are projected by machine policy, together with structured diagnostics. The Computer Use plugin id stays the single enabled entry point; this plugin carries the runtime it points at.",
     "developerName": "Rebecca Clair",
     "category": "Coding",
     "capabilities": [
@@ -34,8 +33,8 @@
     "privacyPolicyURL": "https://openai.com/policies/row-privacy-policy/",
     "termsOfServiceURL": "https://openai.com/policies/row-terms-of-use/",
     "defaultPrompt": [
-      "Inspect the open desktop app and tell me what is focused",
-      "List the desktop apps you can currently see"
+      "Check which Sky CUA capabilities are available",
+      "Inspect the currently enabled Sky CUA surfaces"
     ],
     "brandColor": "#1F2937",
     "composerIcon": "./assets/app-icon.png",

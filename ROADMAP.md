@@ -104,6 +104,7 @@ Open boxes link to the active ExecPlan that owns the work.
         host smoke passed on the canonical surface
   - [ ] Broader cross-desktop VM matrix remains a release gate for
         display-specific runtime changes
+- [ ] Configurable agent surfaces (independent desktop/browser/phone MCP projection + provisioning-time skill projection) — [`plans/configurable_agent_surfaces.md`](plans/configurable_agent_surfaces.md)
 - [x] Agent-agnostic screenshot delivery (browser MCP image blocks + persisted capture paths, `observe(surface="desktop", screenshot_delivery="inline")`, one CSS-pixel browser coordinate space) — [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
   - [ ] Re-run the VM smoke matrix for the CSS-pixel browser contract (only the live KDE host is verified so far)
 - [x] Display-targeted desktop screenshots (single-screen capture: main-display default, explicit display/window selectors, and snapshot coordinate remapping) — [`docs/features/display-targeted-screenshots.md`](docs/features/display-targeted-screenshots.md)

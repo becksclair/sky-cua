@@ -20,9 +20,10 @@ The installed runtime was left untouched by using a private service socket.
 `sky-cua` exposes browser readiness, real user-tab listing, session-owned tab
 creation, existing-tab claiming, browser snapshots/screenshots, and basic
 browser actions through the canonical grouped MCP surface for hosts such as
-OpenCode and Pi. The default browser capability is always advertised by the MCP
-server; `browser_eval` is enabled by default and disabled only by an explicit
-`SKY_CUA_BROWSER_EVAL=off`.
+OpenCode and Pi. The browser capability is advertised by default, but
+`[surfaces].browser = false` removes the complete browser MCP projection.
+`browser_eval` is independently enabled by default only when the browser surface
+exists, and is disabled by an explicit `SKY_CUA_BROWSER_EVAL=off`.
 
 ## Contract surface
 
@@ -536,7 +537,9 @@ engage either browser; pinning `SKY_CUA_BROWSER` (or the machine config
   support.
 - `.mcp.json` — packaged env allowlist includes `SKY_CUA_BROWSER`.
 
-Browser tools no longer require a host-specific enable flag. Codex Desktop may
+Browser tools no longer require a host-specific opt-in flag; they are enabled by
+the all-on default surface policy and can be removed with `[surfaces].browser =
+false`. Codex Desktop may
 still use the companion Browser Use and Chrome plugins until the adapter
 delegates browser actions through the shared runtime.
 

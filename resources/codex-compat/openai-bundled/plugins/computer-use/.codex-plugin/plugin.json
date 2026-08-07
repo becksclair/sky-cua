@@ -1,14 +1,11 @@
 {
 	"name": "computer-use",
 	"version": "0.1.0-sky-cua",
-	"description": "Control desktop apps and connected Android devices through sky-cua.",
+	"description": "Expose the machine-configured Sky CUA control surfaces through one MCP runtime.",
 	"license": "MIT",
 	"keywords": [
 		"computer-use",
-		"desktop-control",
-		"android",
-		"phone",
-		"mobile-automation",
+		"mcp",
 		"linux",
 		"wayland"
 	],
@@ -16,16 +13,15 @@
 	"mcpServers": "./.mcp.json",
 	"interface": {
 		"displayName": "Computer Use",
-		"shortDescription": "Control desktop apps and Android devices",
-		"longDescription": "Computer Use lets Codex control desktop applications and connected Android devices through sky-cua, including screenshots, input, app navigation, notifications, and device diagnostics.",
+		"shortDescription": "Use the configured Sky CUA surfaces",
+		"longDescription": "Computer Use hosts the Sky CUA MCP runtime. Desktop, browser, and phone capabilities are independently projected by the machine configuration, while diagnostics remain available.",
 		"developerName": "sky-cua",
 		"category": "Productivity",
 		"capabilities": ["Interactive", "Read", "Write"],
 		"logo": "./assets/app-icon.png",
 		"defaultPrompt": [
-			"Show me what is open on my desktop",
-			"Show me what is open on my connected Android phone",
-			"Open Settings on my connected Android phone"
+			"Check which Sky CUA capabilities are available",
+			"Inspect the currently enabled Sky CUA surfaces"
 		]
 	}
 }

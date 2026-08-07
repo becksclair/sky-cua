@@ -970,6 +970,27 @@ def test_browser_preflight_update_config_enables_bundled_plugins(tmp_path: Path)
     assert parsed["plugins"]["computer-use@openai-bundled"]["enabled"] is True
 
 
+def test_browser_preflight_respects_durable_browser_surface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chrome_preflight = load_chrome_preflight()
+    config_path = tmp_path / "sky-cua.toml"
+    config_path.write_text("[surfaces]\nbrowser = false\n", encoding="utf-8")
+    monkeypatch.setenv("SKY_CUA_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("SKY_CUA_SURFACES", "browser")
+    codex_home = tmp_path / "codex-home"
+
+    chrome_preflight.update_codex_config(codex_home)
+
+    parsed = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
+    assert parsed["plugins"]["chrome@openai-bundled"]["enabled"] is False
+    assert parsed["plugins"]["browser-use@openai-bundled"]["enabled"] is False
+
+    config_path.write_text("[surfaces]\nbrowesr = false\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="browesr"):
+        chrome_preflight.durable_browser_surface_enabled()
+
+
 def test_browser_preflight_rejects_uppercase_native_host_name(tmp_path: Path) -> None:
     chrome_preflight = load_chrome_preflight()
     plugin_root = tmp_path / "chrome"

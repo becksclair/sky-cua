@@ -46,6 +46,14 @@ def test_require_exact_grouped_tools_report_contract_violations() -> None:
         probe.require_exact_grouped_tools(set(probe.GROUPED_TOOLS) | {"unexpected_tool"})
 
 
+def test_surface_subset_expected_tools_and_parser() -> None:
+    browser_only = set(probe.SHARED_TOOLS) | set(probe.BROWSER_TOOLS) | {"capture_screen"}
+    probe.require_exact_grouped_tools(browser_only, frozenset({"browser"}))
+    assert probe.parse_surfaces("desktop,phone") == frozenset({"desktop", "phone"})
+    with pytest.raises(ValueError, match="desktop,browser,phone"):
+        probe.parse_surfaces("browser,telepathy")
+
+
 def test_grouped_payload_requires_identity_and_result() -> None:
     payload = probe.grouped_payload(
         {
@@ -306,8 +314,12 @@ def test_require_grouped_action_shape_rejects_vague_action_tools() -> None:
         {
             "name": "phone_app_install",
             "inputSchema": {
-                "required": ["session_id", "apk_paths"],
-                "properties": {"apk_paths": {"minItems": 1}},
+                "required": ["appshot_id"],
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "apk_paths": {"minItems": 1},
+                    "appshot_id": {"type": "string"},
+                },
             },
         },
         {

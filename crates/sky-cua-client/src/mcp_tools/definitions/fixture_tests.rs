@@ -3,8 +3,9 @@
 //! `tests/fixtures/{tool_contract,call_cases,mcp_tool_surface_matrix}.json`.
 
 use super::{
-    InactiveToolReason, McpConfigDiagnostic, McpProcessConfig, build_tool_definitions,
-    build_tool_registry, mcp_process_config_from_env, schema_accepts, schema_keyword_is_supported,
+    InactiveToolReason, McpConfigDiagnostic, McpProcessConfig, McpToolRegistry,
+    build_tool_definitions, build_tool_registry, mcp_process_config_from_env, schema_accepts,
+    schema_keyword_is_supported,
 };
 use crate::mcp_server::ModelSessionInfo;
 use serde_json::{Value, json};
@@ -197,6 +198,7 @@ fn read_only_tools_never_mutate_per_their_own_hints() {
 pub(super) fn process_config(browser_eval_enabled: bool) -> McpProcessConfig {
     McpProcessConfig {
         browser_eval_enabled,
+        surfaces: sky_cua_platform::config::AgentSurfacePolicy::default(),
         model_supports_images_override: None,
         diagnostics: Vec::new(),
     }
@@ -234,6 +236,110 @@ fn registry_adds_browser_eval_only_when_enabled() {
     assert_eq!(registry.active_names.len(), 41);
     assert!(registry.contains("browser_eval"));
     assert_eq!(registry.inactive_reason("browser_eval"), None);
+}
+
+pub(super) fn process_config_with_surfaces(
+    desktop: bool,
+    browser: bool,
+    phone: bool,
+    browser_eval_enabled: bool,
+) -> McpProcessConfig {
+    McpProcessConfig {
+        browser_eval_enabled,
+        surfaces: sky_cua_platform::config::AgentSurfacePolicy {
+            desktop,
+            browser,
+            phone,
+        },
+        model_supports_images_override: None,
+        diagnostics: Vec::new(),
+    }
+}
+
+#[test]
+fn registry_projects_exact_surface_subset_and_shared_schemas() {
+    let model = ModelSessionInfo::default();
+    let browser = build_tool_registry(
+        &process_config_with_surfaces(false, true, false, true),
+        &model,
+    );
+    assert!(browser.contains("browser_input"));
+    assert!(browser.contains("browser_eval"));
+    assert!(!browser.contains("desktop_pointer"));
+    assert!(!browser.contains("phone_pointer"));
+    assert_eq!(browser.inactive_reason("phone_pointer"), None);
+
+    fn tool<'a>(registry: &'a McpToolRegistry, name: &str) -> &'a Value {
+        registry
+            .tools
+            .as_array()
+            .expect("tools")
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing {name}"))
+    }
+    assert_eq!(
+        tool(&browser, "status")["inputSchema"]["properties"]["component"]["enum"],
+        json!(["browser"])
+    );
+    assert_eq!(
+        tool(&browser, "list_resources")["inputSchema"]["properties"]["surface"]["enum"],
+        json!(["browser"])
+    );
+    assert_eq!(
+        tool(&browser, "observe")["inputSchema"]["properties"]["surface"]["enum"],
+        json!(["browser"])
+    );
+    assert!(
+        tool(&browser, "observe")["inputSchema"]["properties"]
+            .get("session_id")
+            .is_none()
+    );
+    assert_eq!(
+        tool(&browser, "capture_screen")["inputSchema"]["properties"]["surface"]["enum"],
+        json!(["browser"])
+    );
+
+    let desktop = build_tool_registry(
+        &process_config_with_surfaces(true, false, false, false),
+        &model,
+    );
+    assert!(desktop.contains("capture_desktop"));
+    assert!(!desktop.contains("capture_screen"));
+    assert!(!desktop.contains("browser_open"));
+    assert!(!desktop.contains("phone_connection"));
+    assert_eq!(
+        tool(&desktop, "observe")["inputSchema"]["properties"]["surface"]["enum"],
+        json!(["desktop"])
+    );
+
+    let none = build_tool_registry(
+        &process_config_with_surfaces(false, false, false, false),
+        &model,
+    );
+    assert_eq!(
+        none.active_names,
+        ["doctor".to_string()].into_iter().collect()
+    );
+    assert_eq!(none.inactive_reason("browser_eval"), None);
+}
+
+#[test]
+fn disabled_shared_branch_is_rejected_before_dispatch_contract() {
+    let registry = build_tool_registry(
+        &process_config_with_surfaces(true, false, true, false),
+        &ModelSessionInfo::default(),
+    );
+    assert!(
+        registry
+            .validate_arguments("observe", &json!({"surface": "browser", "tab_id": "tab-1"}),)
+            .is_err()
+    );
+    assert!(
+        registry
+            .validate_arguments("status", &json!({"component": "browser"}),)
+            .is_err()
+    );
 }
 
 #[test]
@@ -770,11 +876,15 @@ fn mcp_runtime_config_invalid_values_fallback() {
     unsafe {
         std::env::set_var("SKY_CUA_BROWSER_EVAL", "perhaps");
         std::env::set_var("SKY_CUA_MODEL_SUPPORTS_IMAGES", "sometimes");
+        std::env::set_var("SKY_CUA_CONFIG_PATH", "");
+        std::env::remove_var("SKY_CUA_SURFACES");
+        std::env::remove_var("SKY_CUA_PHONE");
     }
-    let config = mcp_process_config_from_env();
+    let config = mcp_process_config_from_env().expect("runtime config");
     unsafe {
         std::env::remove_var("SKY_CUA_BROWSER_EVAL");
         std::env::remove_var("SKY_CUA_MODEL_SUPPORTS_IMAGES");
+        std::env::remove_var("SKY_CUA_CONFIG_PATH");
     }
     // An invalid value is reported and falls back to the enabled default.
     assert!(config.browser_eval_enabled);
@@ -798,10 +908,14 @@ fn browser_eval_runtime_config_matches_service_falsy_values() {
     unsafe {
         std::env::set_var("SKY_CUA_BROWSER_EVAL", "off");
         std::env::remove_var("SKY_CUA_MODEL_SUPPORTS_IMAGES");
+        std::env::set_var("SKY_CUA_CONFIG_PATH", "");
+        std::env::remove_var("SKY_CUA_SURFACES");
+        std::env::remove_var("SKY_CUA_PHONE");
     }
-    let config = mcp_process_config_from_env();
+    let config = mcp_process_config_from_env().expect("runtime config");
     unsafe {
         std::env::remove_var("SKY_CUA_BROWSER_EVAL");
+        std::env::remove_var("SKY_CUA_CONFIG_PATH");
     }
     assert!(
         !config.browser_eval_enabled,
@@ -816,6 +930,15 @@ fn mcp_tool_surface_matrix_fixture_matches_generated_registry() {
         "mcp_tool_surface_matrix.json",
         include_str!("../../../tests/fixtures/mcp_tool_surface_matrix.json"),
         generated_surface_matrix(),
+    );
+}
+
+#[test]
+fn mcp_surface_policy_matrix_fixture_matches_generated_registry() {
+    assert_fixture_matches(
+        "mcp_surface_policy_matrix.json",
+        include_str!("../../../tests/fixtures/mcp_surface_policy_matrix.json"),
+        generated_surface_policy_matrix(),
     );
 }
 

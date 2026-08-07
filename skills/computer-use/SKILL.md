@@ -5,9 +5,10 @@ description: "Use sky-cua desktop tools for native apps, windows, OS dialogs, an
 
 # Computer Use
 
-Use `browser-use` for browser page content and requests that explicitly target
-sky-cua browser-surface tools, even when a browser shortcut affects chrome UI.
-Browser CSS pixels and desktop screenshot pixels are unrelated; never reuse coordinates between them.
+For browser page content or explicit sky-cua browser-surface requests, use the
+browser surface when it is enabled and advertised; otherwise report that the task
+requires a disabled surface. Browser CSS pixels and desktop screenshot pixels are
+unrelated; never reuse coordinates between them.
 
 Load `references/platform-linux.md` only for Linux, KDE/KWin, XWayland, or native Wayland behavior.
 

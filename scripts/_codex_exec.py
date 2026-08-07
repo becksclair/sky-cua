@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from _install_shared import enabled_skill_names as durable_enabled_skill_names
 from _plugin_bundle import (
     DEFAULT_CODEX_HOME,
     DIST_PLUGIN_ROOT,
@@ -152,6 +153,7 @@ def prepare_chatgpt_plugin_test_home(*, artifact_dir: Path, symlink: bool = Fals
         compat_enablement=compat_plugin_targets_payload(
             codex_home, installed_plugin_root(codex_home)
         ),
+        enabled_skill_names=durable_enabled_skill_names(),
     )
     return codex_home
 

@@ -2,7 +2,8 @@
 //! surface), `capture_screen`/`capture_desktop`, `desktop_semantic`,
 //! `desktop_pointer`, `desktop_keyboard`, `desktop_action`.
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use sky_cua_platform::config::AgentSurfacePolicy;
 
 use crate::app_state::{
     APP_STATE_DEFAULT_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_QUERY_CHARS,
@@ -12,125 +13,185 @@ use super::browser::*;
 use super::common::*;
 use super::phone::*;
 
-pub(super) fn observe_properties(can_receive_images: bool) -> Value {
-    let mut properties = merge_properties(
-        json!({
-            "surface": {"type": "string", "enum": ["desktop", "browser", "phone"]},
-            "target": optional_absent_string_schema(browser_target_schema()),
-            "tab_id": browser_tab_id_schema(),
-            "text_limit": optional_null_schema(json!({
+pub(super) fn observe_properties(can_receive_images: bool, surfaces: AgentSurfacePolicy) -> Value {
+    let mut surface_values = Vec::new();
+    let mut properties = Map::new();
+    if surfaces.desktop {
+        surface_values.push("desktop");
+        if let Some(desktop) = get_app_state_properties(can_receive_images).as_object() {
+            for (key, value) in desktop {
+                if !matches!(
+                    key.as_str(),
+                    "desktop_file_id" | "capture_screen" | "screenshot_delivery"
+                ) {
+                    properties.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+    if surfaces.browser {
+        surface_values.push("browser");
+        properties.insert(
+            "target".into(),
+            optional_absent_string_schema(browser_target_schema()),
+        );
+        properties.insert("tab_id".into(), browser_tab_id_schema());
+        properties.insert(
+            "text_limit".into(),
+            optional_null_schema(json!({
                 "type": "integer",
                 "minimum": 0,
                 "maximum": sky_cua_platform::model::BROWSER_SNAPSHOT_MAX_TEXT_LIMIT,
                 "description": "For browser only, maximum page text characters."
             })),
-            "include_accessibility": optional_bool_schema(json!({
+        );
+        if let Some(browser) = browser_snapshot_window_properties().as_object() {
+            for (key, value) in browser {
+                properties.insert(key.clone(), value.clone());
+            }
+        }
+        properties.insert(
+            "capture_timeout_ms".into(),
+            browser_capture_timeout_property(),
+        );
+    }
+    if surfaces.phone {
+        surface_values.push("phone");
+        properties.insert(
+            "include_accessibility".into(),
+            optional_bool_schema(json!({
                 "type": "boolean",
                 "description": "For phone only, include the accessibility tree in the observation."
             })),
-            "include_notifications": optional_bool_schema(json!({
+        );
+        properties.insert(
+            "include_notifications".into(),
+            optional_bool_schema(json!({
                 "type": "boolean",
                 "description": "For phone only, include recent notifications in the observation."
             })),
-            "backend": optional_absent_string_schema(phone_observe_backend_schema())
-        }),
-        merge_properties(
-            get_app_state_properties(can_receive_images),
-            merge_properties(
-                browser_snapshot_window_properties(),
-                merge_properties(
-                    json!({"capture_timeout_ms": browser_capture_timeout_property()}),
-                    phone_session_properties(),
-                ),
-            ),
-        ),
-    );
-    if let Some(properties) = properties.as_object_mut() {
-        // Canonical AppShots always capture the selected surface. These legacy
-        // get_app_state knobs do not alter the AppShot producer and must not be
-        // advertised as if they did.
-        properties.remove("desktop_file_id");
-        properties.remove("capture_screen");
-        properties.remove("screenshot_delivery");
+        );
+        properties.insert(
+            "backend".into(),
+            optional_absent_string_schema(phone_observe_backend_schema()),
+        );
+        if let Some(phone) = phone_session_properties().as_object() {
+            for (key, value) in phone {
+                properties.insert(key.clone(), value.clone());
+            }
+        }
     }
-    properties
+    properties.insert(
+        "surface".into(),
+        json!({"type": "string", "enum": surface_values}),
+    );
+    Value::Object(properties)
 }
 
-pub(super) fn observe_constraints(can_receive_images: bool) -> Value {
-    let desktop_allowed = vec![
-        "surface",
-        "app_id",
-        "window_title",
-        "name",
-        "detail",
-        "element_query",
-        "element_offset",
-        "element_limit",
-    ];
-    let properties = observe_properties(can_receive_images);
-    exact_branch_constraints(
-        &properties,
-        "surface",
-        &[
-            ("desktop", &[][..], desktop_allowed.as_slice()),
-            (
-                "browser",
-                &["tab_id"][..],
-                &[
-                    "surface",
-                    "target",
-                    "tab_id",
-                    "text_limit",
-                    "element_query",
-                    "element_offset",
-                    "element_limit",
-                    "capture_timeout_ms",
-                ][..],
-            ),
-            (
-                "phone",
-                &["session_id"][..],
-                &[
-                    "surface",
-                    "session_id",
-                    "include_accessibility",
-                    "include_notifications",
-                    "backend",
-                ][..],
-            ),
-        ],
-    )
+pub(super) fn observe_constraints(can_receive_images: bool, surfaces: AgentSurfacePolicy) -> Value {
+    let properties = observe_properties(can_receive_images, surfaces);
+    let mut branches = Vec::new();
+    if surfaces.desktop {
+        branches.push(exact_branch_schema(
+            &properties,
+            &[("surface", "desktop")],
+            &[],
+            &[
+                "surface",
+                "app_id",
+                "window_title",
+                "name",
+                "detail",
+                "element_query",
+                "element_offset",
+                "element_limit",
+            ],
+        ));
+    }
+    if surfaces.browser {
+        branches.push(exact_branch_schema(
+            &properties,
+            &[("surface", "browser")],
+            &["tab_id"],
+            &[
+                "surface",
+                "target",
+                "tab_id",
+                "text_limit",
+                "element_query",
+                "element_offset",
+                "element_limit",
+                "capture_timeout_ms",
+            ],
+        ));
+    }
+    if surfaces.phone {
+        branches.push(exact_branch_schema(
+            &properties,
+            &[("surface", "phone")],
+            &["session_id"],
+            &[
+                "surface",
+                "session_id",
+                "include_accessibility",
+                "include_notifications",
+                "backend",
+            ],
+        ));
+    }
+    json!({"oneOf": branches})
 }
 
-pub(super) fn capture_screen_properties() -> Value {
-    merge_properties(
-        json!({
-            "surface": {"type": "string", "enum": ["browser", "phone"]},
-            "target": optional_absent_string_schema(browser_target_schema()),
-            "tab_id": browser_tab_id_schema(),
-            "backend": optional_absent_string_schema(phone_observe_backend_schema())
-        }),
-        phone_session_properties(),
-    )
+pub(super) fn capture_screen_properties(surfaces: AgentSurfacePolicy) -> Value {
+    let mut surface_values = Vec::new();
+    let mut properties = Map::new();
+    if surfaces.browser {
+        surface_values.push("browser");
+        properties.insert(
+            "target".into(),
+            optional_absent_string_schema(browser_target_schema()),
+        );
+        properties.insert("tab_id".into(), browser_tab_id_schema());
+    }
+    if surfaces.phone {
+        surface_values.push("phone");
+        properties.insert(
+            "backend".into(),
+            optional_absent_string_schema(phone_observe_backend_schema()),
+        );
+        if let Some(phone) = phone_session_properties().as_object() {
+            for (key, value) in phone {
+                properties.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    properties.insert(
+        "surface".into(),
+        json!({"type": "string", "enum": surface_values}),
+    );
+    Value::Object(properties)
 }
 
-pub(super) fn capture_screen_constraints() -> Value {
-    exact_branch_constraints(
-        &capture_screen_properties(),
-        "surface",
-        &[
-            (
-                "browser",
-                &["tab_id"][..],
-                &["surface", "target", "tab_id"][..],
-            ),
-            (
-                "phone",
-                &["session_id"][..],
-                &["surface", "session_id", "backend"][..],
-            ),
-        ],
-    )
+pub(super) fn capture_screen_constraints(surfaces: AgentSurfacePolicy) -> Value {
+    let properties = capture_screen_properties(surfaces);
+    let mut branches = Vec::new();
+    if surfaces.browser {
+        branches.push(exact_branch_schema(
+            &properties,
+            &[("surface", "browser")],
+            &["tab_id"],
+            &["surface", "target", "tab_id"],
+        ));
+    }
+    if surfaces.phone {
+        branches.push(exact_branch_schema(
+            &properties,
+            &[("surface", "phone")],
+            &["session_id"],
+            &["surface", "session_id", "backend"],
+        ));
+    }
+    json!({"oneOf": branches})
 }
 
 pub(super) fn desktop_semantic_properties(properties: Value) -> Value {

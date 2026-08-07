@@ -330,7 +330,8 @@ fn handle_message(
             if session.config.is_some() {
                 return Ok(Some(already_initialized(id)));
             }
-            let process = crate::mcp_tools::mcp_process_config_from_env();
+            let process =
+                crate::mcp_tools::mcp_process_config_from_env().map_err(anyhow::Error::msg)?;
             let model = parse_model_session_info(&body, process.model_supports_images_override);
             let registry = crate::mcp_tools::build_tool_registry(&process, &model);
             let declared_provenance = std::env::var(MCP_CALLER_PROVENANCE_ENV)
@@ -391,9 +392,13 @@ fn handle_message(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let phone_context =
-                is_phone_surface_tool_call(tool_name, body.pointer("/params/arguments"))
-                    .then(|| phone_call_context(&body, &config.browser_provenance));
+            let phone_context = (config.registry.contains(tool_name)
+                && config
+                    .registry
+                    .validate_arguments(tool_name, &arguments)
+                    .is_ok()
+                && is_phone_surface_tool_call(tool_name, Some(&arguments)))
+            .then(|| phone_call_context(&body, &config.browser_provenance));
             let result = match prepared_browser_call {
                 Some(prepared) => with_browser_request_context(prepared.context, || {
                     crate::mcp_tools::handle_session_tool_call_with_browser_identity(
@@ -450,7 +455,17 @@ fn handle_message(
 fn prepare_browser_call(body: &Value, session: &ServerSession) -> Option<PreparedBrowserCall> {
     let config = session.config.as_ref()?;
     let tool_name = body.pointer("/params/name")?.as_str()?;
-    if !is_browser_surface_tool_call(tool_name, body.pointer("/params/arguments")) {
+    let empty_arguments = json!({});
+    let arguments = body
+        .pointer("/params/arguments")
+        .unwrap_or(&empty_arguments);
+    if !config.registry.contains(tool_name)
+        || config
+            .registry
+            .validate_arguments(tool_name, arguments)
+            .is_err()
+        || !is_browser_surface_tool_call(tool_name, Some(arguments))
+    {
         return None;
     }
     let (identity, context) = browser_call_context(body, &config.browser_provenance);
@@ -1095,23 +1110,25 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::{io::Cursor, sync::Arc};
 
     use serde_json::{Value, json};
     use sky_cua_platform::{
         BrowserCallerKind, BrowserProvenanceSource, PhoneCallerProvenance, ServiceRequest,
+        config::AgentSurfacePolicy,
     };
 
-    use crate::mcp_tools::tool_definitions;
+    use crate::mcp_tools::{McpProcessConfig, build_tool_registry, tool_definitions};
 
     use super::{
-        InFlightBrowserCalls, JsonRpcRequestId, MessageFraming, ServerSession,
-        browser_call_context, browser_caller_provenance, browser_session_identity_from_tool_call,
-        cancellation_request, current_browser_request_context, disconnect_request_once,
-        is_browser_surface_tool_call, is_phone_surface_tool_call, json_rpc_id_fingerprint,
-        normalize_declared_caller, parse_model_session_info, phone_call_context,
-        phone_session_and_turn_from_tool_call, read_message, read_message_with_limit,
-        with_browser_request_context, write_message,
+        InFlightBrowserCalls, JsonRpcRequestId, McpSessionConfig, MessageFraming, ModelSessionInfo,
+        ServerSession, browser_call_context, browser_caller_provenance,
+        browser_session_identity_from_tool_call, cancellation_request,
+        current_browser_request_context, disconnect_request_once, is_browser_surface_tool_call,
+        is_phone_surface_tool_call, json_rpc_id_fingerprint, normalize_declared_caller,
+        parse_model_session_info, phone_call_context, phone_session_and_turn_from_tool_call,
+        prepare_browser_call, read_message, read_message_with_limit, with_browser_request_context,
+        write_message,
     };
 
     #[test]
@@ -1492,6 +1509,42 @@ mod tests {
             "browser_input",
             Some(&json!({}))
         ));
+    }
+
+    #[test]
+    fn browser_open_without_arguments_still_prepares_browser_context() {
+        let process = McpProcessConfig {
+            browser_eval_enabled: true,
+            surfaces: AgentSurfacePolicy::default(),
+            model_supports_images_override: None,
+            diagnostics: Vec::new(),
+        };
+        let model = ModelSessionInfo::default();
+        let registry = build_tool_registry(&process, &model);
+        let provenance = browser_caller_provenance(
+            &json!({"params": {"clientInfo": {"name": "test", "version": "1"}}}),
+            "connection-browser-open",
+            None,
+        );
+        let session = ServerSession {
+            mcp_connection_id: "connection-browser-open".to_string(),
+            config: Some(Arc::new(McpSessionConfig {
+                _process: process,
+                model,
+                registry,
+                browser_provenance: provenance,
+            })),
+        };
+
+        let prepared = prepare_browser_call(
+            &json!({
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "browser_open"}
+            }),
+            &session,
+        );
+        assert!(prepared.is_some());
     }
 
     #[test]
