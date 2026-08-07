@@ -47,8 +47,7 @@ def test_bundled_computer_use_forwards_canonical_environment_allowlist() -> None
     canonical = json.loads((repo_root / ".mcp.json").read_text(encoding="utf-8"))
     compat = json.loads(
         (
-            repo_root
-            / "resources/codex-compat/openai-bundled/plugins/computer-use/.mcp.json"
+            repo_root / "resources/codex-compat/openai-bundled/plugins/computer-use/.mcp.json"
         ).read_text(encoding="utf-8")
     )
 
