@@ -10,6 +10,8 @@ use sky_cua_platform::model::{
     BrowserTab, BrowserTargetKind, DiagnosticEntry, browser_diagnostic_is_error_code,
 };
 
+use super::super::semantic_text::append_appshot_semantics;
+
 pub(crate) fn browser_appshot_result(
     response: BrowserAppShotResponse,
     can_receive_images: bool,
@@ -51,6 +53,9 @@ pub(crate) fn browser_appshot_result(
         }
     };
     append_first_diagnostic(&mut text, &response.appshot.diagnostics);
+    if !can_receive_images {
+        append_appshot_semantics(&mut text, &response.appshot);
+    }
 
     let mut content = vec![json!({"type": "text", "text": text})];
     if can_receive_images && !response.image_data_base64.is_empty() {

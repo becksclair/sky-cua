@@ -2206,6 +2206,60 @@ fn grouped_browser_observe_attaches_exact_appshot_image_and_envelope() {
 }
 
 #[test]
+fn grouped_browser_observe_for_text_only_model_omits_image_block() {
+    let service = FakeService::with_response(browser_service_response!(AppShot {
+        response: BrowserAppShotResponse {
+            appshot: browser_appshot_outcome_fixture(
+                AppShotBrowserCaptureStatus::Complete,
+                false,
+                true,
+                true,
+                vec![],
+            ),
+            // Response shaping must remain defensive even if an older service
+            // ignores include_image_data=false and returns pixels anyway.
+            image_data_base64: "aW1n".into(),
+            image_mime_type: "image/png".into(),
+        },
+    }));
+
+    let result = handle_tool_call(
+        &service,
+        &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+        &ModelSessionInfo {
+            supports_images: Some(false),
+        },
+        "browser_appshot",
+        json!({"tab_id": "tab-outcome"}),
+    )
+    .expect("text-only browser observe should dispatch");
+
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["content"].as_array().unwrap().len(), 1);
+    assert_eq!(result["content"][0]["type"], "text");
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("Model-facing browser semantic snapshot"));
+    assert!(text.contains("\"ref\":\"el-1\""));
+    assert_eq!(
+        service.take_requests(),
+        vec![ServiceRequest::Browser {
+            identity: None,
+            context: None,
+            request: BrowserRequest::ObserveAppShot {
+                target: None,
+                tab_id: "tab-outcome".into(),
+                text_limit: Some(BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT),
+                element_offset: None,
+                element_limit: None,
+                element_query: None,
+                capture_timeout_ms: None,
+                include_image_data: false,
+            },
+        }]
+    );
+}
+
+#[test]
 fn grouped_browser_observe_marks_empty_capture_as_error() {
     let service = FakeService::with_response(browser_service_response!(AppShot {
         response: BrowserAppShotResponse {

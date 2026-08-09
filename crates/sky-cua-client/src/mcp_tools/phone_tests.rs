@@ -8,15 +8,17 @@ use std::collections::VecDeque;
 
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
-    CoordinateSpace, DiagnosticEntry, PhoneActionResponse, PhoneAppInfo, PhoneAppInstallMode,
-    PhoneAppResponse, PhoneAppResponseKind, PhoneBackendCapabilities, PhoneBackendKind,
-    PhoneCallerProvenance, PhoneCapabilityProfile, PhoneCapabilityRefreshState,
-    PhoneCompanionCapabilities, PhoneConnectionIdentity, PhoneConnectionKind,
-    PhoneCoordinateMapping, PhoneImage, PhoneListDevicesResponse, PhoneMcpClientInfo,
-    PhoneNotificationsResponse, PhoneObserveResponse, PhonePairWirelessRequest, PhoneRequest,
-    PhoneRequestContext, PhoneResponse, PhoneScrcpyCapabilities, PhoneScreenshotResponse,
-    PhoneSession, PhoneStatusReport, PhoneTargetDeviceKind, PixelSize, RectF, ServiceRequest,
-    ServiceResponse,
+    AppShotActionSnapshot, AppShotCapture, AppShotConsistency, AppShotCoverage, AppShotEnvelope,
+    AppShotTrigger, ContentPersistence, ContentRef, ContentSource, CoordinateSpace,
+    DiagnosticEntry, PhoneAccessibilityNode, PhoneAccessibilityTreeResponse, PhoneActionResponse,
+    PhoneAppInfo, PhoneAppInstallMode, PhoneAppResponse, PhoneAppResponseKind,
+    PhoneBackendCapabilities, PhoneBackendKind, PhoneCallerProvenance, PhoneCapabilityProfile,
+    PhoneCapabilityRefreshState, PhoneCompanionCapabilities, PhoneConnectionIdentity,
+    PhoneConnectionKind, PhoneCoordinateMapping, PhoneImage, PhoneListDevicesResponse,
+    PhoneMcpClientInfo, PhoneNotificationsResponse, PhoneObserveResponse, PhonePairWirelessRequest,
+    PhoneRequest, PhoneRequestContext, PhoneResponse, PhoneScrcpyCapabilities,
+    PhoneScreenshotResponse, PhoneSession, PhoneStatusReport, PhoneTargetDeviceKind, PixelSize,
+    RectF, ServiceRequest, ServiceResponse,
 };
 
 use crate::heuristics::HeuristicsRegistry;
@@ -896,6 +898,131 @@ fn phone_observe_adb_fallback_after_companion_failure_is_success() {
 }
 
 #[test]
+fn phone_observe_for_text_only_model_omits_image_block_and_base64() {
+    let mut response = observe_response(PhoneBackendKind::Adb, vec![]);
+    response.appshot = Some(Box::new(phone_appshot()));
+    response.inline_image = Some(PhoneImage {
+        mime_type: "image/png".to_string(),
+        data_base64: "aGVsbG8=".to_string(),
+        width: Some(1080),
+        height: Some(2400),
+    });
+    let service = FakeService::with_response(phone_service_response!(Observe(response)));
+
+    let result = call(
+        &service,
+        &text_only_model(),
+        "phone_observe",
+        json!({"session_id": "sess-1"}),
+    );
+
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["content"].as_array().expect("content").len(), 1);
+    assert_eq!(result["content"][0]["type"], "text");
+    let text = result["content"][0]["text"].as_str().expect("text");
+    assert!(text.contains("Model-facing phone accessibility projection"));
+    assert!(text.contains("\"text\":\"Continue\""));
+    assert!(
+        result["structuredContent"]["inline_image"]
+            .as_object()
+            .expect("inline_image object")
+            .get("data_base64")
+            .is_none(),
+        "base64 must not escape through structuredContent"
+    );
+
+    match &service.take_requests()[0] {
+        ServiceRequest::Phone {
+            request: PhoneRequest::Observe(request),
+            ..
+        } => assert!(
+            !request.include_image_data,
+            "text-only model must not request observe image data"
+        ),
+        other => panic!("expected observe request, got {other:?}"),
+    }
+}
+
+#[test]
+fn phone_accessibility_tree_includes_nodes_in_model_facing_text() {
+    let response = PhoneAccessibilityTreeResponse {
+        session_id: "sess-1".into(),
+        serial: "ABC".into(),
+        backend: PhoneBackendKind::Companion,
+        package_name: Some("com.example".into()),
+        activity: Some("MainActivity".into()),
+        nodes: vec![PhoneAccessibilityNode {
+            node_index: 0,
+            parent_index: None,
+            class_name: Some("android.widget.Button".into()),
+            package_name: Some("com.example".into()),
+            text: Some("Continue".into()),
+            content_description: None,
+            bounds: None,
+            clickable: true,
+            focusable: true,
+            enabled: true,
+            redacted: false,
+        }],
+        truncated: false,
+        redacted: false,
+        diagnostics: Vec::new(),
+    };
+    let service = FakeService::with_response(phone_service_response!(AccessibilityTree(response)));
+    let result = call(
+        &service,
+        &text_only_model(),
+        "phone_accessibility_tree",
+        json!({"session_id": "sess-1"}),
+    );
+
+    let text = result["content"][0]["text"].as_str().expect("text");
+    assert!(text.contains("Model-facing phone accessibility tree"));
+    assert!(text.contains("\"text\":\"Continue\""));
+    assert!(text.contains("\"clickable\":true"));
+}
+
+#[test]
+fn phone_observe_for_image_model_attaches_image_block_and_strips_base64() {
+    let mut response = observe_response(PhoneBackendKind::Adb, vec![]);
+    response.inline_image = Some(PhoneImage {
+        mime_type: "image/png".to_string(),
+        data_base64: "aGVsbG8=".to_string(),
+        width: Some(1080),
+        height: Some(2400),
+    });
+    let service = FakeService::with_response(phone_service_response!(Observe(response)));
+
+    let result = call(
+        &service,
+        &image_model(),
+        "phone_observe",
+        json!({"session_id": "sess-1"}),
+    );
+
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["content"][1]["type"], "image");
+    assert_eq!(result["content"][1]["data"], "aGVsbG8=");
+    assert_eq!(result["content"][1]["mimeType"], "image/png");
+    assert!(
+        result["structuredContent"]["inline_image"]
+            .as_object()
+            .expect("inline_image object")
+            .get("data_base64")
+            .is_none(),
+        "base64 must travel only in the image content block"
+    );
+
+    match &service.take_requests()[0] {
+        ServiceRequest::Phone {
+            request: PhoneRequest::Observe(request),
+            ..
+        } => assert!(request.include_image_data),
+        other => panic!("expected observe request, got {other:?}"),
+    }
+}
+
+#[test]
 fn phone_notification_op_failure_with_no_backend_is_mcp_error() {
     // A notification operation that never reached a backend (backend = None,
     // e.g. companion required/unavailable or an op rejection) did not happen and
@@ -1180,6 +1307,62 @@ fn observe_response(
         available_actions: Vec::new(),
         unavailable_actions: Vec::new(),
         diagnostics,
+    }
+}
+
+fn phone_appshot() -> AppShotEnvelope {
+    let content_ref = ContentRef {
+        content_id: "content-1".into(),
+        device_id: Some("device-1".into()),
+        link_epoch: Some(1),
+        mime_type: "application/json".into(),
+        filename: None,
+        size_bytes: 1,
+        sha256: "00".repeat(32),
+        source: ContentSource::HostPrivateArtifact,
+        expires_at_ms: Some(1_000),
+        persistence: ContentPersistence::Temporary,
+    };
+    AppShotEnvelope {
+        appshot_id: "appshot-1".into(),
+        trigger: AppShotTrigger::Observe,
+        captured_at: chrono::Utc::now(),
+        consistency: AppShotConsistency::Stable,
+        capture: AppShotCapture::Phone {
+            device_id: "device-1".into(),
+            link_epoch: 1,
+            package_name: Some("com.example".into()),
+            activity_name: Some("MainActivity".into()),
+            display_id: 0,
+            window_ids: vec![1],
+            semantic_projection: json!({
+                "nodes": [{
+                    "node_index": 0,
+                    "class_name": "android.widget.Button",
+                    "text": "Continue",
+                    "clickable": true
+                }]
+            }),
+            event_sequence_before: 1,
+            event_sequence_after: 1,
+            full_tree_artifact: content_ref.clone(),
+        },
+        image: content_ref,
+        action_snapshot: AppShotActionSnapshot {
+            snapshot_id: "snapshot-1".into(),
+            session_id: Some("sess-1".into()),
+            subject_generation: Some(1),
+        },
+        coverage: AppShotCoverage {
+            pixels_complete: true,
+            semantics_complete: true,
+            secure_regions_redacted: false,
+            projection_truncated: false,
+            total_semantic_nodes: Some(1),
+            projected_semantic_nodes: Some(1),
+        },
+        capability_profile_id: "profile-1".into(),
+        diagnostics: Vec::new(),
     }
 }
 

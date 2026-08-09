@@ -17,6 +17,7 @@ use crate::output_shapes::{
     summary_snapshot_with_element_selection, text_app_state_element_selection,
 };
 
+use super::semantic_text::append_appshot_semantics;
 use super::{
     McpService, ScreenshotDelivery, effective_capture_screen, enrich_snapshot,
     inline_screenshot_block, invalid_request_tool_error, parse_app_selector,
@@ -164,35 +165,44 @@ pub(super) fn handle_desktop_observe_appshot(
                 anyhow!("desktop AppShot response omitted its canonical envelope")
             })?;
             project_desktop_appshot(&mut appshot, &element_options);
-            let structured_content = serde_json::to_value(&appshot)?;
-            let mut content = vec![json!({
-                "type": "text",
-                "text": format!(
-                    "Desktop AppShot {} for window {}; consistency={:?}",
-                    appshot.appshot_id,
-                    desktop_window_id(&appshot).unwrap_or("unknown"),
-                    appshot.consistency
-                )
-            })];
+            let mut text = format!(
+                "Desktop AppShot {} for window {}; consistency={:?}",
+                appshot.appshot_id,
+                desktop_window_id(&appshot).unwrap_or("unknown"),
+                appshot.consistency
+            );
+            if !model.can_receive_images() {
+                append_appshot_semantics(&mut text, &appshot);
+            }
+            let mut image_content = None;
             if model.can_receive_images() {
                 match std::fs::read(&result.image.path) {
                     Ok(bytes) => {
                         use base64::Engine as _;
-                        content.push(json!({
+                        image_content = Some(json!({
                             "type": "image",
                             "data": base64::engine::general_purpose::STANDARD.encode(bytes),
                             "mimeType": result.image.mime_type,
                         }));
                     }
                     Err(error) => {
+                        let message = format!("{}: {error}", result.image.path);
                         appshot.diagnostics.push(DiagnosticEntry {
                             code: "AppShotImageAttachmentFailed".to_string(),
-                            message: format!("{}: {error}", result.image.path),
+                            message: message.clone(),
                             details: None,
                         });
+                        text.push_str("\nImage attachment failed: ");
+                        text.push_str(&message);
                     }
                 }
             }
+            let structured_content = serde_json::to_value(&appshot)?;
+            let mut content = vec![json!({
+                "type": "text",
+                "text": text
+            })];
+            content.extend(image_content);
             Ok(json!({
                 "content": content,
                 "structuredContent": structured_content,

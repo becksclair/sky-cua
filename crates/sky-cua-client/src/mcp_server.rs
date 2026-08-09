@@ -65,6 +65,7 @@ impl Default for ServerSession {
 struct McpSessionConfig {
     _process: crate::mcp_tools::McpProcessConfig,
     model: ModelSessionInfo,
+    initialize_declared_image_capability: bool,
     registry: crate::mcp_tools::McpToolRegistry,
     browser_provenance: BrowserCallerProvenance,
 }
@@ -133,7 +134,7 @@ pub(crate) struct ModelSessionInfo {
 
 impl ModelSessionInfo {
     pub(crate) fn can_receive_images(&self) -> bool {
-        self.supports_images.unwrap_or(true)
+        self.supports_images == Some(true)
     }
 }
 
@@ -333,6 +334,8 @@ fn handle_message(
             let process =
                 crate::mcp_tools::mcp_process_config_from_env().map_err(anyhow::Error::msg)?;
             let model = parse_model_session_info(&body, process.model_supports_images_override);
+            let initialize_declared_image_capability =
+                model_image_capability_from_initialize(&body).is_some();
             let registry = crate::mcp_tools::build_tool_registry(&process, &model);
             let declared_provenance = std::env::var(MCP_CALLER_PROVENANCE_ENV)
                 .ok()
@@ -345,6 +348,7 @@ fn handle_message(
             session.config = Some(Arc::new(McpSessionConfig {
                 _process: process,
                 model,
+                initialize_declared_image_capability,
                 registry,
                 browser_provenance,
             }));
@@ -392,6 +396,7 @@ fn handle_message(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
+            let call_model = model_session_info_for_tool_call(&body, config);
             let phone_context = (config.registry.contains(tool_name)
                 && config
                     .registry
@@ -404,7 +409,7 @@ fn handle_message(
                     crate::mcp_tools::handle_session_tool_call_with_browser_identity(
                         service,
                         heuristics,
-                        &config.model,
+                        &call_model,
                         &config.registry,
                         tool_name,
                         arguments,
@@ -416,7 +421,7 @@ fn handle_message(
                         crate::mcp_tools::handle_session_tool_call_with_browser_identity(
                             service,
                             heuristics,
-                            &config.model,
+                            &call_model,
                             &config.registry,
                             tool_name,
                             arguments,
@@ -426,7 +431,7 @@ fn handle_message(
                     None => crate::mcp_tools::handle_session_tool_call_with_browser_identity(
                         service,
                         heuristics,
-                        &config.model,
+                        &call_model,
                         &config.registry,
                         tool_name,
                         arguments,
@@ -844,8 +849,92 @@ fn not_initialized(id: Value) -> Value {
 }
 
 fn parse_model_session_info(body: &Value, env_override: Option<bool>) -> ModelSessionInfo {
-    let supports_images = env_override.or_else(|| model_supports_images_from_initialize(body));
+    let supports_images = model_image_capability_from_initialize(body)
+        .or(env_override)
+        .or_else(|| model_name_from_initialize(body).and_then(infer_image_support_from_model_name));
     ModelSessionInfo { supports_images }
+}
+
+fn model_session_info_for_tool_call(body: &Value, config: &McpSessionConfig) -> ModelSessionInfo {
+    ModelSessionInfo {
+        supports_images: model_image_capability_for_tool_call(
+            body,
+            config.model.supports_images,
+            config.initialize_declared_image_capability,
+            config._process.model_supports_images_override,
+        ),
+    }
+}
+
+fn model_image_capability_for_tool_call(
+    body: &Value,
+    initialized_capability: Option<bool>,
+    initialize_declared_image_capability: bool,
+    env_override: Option<bool>,
+) -> Option<bool> {
+    let turn_metadata = codex_turn_metadata(body);
+    let turn_capability = turn_metadata
+        .as_ref()
+        .and_then(model_image_capability_from_turn_metadata);
+    let turn_model = turn_metadata
+        .as_ref()
+        .and_then(model_name_from_turn_metadata);
+    let initialized_explicit = initialize_declared_image_capability
+        .then_some(initialized_capability)
+        .flatten();
+    turn_capability
+        .or(initialized_explicit)
+        .or(env_override)
+        .or_else(|| turn_model.and_then(infer_image_support_from_model_name))
+        .or(initialized_capability)
+}
+
+fn codex_turn_metadata(body: &Value) -> Option<Value> {
+    match body.pointer("/params/_meta/x-codex-turn-metadata")? {
+        Value::Object(map) => Some(Value::Object(map.clone())),
+        Value::String(raw) => serde_json::from_str(raw).ok(),
+        _ => None,
+    }
+}
+
+fn model_name_from_turn_metadata(metadata: &Value) -> Option<String> {
+    [
+        "/model",
+        "/model/name",
+        "/model/id",
+        "/model_id",
+        "/modelId",
+    ]
+    .into_iter()
+    .find_map(|pointer| {
+        metadata
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn model_image_capability_from_turn_metadata(metadata: &Value) -> Option<bool> {
+    [
+        "/modelCapabilities/supportsImages",
+        "/modelCapabilities/images",
+        "/modelCapabilities/imageInput",
+        "/modelCapabilities/vision",
+        "/model_capabilities/supports_images",
+        "/model_capabilities/images",
+        "/model_capabilities/image_input",
+        "/model_capabilities/vision",
+        "/model/capabilities/supportsImages",
+        "/model/capabilities/images",
+        "/model/capabilities/imageInput",
+        "/model/capabilities/vision",
+        "/model/supportsImages",
+        "/model/supports_images",
+    ]
+    .into_iter()
+    .find_map(|pointer| metadata.pointer(pointer).and_then(parse_bool_like))
 }
 
 fn model_name_from_initialize(body: &Value) -> Option<String> {
@@ -866,7 +955,7 @@ fn model_name_from_initialize(body: &Value) -> Option<String> {
     })
 }
 
-fn model_supports_images_from_initialize(body: &Value) -> Option<bool> {
+fn model_image_capability_from_initialize(body: &Value) -> Option<bool> {
     [
         "/params/modelCapabilities/supportsImages",
         "/params/modelCapabilities/images",
@@ -885,7 +974,6 @@ fn model_supports_images_from_initialize(body: &Value) -> Option<bool> {
     ]
     .into_iter()
     .find_map(|pointer| body.pointer(pointer).and_then(parse_bool_like))
-    .or_else(|| model_name_from_initialize(body).and_then(infer_image_support_from_model_name))
 }
 
 fn parse_bool_like(value: &Value) -> Option<bool> {
@@ -919,10 +1007,7 @@ fn parse_bool_like(value: &Value) -> Option<bool> {
 
 fn infer_image_support_from_model_name(name: String) -> Option<bool> {
     let normalized = name.to_ascii_lowercase();
-    if normalized.contains("codex-spark") {
-        return Some(false);
-    }
-    if normalized.contains("gpt-5.4") || normalized.contains("gpt-5.5") {
+    if normalized.contains("gpt-5.6") {
         return Some(true);
     }
     None
@@ -1125,10 +1210,10 @@ mod tests {
         ServerSession, browser_call_context, browser_caller_provenance,
         browser_session_identity_from_tool_call, cancellation_request,
         current_browser_request_context, disconnect_request_once, is_browser_surface_tool_call,
-        is_phone_surface_tool_call, json_rpc_id_fingerprint, normalize_declared_caller,
-        parse_model_session_info, phone_call_context, phone_session_and_turn_from_tool_call,
-        prepare_browser_call, read_message, read_message_with_limit, with_browser_request_context,
-        write_message,
+        is_phone_surface_tool_call, json_rpc_id_fingerprint, model_image_capability_for_tool_call,
+        normalize_declared_caller, parse_model_session_info, phone_call_context,
+        phone_session_and_turn_from_tool_call, prepare_browser_call, read_message,
+        read_message_with_limit, with_browser_request_context, write_message,
     };
 
     #[test]
@@ -1531,6 +1616,7 @@ mod tests {
             config: Some(Arc::new(McpSessionConfig {
                 _process: process,
                 model,
+                initialize_declared_image_capability: false,
                 registry,
                 browser_provenance: provenance,
             })),
@@ -1681,7 +1767,7 @@ mod tests {
             &json!({
                 "method": "initialize",
                 "params": {
-                    "model": "gpt-5.3-codex-spark",
+                    "model": "gpt-5.6-luna",
                     "modelCapabilities": {
                         "images": false
                     }
@@ -1702,6 +1788,131 @@ mod tests {
             observe["inputSchema"]["properties"]
                 .get("capture_screen")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn initialize_model_capability_wins_over_process_fallback() {
+        for (capability, fallback) in [(false, true), (true, false)] {
+            let session = parse_model_session_info(
+                &json!({
+                    "method": "initialize",
+                    "params": {
+                        "model": "gpt-5.6-luna",
+                        "modelCapabilities": {
+                            "images": capability
+                        }
+                    }
+                }),
+                Some(fallback),
+            );
+            assert_eq!(session.supports_images, Some(capability));
+            assert_eq!(session.can_receive_images(), capability);
+        }
+    }
+
+    #[test]
+    fn process_image_capability_is_only_a_missing_metadata_fallback() {
+        for fallback in [false, true] {
+            let session = parse_model_session_info(
+                &json!({
+                    "method": "initialize",
+                    "params": {
+                        "model": "unknown/model"
+                    }
+                }),
+                Some(fallback),
+            );
+            assert_eq!(session.supports_images, Some(fallback));
+            assert_eq!(session.can_receive_images(), fallback);
+        }
+    }
+
+    #[test]
+    fn unknown_models_fail_closed_for_image_delivery() {
+        for model in [
+            Value::Null,
+            Value::String("opencode/deepseek-v4-flash-free".to_string()),
+        ] {
+            let session = parse_model_session_info(
+                &json!({
+                    "method": "initialize",
+                    "params": {
+                        "model": model
+                    }
+                }),
+                None,
+            );
+            assert_eq!(session.supports_images, None);
+            assert!(!session.can_receive_images());
+        }
+    }
+
+    #[test]
+    fn codex_turn_model_inference_and_unknown_model_fail_closed() {
+        let tool_call = json!({
+            "method": "tools/call",
+            "params": {
+                "_meta": {
+                    "x-codex-turn-metadata": {
+                        "model": "gpt-5.6-luna"
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            model_image_capability_for_tool_call(&tool_call, None, false, None),
+            Some(true)
+        );
+
+        let text_only_call = json!({
+            "params": {
+                "_meta": {
+                    "x-codex-turn-metadata": serde_json::to_string(&json!({
+                        "model": "opencode/deepseek-v4-flash-free"
+                    })).unwrap()
+                }
+            }
+        });
+        assert_eq!(
+            model_image_capability_for_tool_call(&text_only_call, None, false, None),
+            None
+        );
+    }
+
+    #[test]
+    fn explicit_capabilities_and_process_override_precede_turn_model_inference() {
+        let tool_call = json!({
+            "params": {
+                "_meta": {
+                    "x-codex-turn-metadata": {
+                        "model": "gpt-5.6-luna"
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            model_image_capability_for_tool_call(&tool_call, Some(false), true, None),
+            Some(false)
+        );
+        assert_eq!(
+            model_image_capability_for_tool_call(&tool_call, None, false, Some(false)),
+            Some(false)
+        );
+
+        let explicit_turn = json!({
+            "params": {
+                "_meta": {
+                    "x-codex-turn-metadata": {
+                        "model": "opencode/deepseek-v4-flash-free",
+                        "modelCapabilities": {"supportsImages": true}
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            model_image_capability_for_tool_call(&explicit_turn, Some(false), true, Some(false)),
+            Some(true)
         );
     }
 

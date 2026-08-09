@@ -21,6 +21,8 @@ use sky_cua_platform::model::{
 
 use crate::output_shapes::summary_text_field;
 
+use super::super::semantic_text::{append_appshot_semantics, append_semantic_value};
+
 /// Diagnostic codes that mark a phone tool result as an MCP error. These are
 /// honest "could not do it" states, not informational context, so they flip
 /// `isError`. The families covered are, in order:
@@ -318,7 +320,10 @@ pub(crate) fn phone_observe_result(
     // back to ADB still produced a usable observation, so its diagnostic is
     // informational and must not flip `isError`.
     let is_error = matches!(response.backend, PhoneBackendKind::None);
-    let text = phone_observe_summary(&response);
+    let mut text = phone_observe_summary(&response);
+    if !can_receive_images && let Some(appshot) = response.appshot.as_deref() {
+        append_appshot_semantics(&mut text, appshot);
+    }
     image_carrying_result(
         text,
         response.inline_image.clone(),
@@ -549,7 +554,15 @@ pub(crate) fn phone_accessibility_tree_result(
     response: PhoneAccessibilityTreeResponse,
 ) -> Result<Value> {
     let is_error = response.nodes.is_empty() && phone_diagnostics_are_error(&response.diagnostics);
-    let text = phone_accessibility_tree_summary(&response);
+    let mut text = phone_accessibility_tree_summary(&response);
+    let projection = json!({
+        "package_name": &response.package_name,
+        "activity": &response.activity,
+        "nodes": &response.nodes,
+        "truncated": response.truncated,
+        "redacted": response.redacted,
+    });
+    append_semantic_value(&mut text, "phone accessibility tree", &projection);
     Ok(json!({
         "content": [{"type": "text", "text": text}],
         "structuredContent": response,

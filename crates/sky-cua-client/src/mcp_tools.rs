@@ -22,6 +22,7 @@ mod app_state;
 mod browser;
 mod definitions;
 mod phone;
+mod semantic_text;
 
 #[cfg(test)]
 use app_state::parse_app_state_detail;
@@ -1446,12 +1447,15 @@ mod tests {
     use serde_json::{Value, json};
     use sky_cua_platform::model::{
         AccessibilitySetupReport, ActionName, ActionOutcome, ActionRequest, AgentCursorPoint,
-        AgentCursorState, AppInfo, AppStateSnapshot, BrowserEvalResponse, BrowserRequest,
-        BrowserResponse, BrowserTargetKind, CaptureBackendKind, CaptureInfo, CaptureScope,
-        CaptureScreenMode, CoordinateSpace, DiagnosticEntry, DoctorCheck,
+        AgentCursorState, AppInfo, AppShotAccessibilityStatus, AppShotActionSnapshot,
+        AppShotApplication, AppShotCapture, AppShotCaptureResult, AppShotConsistency,
+        AppShotCoverage, AppShotEnvelope, AppShotImage, AppShotTrigger, AppStateSnapshot,
+        BrowserEvalResponse, BrowserRequest, BrowserResponse, BrowserTargetKind,
+        CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode, ContentPersistence,
+        ContentRef, ContentSource, CoordinateSpace, DiagnosticEntry, DoctorCheck,
         DoctorDisplayTopologyReport, DoctorReadiness, DoctorReport, ElementNode,
         ElementNumericValueReadback, ElementTextReadback, EnvironmentInfo, FocusedApp,
-        InputBackendKind, PhoneAppInstallMode, PhoneEnrollmentPayload, PhoneRequest,
+        InputBackendKind, PhoneAppInstallMode, PhoneEnrollmentPayload, PhoneRequest, PixelSize,
         PortalCapabilities, RectF, ScrollDirection, SemanticBackendKind, ServiceRequest,
         ServiceResponse, SessionKind, SessionPresenceAction, SessionPresenceIntent,
         SessionPresenceStatus, SetupCommandReport, ToolAvailability, ToolCapabilities,
@@ -2310,7 +2314,9 @@ mod tests {
     #[test]
     fn grouped_schema_allows_parser_tolerated_optional_sentinels() {
         let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
-        let model = ModelSessionInfo::default();
+        let model = ModelSessionInfo {
+            supports_images: Some(true),
+        };
         let registry = build_tool_registry(&process_config(false), &model);
 
         let cases = [
@@ -4433,6 +4439,162 @@ mod tests {
             model_image_bytes: None,
             model_image_encode_ms: None,
         }
+    }
+
+    fn desktop_appshot_response(path: &std::path::Path) -> ServiceResponse {
+        let image_ref = ContentRef {
+            content_id: "content-1".into(),
+            device_id: None,
+            link_epoch: None,
+            mime_type: "image/png".into(),
+            filename: Some("appshot.png".into()),
+            size_bytes: 3,
+            sha256: "00".repeat(32),
+            source: ContentSource::HostPrivateArtifact,
+            expires_at_ms: Some(1_000),
+            persistence: ContentPersistence::Temporary,
+        };
+        ServiceResponse::AppShotCapture {
+            result: Box::new(AppShotCaptureResult {
+                request_id: "request-1".into(),
+                application: AppShotApplication {
+                    name: "Fixture".into(),
+                    app_id: Some("fixture.app".into()),
+                    desktop_file_id: None,
+                    pid: Some(42),
+                    window_id: Some("window-1".into()),
+                    window_title: Some("Fixture".into()),
+                },
+                image: AppShotImage {
+                    path: path.display().to_string(),
+                    mime_type: "image/png".into(),
+                    size_bytes: 3,
+                    dimensions: PixelSize {
+                        width: 1,
+                        height: 1,
+                    },
+                },
+                ax_status: AppShotAccessibilityStatus::Available,
+                ax_text: Some("Fixture".into()),
+                capture_scope: CaptureScope::Window,
+                capture_backend: CaptureBackendKind::PortalPipeWire,
+                image_backend: Some(CaptureBackendKind::PortalPipeWire),
+                display: None,
+                diagnostics: Vec::new(),
+                appshot: Some(Box::new(AppShotEnvelope {
+                    appshot_id: "appshot-1".into(),
+                    trigger: AppShotTrigger::Observe,
+                    captured_at: Utc::now(),
+                    consistency: AppShotConsistency::Stable,
+                    capture: AppShotCapture::Desktop {
+                        app_id: "fixture.app".into(),
+                        window_id: "window-1".into(),
+                        title: Some("Fixture".into()),
+                        bounds: RectF {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 1.0,
+                            height: 1.0,
+                            space: CoordinateSpace::DesktopLogical,
+                        },
+                        semantic_projection: json!({
+                            "elements": [{
+                                "element_index": 0,
+                                "role": "button",
+                                "name": "Continue",
+                                "bounds": {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}
+                            }]
+                        }),
+                    },
+                    image: image_ref,
+                    action_snapshot: AppShotActionSnapshot {
+                        snapshot_id: "snapshot-1".into(),
+                        session_id: None,
+                        subject_generation: None,
+                    },
+                    coverage: AppShotCoverage {
+                        pixels_complete: true,
+                        semantics_complete: true,
+                        secure_regions_redacted: false,
+                        projection_truncated: false,
+                        total_semantic_nodes: Some(0),
+                        projected_semantic_nodes: Some(0),
+                    },
+                    capability_profile_id: "capability-1".into(),
+                    diagnostics: Vec::new(),
+                })),
+            }),
+        }
+    }
+
+    #[test]
+    fn desktop_observe_only_attaches_appshot_for_supported_models() {
+        let image_file = std::env::temp_dir().join(format!(
+            "sky-cua-desktop-appshot-delivery-{}.png",
+            std::process::id()
+        ));
+        std::fs::write(&image_file, b"png").unwrap();
+
+        for (supports_images, expected_content_len) in
+            [(None, 1), (Some(false), 1), (Some(true), 2)]
+        {
+            let service = FakeService::with_response(desktop_appshot_response(&image_file));
+            let result = handle_tool_call(
+                &service,
+                &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+                &ModelSessionInfo { supports_images },
+                "desktop_observe_appshot",
+                json!({}),
+            )
+            .unwrap();
+
+            let content = result["content"].as_array().expect("content array");
+            assert_eq!(content.len(), expected_content_len);
+            assert_eq!(content[0]["type"], "text");
+            assert_eq!(result["structuredContent"]["appshot_id"], "appshot-1");
+            if supports_images == Some(true) {
+                assert_eq!(content[1]["type"], "image");
+            } else {
+                let text = content[0]["text"].as_str().expect("text content");
+                assert!(text.contains("Model-facing desktop accessibility projection"));
+                assert!(text.contains("\"name\":\"Continue\""));
+            }
+        }
+
+        std::fs::remove_file(image_file).unwrap();
+    }
+
+    #[test]
+    fn desktop_observe_reports_image_attachment_failure() {
+        let missing_image = std::env::temp_dir().join(format!(
+            "sky-cua-missing-desktop-appshot-{}-{}.png",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let service = FakeService::with_response(desktop_appshot_response(&missing_image));
+        let result = handle_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &ModelSessionInfo {
+                supports_images: Some(true),
+            },
+            "desktop_observe_appshot",
+            json!({}),
+        )
+        .unwrap();
+
+        let content = result["content"].as_array().expect("content array");
+        assert_eq!(content.len(), 1);
+        assert!(
+            content[0]["text"]
+                .as_str()
+                .expect("text content")
+                .contains("Image attachment failed")
+        );
+        assert_eq!(
+            result["structuredContent"]["diagnostics"][0]["code"],
+            "AppShotImageAttachmentFailed"
+        );
     }
 
     #[test]

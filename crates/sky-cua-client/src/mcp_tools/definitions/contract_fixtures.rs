@@ -119,7 +119,7 @@ fn largest_schema_bytes(tools: &Value) -> usize {
 }
 
 pub(super) fn generated_tool_contract() -> Value {
-    let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
+    let registry = build_tool_registry(&process_config(true), &model_with_image_capability(true));
     let advertised = registry.tools.as_array().expect("tools");
     let tools: Vec<Value> = grouped_contract_tools()
         .into_iter()

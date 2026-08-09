@@ -70,9 +70,16 @@ The plugin lane loads skills from the plugin's `skills/` directory and starts
 the MCP server from the plugin root. The installer lane copies platform
 binaries to the install target, then registers the server at user scope so
 every project sees the `computer-use` tools. Both lanes run the same
-`sky-cua-client mcp` entrypoint and the same long-lived service; the runtime
-adapts to missing model-capability metadata by assuming image support, which
-matches Claude Code's vision-capable models.
+`sky-cua-client mcp` entrypoint and the same long-lived service. Image content
+is attached only when the MCP initialize request explicitly reports image
+support, the configured `SKY_CUA_MODEL_SUPPORTS_IMAGES` fallback says true, or
+the model identity is in the runtime's conservative known-capable set. Missing
+or unknown capability metadata fails closed and keeps observation output
+text/structured-only. For text-only observation sessions, the MCP text includes
+a compact canonical semantic projection bounded to 32 KiB so hosts that do not
+put `structuredContent` in model context still expose actionable accessibility
+state; the complete projection remains in structured content and the AppShot
+artifact.
 
 ## Source paths
 

@@ -1278,7 +1278,12 @@ fn tool_contract_fixture_matches_generated_registry() {
         .iter()
         .map(|tool| tool["name"].as_str().expect("contract tool name"))
         .collect();
-    let registry = build_tool_registry(&process_config(true), &ModelSessionInfo::default());
+    let registry = build_tool_registry(
+        &process_config(true),
+        &ModelSessionInfo {
+            supports_images: Some(true),
+        },
+    );
     let advertised_names: Vec<&str> = registry
         .tools
         .as_array()
