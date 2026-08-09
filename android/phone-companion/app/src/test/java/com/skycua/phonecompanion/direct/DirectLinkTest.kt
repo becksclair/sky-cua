@@ -106,14 +106,25 @@ class DirectLinkTest {
         val controller = DirectLinkController(FakeFactory(socket), store).also { it.configure("ws://127.0.0.1:1"); it.connect() }
         socket.listener!!.onOpen()
         assertTrue(socket.sentText.last().contains(deviceId))
+        val oldNonce = Regex("\\\"client_nonce\\\":\\\"([^\\\"]+)\\\"").find(socket.sentText.last())!!.groupValues[1]
+        val oldProof = AuthCodec.prove(secret, PHONE_CONTROL_PROTOCOL, deviceId, serverNonce, oldNonce, "7", "saga")
+        socket.listener!!.onText("{\"type\":\"auth_challenge\",\"protocol\":\"phone-control.v2\",\"server_nonce\":\"$serverNonce\",\"link_epoch\":\"7\",\"server_proof\":\"$oldProof\"}")
+        socket.listener!!.onText("{\"type\":\"auth_ok\",\"protocol\":\"phone-control.v2\",\"device_id\":\"$deviceId\",\"link_epoch\":\"7\"}")
+        assertEquals("7", controller.snapshot().linkEpoch)
         val replacement = "00000000-0000-4000-8000-000000000002"
+        val replacementSecret = ByteArray(32) { 2 }
         DirectLinkReplacementNotifier.register {
             controller.reconnectForCredentialReplacement("ws://127.0.0.1:2")
         }
-        store.saveEnrollment(DeviceCredential(replacement, ByteArray(32) { 2 }), "ws://127.0.0.1:2")
+        store.saveEnrollment(DeviceCredential(replacement, replacementSecret), "ws://127.0.0.1:2")
         assertTrue(socket.closed)
         socket.listener!!.onOpen()
         assertTrue(socket.sentText.last().contains(replacement))
+        assertEquals("0", controller.snapshot().linkEpoch)
+        val replacementNonce = Regex("\\\"client_nonce\\\":\\\"([^\\\"]+)\\\"").find(socket.sentText.last())!!.groupValues[1]
+        val replacementProof = AuthCodec.prove(replacementSecret, PHONE_CONTROL_PROTOCOL, replacement, serverNonce, replacementNonce, "1", "saga")
+        socket.listener!!.onText("{\"type\":\"auth_challenge\",\"protocol\":\"phone-control.v2\",\"server_nonce\":\"$serverNonce\",\"link_epoch\":\"1\",\"server_proof\":\"$replacementProof\"}")
+        assertTrue(socket.sentText.last().contains("\"link_epoch\":\"1\""))
         DirectLinkReplacementNotifier.register(null)
     }
 

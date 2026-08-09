@@ -428,6 +428,10 @@ class DirectLinkController(
     /** Replaces the authenticated link after a durable credential/endpoint commit. */
     @Synchronized internal fun reconnectForCredentialReplacement(endpoint: String?) {
         close()
+        epoch = credentials.lastAcceptedEpoch()
+        retryAttempt = 0
+        nextRetryAtMs = null
+        pendingAck = false
         endpoint?.let { configure(it); connect() }
     }
 

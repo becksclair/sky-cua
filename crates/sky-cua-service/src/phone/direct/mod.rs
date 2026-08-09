@@ -569,6 +569,7 @@ impl DirectRuntimeHandle {
             .insert(device_id.clone(), link.clone());
         let mut control_burst = 0u8;
         let mut inbound_burst = 0u8;
+        let mut terminal_error = None;
         loop {
             // Cancellation wins; control is preferred, but every eight control
             // frames reserve a turn for bulk. Inbound traffic is present in
@@ -577,17 +578,57 @@ impl DirectRuntimeHandle {
                 tokio::select! {
                     biased;
                     _ = &mut cancel => break,
-                    message = socket.next(), if inbound_burst < 4 || (control_rx.is_empty() && bulk_rx.is_empty()) => { if self.handle_inbound(&link, &device_id, epoch, message).await.is_err() { break; } inbound_burst = inbound_burst.saturating_add(1); }
-                    Some(frame) = bulk_rx.recv() => { socket.send(frame.message).await.map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e))?; if let Some(sent) = frame.sent { let _ = sent.send(()); } control_burst = 0; inbound_burst = 0; }
-                    Some(message) = control_rx.recv() => { socket.send(message).await.map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e))?; control_burst = control_burst.saturating_add(1); inbound_burst = 0; }
+                    message = socket.next(), if inbound_burst < 4 || (control_rx.is_empty() && bulk_rx.is_empty()) => {
+                        if !matches!(self.handle_inbound(&link, &device_id, epoch, message).await, Ok(true)) {
+                            break;
+                        }
+                        inbound_burst = inbound_burst.saturating_add(1);
+                    }
+                    Some(frame) = bulk_rx.recv() => {
+                        if let Err(error) = socket.send(frame.message).await {
+                            terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
+                            break;
+                        }
+                        if let Some(sent) = frame.sent { let _ = sent.send(()); }
+                        control_burst = 0;
+                        inbound_burst = 0;
+                    }
+                    Some(message) = control_rx.recv() => {
+                        if let Err(error) = socket.send(message).await {
+                            terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
+                            break;
+                        }
+                        control_burst = control_burst.saturating_add(1);
+                        inbound_burst = 0;
+                    }
                 }
             } else {
                 tokio::select! {
                     biased;
                     _ = &mut cancel => break,
-                    message = socket.next(), if inbound_burst < 4 || (control_rx.is_empty() && bulk_rx.is_empty()) => { if self.handle_inbound(&link, &device_id, epoch, message).await.is_err() { break; } inbound_burst = inbound_burst.saturating_add(1); }
-                    Some(message) = control_rx.recv() => { socket.send(message).await.map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e))?; control_burst = control_burst.saturating_add(1); inbound_burst = 0; }
-                    Some(frame) = bulk_rx.recv() => { socket.send(frame.message).await.map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e))?; if let Some(sent) = frame.sent { let _ = sent.send(()); } control_burst = 0; inbound_burst = 0; }
+                    message = socket.next(), if inbound_burst < 4 || (control_rx.is_empty() && bulk_rx.is_empty()) => {
+                        if !matches!(self.handle_inbound(&link, &device_id, epoch, message).await, Ok(true)) {
+                            break;
+                        }
+                        inbound_burst = inbound_burst.saturating_add(1);
+                    }
+                    Some(message) = control_rx.recv() => {
+                        if let Err(error) = socket.send(message).await {
+                            terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
+                            break;
+                        }
+                        control_burst = control_burst.saturating_add(1);
+                        inbound_burst = 0;
+                    }
+                    Some(frame) = bulk_rx.recv() => {
+                        if let Err(error) = socket.send(frame.message).await {
+                            terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
+                            break;
+                        }
+                        if let Some(sent) = frame.sent { let _ = sent.send(()); }
+                        control_burst = 0;
+                        inbound_burst = 0;
+                    }
                 }
             }
         }
@@ -606,7 +647,10 @@ impl DirectRuntimeHandle {
         for (_, request) in pending {
             let _ = request.result.send(Err(DirectRuntimeError::Disconnected));
         }
-        Ok(())
+        match terminal_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     async fn handle_inbound(
@@ -958,11 +1002,21 @@ async fn run_accept_loop(
             _ = shutdown.changed() => if *shutdown.borrow() { children.shutdown().await; break },
             Some(_) = children.join_next() => {},
             accepted = listener.accept_websocket() => {
-                let Ok((socket, _peer)) = accepted else { continue };
+                let (socket, peer) = match accepted {
+                    Ok(connection) => connection,
+                    Err(error) => {
+                        tracing::warn!(%error, "CompanionDirect WebSocket accept failed");
+                        continue;
+                    }
+                };
                 let store = store.clone();
                 let registry = registry.clone();
                 let enrollments = enrollments.clone();
-                children.spawn(async move { let _ = accept_socket(socket, store, &registry, &enrollments).await; });
+                children.spawn(async move {
+                    if let Err(error) = accept_socket(socket, store, &registry, &enrollments).await {
+                        tracing::warn!(%peer, %error, "CompanionDirect connection rejected");
+                    }
+                });
             }
         }
     }
@@ -2780,6 +2834,42 @@ mod tests {
         assert!(decode_control_frame(&exact, "device-a", 1, now_ms()).is_ok());
         let over = vec![b'x'; PHONE_CONTROL_MAX_JSON_BYTES as usize + 1];
         assert!(decode_control_frame(&over, "device-a", 1, now_ms()).is_err());
+    }
+
+    #[tokio::test]
+    async fn live_socket_scheduler_exits_and_removes_link_on_peer_eof() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = DirectRuntimeHandle::new();
+        let server_handle = handle.clone();
+        let (_cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            server_handle
+                .serve_socket(socket, "device-a".into(), 1, cancel_rx)
+                .await
+                .unwrap();
+        });
+        let client = tokio_tungstenite::connect_async(format!("ws://{addr}"))
+            .await
+            .unwrap()
+            .0;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while handle.snapshot("device-a").is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        drop(client);
+
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("server must stop after peer EOF")
+            .unwrap();
+        assert!(handle.snapshot("device-a").is_none());
     }
 
     #[tokio::test]
