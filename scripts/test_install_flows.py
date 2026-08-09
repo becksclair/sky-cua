@@ -747,17 +747,27 @@ def test_generic_mcp_config_pins_canonical_launch_policy(
         assert name in server["env_vars"]  # type: ignore[operator]
 
 
-def test_pi_wrapper_exports_canonical_launch_policy(tmp_path: Path) -> None:
+def test_pi_wrapper_exports_canonical_launch_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     target_dir = tmp_path / "installed"
     client_path = target_dir / "bin" / "sky-cua-client"
+    monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
     policy = install_mcp_server.McpLaunchPolicy(
         browser_eval="on",
         model_supports_images="false",
     )
 
-    install_mcp_server.install_pi(target_dir, client_path, launch_policy=policy)
+    install_mcp_server.install_pi(
+        target_dir,
+        client_path,
+        pi_agent_dir=tmp_path / "pi-agent",
+        launch_policy=policy,
+    )
 
     wrapper_text = (target_dir / "pi_mcp_wrapper.sh").read_text(encoding="utf-8")
+    assert wrapper_text.startswith("#!/bin/bash\n")
+    assert "export PATH=/usr/local/bin:/usr/bin:/bin\n" in wrapper_text
     assert "SKY_CUA_MCP_TOOL_PROFILE" not in wrapper_text
     assert "export SKY_CUA_BROWSER_EVAL=on\n" in wrapper_text
     assert "export SKY_CUA_MODEL_SUPPORTS_IMAGES=false\n" in wrapper_text
@@ -1417,6 +1427,7 @@ def test_pi_install_preserves_symlinked_mcp_config(
     merged = json.loads(real_config.read_text(encoding="utf-8"))
     assert merged["mcpServers"]["context7"] == {"command": "context7"}
     assert merged["mcpServers"]["sky_cua"]["command"] == str(target_dir / "pi_mcp_wrapper.sh")
+    assert merged["mcpServers"]["sky_cua"]["args"] == []
 
 
 def test_generic_mcp_main_rejects_retired_openclaw_host(

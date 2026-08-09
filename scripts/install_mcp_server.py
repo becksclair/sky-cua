@@ -747,11 +747,15 @@ def install_pi(
     policy = launch_policy or McpLaunchPolicy()
     policy_exports = [
         f"export {name}={shlex.quote(value)}\n"
-        for name, value in {**policy.env(), **optional_mcp_runtime_env()}.items()
+        for name, value in {
+            **({"PATH": os.environ["PATH"]} if os.environ.get("PATH", "").strip() else {}),
+            **policy.env(),
+            **optional_mcp_runtime_env(),
+        }.items()
     ]
     wrapper_content = "".join(
         [
-            "#!/usr/bin/env bash\n",
+            "#!/bin/bash\n",
             f"export SKY_CUA_REPO_ROOT={shlex.quote(str(root))}\n",
             *policy_exports,
             f"export {MCP_CALLER_PROVENANCE_ENV}={PI_CALLER_PROVENANCE}\n",
@@ -764,6 +768,7 @@ def install_pi(
         "mcpServers": {
             "sky_cua": {
                 "command": str(wrapper_path),
+                "args": [],
                 "lifecycle": "lazy",
                 "directTools": True,
             }

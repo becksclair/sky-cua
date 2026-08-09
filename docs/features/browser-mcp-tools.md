@@ -186,7 +186,12 @@ Recommended agent flow:
   and common actionable element summaries with click-ready CSS-pixel bounds and
   a per-element `ref`. Pass `element_query: "update"` or an `element_offset`/`element_limit`
   window when a page contains many controls. Its MCP text summary also includes
-  these details for text-only hosts.
+  these details for text-only hosts. Because Pi and some other hosts keep
+  `structuredContent` outside model context, text-only sessions additionally
+  append the canonical browser semantic snapshot to the model-facing text as
+  compact JSON, bounded to 32 KiB. The complete projection remains available
+  in `structuredContent` and the persisted AppShot artifact when that text
+  fallback is truncated.
 - Use `browser_input`, `browser_scroll`, and `browser_move_mouse` against the
   tab returned by `browser_open` or `browser_claim_tab`. Prefer a `ref` from the
   latest `observe` when clicking or typing on an actionable control; reserve
@@ -267,10 +272,16 @@ Install outputs:
 - `scripts/install_mcp_server.py --host pi` writes `pi_mcp_wrapper.sh` and a
   copyable MCP snippet. If `~/.pi/agent` exists, it also merges the `sky_cua`
   entry into `~/.pi/agent/mcp.json` and copies sky-cua skills into
-  `~/.pi/agent/skills` without replacing unrelated Pi MCP servers.
+  `~/.pi/agent/skills` without replacing unrelated Pi MCP servers. The wrapper
+  uses an absolute `/bin/bash` interpreter so Pi's reduced MCP subprocess PATH
+  cannot break startup, and the Pi override pins `args: []` so arguments from a
+  lower-precedence shared `sky_cua` config cannot leak into the wrapper call.
 - `python3 install.py install` supplies OpenClaw through native Codex
-  compatibility plugins, registers global `node_repl`, and enables no-prompt
-  full-auto Codex policy. The former `openclaw_mcp.json` / standalone
+  compatibility plugins, registers global `node_repl`, projects an existing
+  Pi installation's fixed-root MCP wrapper/config, and enables no-prompt
+  full-auto Codex policy. The Pi wrapper captures the installer's `PATH` because
+  Pi's lazy MCP subprocess environment may omit utilities required by the
+  packaged architecture launcher. The former `openclaw_mcp.json` / standalone
   `sky_cua` MCP registration was retired.
 - `scripts/install_mcp_server.py --host claude-code` writes
   `claude_code_mcp.json`, registers the `sky-cua` stdio server (Claude Code
@@ -768,6 +779,42 @@ Installed release proof from 2026-06-05:
   listed both browser tools, returned `browser_status.isError=false` with zero
   diagnostics, and returned `browser_list_tabs(user_chrome).isError=false` with
   141 tabs and zero diagnostics.
+
+Local Pi text-only AppShot proof from 2026-08-09:
+
+- Pi 0.84.1 selected `opencode/deepseek-v4-flash-free`, whose model catalog
+  reports `images: no`, and called `sky_cua_observe` once with
+  `{"surface":"desktop"}`.
+- The installed Pi wrapper connected through the merged local MCP config and
+  returned a desktop AppShot with text content only: zero MCP image blocks,
+  zero base64 image fields, no tool error, and empty stderr.
+- The standalone installer also projects the managed
+  `sky-cua-image-capability.ts` Pi extension. It reads the active Pi model's
+  `input` modalities on every tool result and removes image content blocks
+  before provider submission unless that model explicitly lists `image`.
+  Semantic text remains unchanged, and unknown modality metadata fails closed.
+- Evidence: `artifacts/pi-text-only-appshot-local-smoke/20260809T1946explicit/`
+  (`pi-steady.stdout.log`, `pi-steady.stderr.log`).
+
+Browser observe model-capability proof from 2026-08-09:
+
+- Pi 0.84.1 with `opencode/deepseek-v4-flash-free` claimed an existing Chrome
+  tab and completed `observe(surface="browser")` with text content only, zero
+  image blocks, and no base64 field. The post-change installed run exposed the
+  literal bounded model-facing semantic snapshot, including 298 actionable
+  elements with names, bounds, and opaque refs; its 32 KiB fallback truncated
+  safely while the complete AppShot remained in structured/artifact storage.
+- Codex CLI 0.147.0 does not advertise a model id or image capability in its MCP
+  initialize request, but it does send the active model in
+  `_meta.x-codex-turn-metadata.model` on each tool call. sky-cua uses that
+  per-turn model after explicit capability and process overrides. A local
+  an image-capable Codex browser observe automatically returned one image content block
+  while structured content remained free of base64 and the redundant text-only
+  semantic fallback was absent; no environment override was used.
+- Evidence: `artifacts/model-image-gating-local-smoke/20260809T2014/`
+  (`pi-browser-claim-observe.stdout.log`,
+  `codex-browser-claim-observe.stdout.log`, and
+  `codex-browser-auto-capability.stdout.log`).
 
 Live `browser_open` proof from 2026-06-05:
 

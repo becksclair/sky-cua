@@ -46,6 +46,25 @@ a fresh `phone_snapshot_id`. `available_actions` / `unavailable_actions` come
 from the cached capability profile, not a static schema. The tool list is
 static; action affordances are dynamic.
 
+Phone observe requests inline pixels only for image-capable model sessions.
+Response shaping independently enforces the same gate and strips
+`inline_image.data_base64` from structured content, so an older service cannot
+leak pixels through either channel after a text-only request. Unknown model
+capability fails closed. Codex CLI 0.147.0 does not advertise model image
+capability during MCP initialize, but its per-call
+`_meta.x-codex-turn-metadata.model` identifies the active model. sky-cua uses
+that turn model after explicit capability and process overrides, so recognized
+image-capable Codex models need no environment override.
+Pi and other hosts may retain `structuredContent` only as UI/session metadata,
+so text-only phone observes also append the canonical accessibility projection
+to the model-facing text as compact JSON bounded to 32 KiB. The full bounded
+projection remains in `structuredContent` and the AppShot artifact. Explicit
+`phone_accessibility_tree` calls use the same model-facing bounded projection.
+The installed Pi integration additionally filters tool-result image blocks
+against the active Pi model's declared input modalities immediately before the
+result enters model context. This covers Pi model switches without disabling
+images for image-capable Pi models.
+
 Config lives in the `[phone]` table of the machine config and is mirrored by
 environment overrides, all allowlisted in `.mcp.json`:
 `SKY_CUA_PHONE`, `SKY_CUA_PHONE_SERIAL`, `SKY_CUA_PHONE_BACKEND`,
@@ -411,6 +430,15 @@ The full live smoke should also run from the installed MCP surface
 (`--installed`) after packaging and record adb version, Android version,
 companion version when installed, scrcpy version when used, connection kind,
 cursor planes proven, and skipped profiles.
+
+Physical-device CompanionDirect phone observe was proven on 2026-08-09 with
+an S26 Ultra over Tailscale. Pi using the text-only
+`opencode/deepseek-v4-flash-free` model received exactly one text block and no
+image block, and its text included the bounded accessibility projection with
+real node text, classes, clickability, and bounds. Codex CLI 0.147.0 using
+An image-capable Codex run received one text block and one image block from the same live
+phone, without the redundant text fallback. Both results kept structured
+content base64-free, and neither client disconnected the retained session.
 
 ## Known limitations
 

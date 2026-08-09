@@ -174,6 +174,7 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
         _write(core / f"bin/runtimes/linux-x64/{name}", executable=True)
     _write(core / "bin/runtimes/linux-x64/sky-cua-chrome-host", executable=True)
     _write(core / "resources/chrome-extension/codex/1_0/manifest.json", "{}\n")
+    _write(core / "resources/pi/sky-cua-image-capability.ts", "export default () => {};\n")
 
     cua_node = root / "cua-node"
     for name in ("node", "node_repl"):
@@ -382,6 +383,71 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
 
     install_payload(second, home=home, env=env, configure_hosts=False)
     assert (install_root / "new-marker").is_file()
+
+
+def test_install_projects_pi_wrapper_and_preserves_other_servers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    core, cua_node = _fixture_repo(repo)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", repo)
+    payload = tmp_path / "payload"
+    assemble_payload(payload, core_root=core, cua_node_root=cua_node)
+    home = tmp_path / "home"
+    agent_dir = home / ".pi/agent"
+    agent_dir.mkdir(parents=True)
+    config_path = agent_dir / "mcp.json"
+    config_path.write_text(
+        json.dumps({"mcpServers": {"context7": {"command": "context7"}}}) + "\n",
+        encoding="utf-8",
+    )
+    env = {
+        "HOME": str(home),
+        "XDG_DATA_HOME": str(tmp_path / "xdg-data"),
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "DISPLAY": ":7",
+    }
+
+    report = install_payload(payload, home=home, env=env, configure_hosts=False)
+
+    install_root = Path(str(report["install_root"]))
+    wrapper = install_root / "pi_mcp_wrapper.sh"
+    wrapper_text = wrapper.read_text(encoding="utf-8")
+    assert wrapper_text.startswith("#!/bin/bash\n")
+    assert "export PATH=/usr/local/bin:/usr/bin:/bin\n" in wrapper_text
+    assert "export DISPLAY=:7\n" in wrapper_text
+    assert "export SKY_CUA_PRESENCE_ENABLED=1\n" in wrapper_text
+    assert "export SKY_CUA_MCP_CALLER_PROVENANCE=pi\n" in wrapper_text
+    assert wrapper_text.endswith(f'exec {install_root / "bin/sky-cua-client"} mcp "$@"\n')
+    assert wrapper.stat().st_mode & 0o111
+    extension = agent_dir / "extensions/sky-cua-image-capability.ts"
+    assert extension.is_symlink()
+    assert extension.resolve() == install_root / "resources/pi/sky-cua-image-capability.ts"
+    merged = json.loads(config_path.read_text(encoding="utf-8"))
+    assert merged["mcpServers"]["context7"] == {"command": "context7"}
+    assert merged["mcpServers"]["sky_cua"] == {
+        "command": str(wrapper),
+        "args": [],
+        "lifecycle": "lazy",
+        "directTools": True,
+    }
+    assert report["pi_config"] == str(config_path)
+
+
+def test_install_refuses_to_replace_unmanaged_pi_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    core, cua_node = _fixture_repo(repo)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", repo)
+    payload = tmp_path / "payload"
+    assemble_payload(payload, core_root=core, cua_node_root=cua_node)
+    home = tmp_path / "home"
+    extension = home / ".pi/agent/extensions/sky-cua-image-capability.ts"
+    _write(extension, "// user-owned\n")
+
+    with pytest.raises(ValueError, match="unmanaged Pi extension"):
+        install_payload(payload, home=home, env={}, configure_hosts=False)
 
 
 def test_install_preserves_unresolvable_user_node_symlink(

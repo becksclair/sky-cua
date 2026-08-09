@@ -409,6 +409,7 @@ def test_worktree_bundle_dirs_include_untracked_runtime_resources() -> None:
     assert Path(".claude-plugin/marketplace.json") in build_plugin.WORKTREE_BUNDLE_FILES
     assert Path("resources/chrome-extension") in build_plugin.WORKTREE_BUNDLE_DIRS
     assert Path("resources/kwin") in build_plugin.WORKTREE_BUNDLE_DIRS
+    assert Path("resources/pi") in build_plugin.WORKTREE_BUNDLE_DIRS
     assert Path("skills/computer-use") in build_plugin.WORKTREE_BUNDLE_DIRS
     assert Path("skills/browser-use") in build_plugin.WORKTREE_BUNDLE_DIRS
 

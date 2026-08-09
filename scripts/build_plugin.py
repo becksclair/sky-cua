@@ -64,6 +64,7 @@ WORKTREE_BUNDLE_DIRS = (
     CHROME_EXTENSION_BUNDLE_DIR,
     Path("resources") / "cosmic",
     Path("resources") / "kwin",
+    Path("resources") / "pi",
     Path("skills") / "computer-use",
     Path("skills") / "browser-use",
     Path("skills") / "phone-use",

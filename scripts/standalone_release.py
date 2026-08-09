@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -52,6 +53,27 @@ NATIVE_MANIFEST_DIRS = (
     Path(".config/chromium/NativeMessagingHosts"),
     Path(".config/BraveSoftware/Brave-Browser/NativeMessagingHosts"),
     Path(".config/BraveSoftware/Brave-Origin/NativeMessagingHosts"),
+)
+PI_MCP_RUNTIME_ENV = (
+    "PATH",
+    "SKY_CUA_BROWSER_EVAL",
+    "SKY_CUA_MODEL_SUPPORTS_IMAGES",
+    "SKY_CUA_PRESENCE_ENABLED",
+    "SKY_CUA_BROWSER_CONTROL_MODE",
+    "SKY_CUA_CODEX_BROWSER_SOCKET_PATH",
+    "SKY_CUA_PHONE_DIRECT",
+    "SKY_CUA_PHONE_DIRECT_ADVERTISED_ENDPOINT",
+    "SKY_CUA_PHONE_DIRECT_ENROLLMENT_TTL_MS",
+    "SKY_CUA_PHONE_DIRECT_LISTEN_ADDR",
+    "SKY_CUA_PHONE_DIRECT_STATE_PATH",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DESKTOP_SESSION",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_RUNTIME_DIR",
+    "XDG_SESSION_TYPE",
+    "XAUTHORITY",
 )
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -196,6 +218,7 @@ def validate_payload(payload_root: Path) -> None:
         "skills/computer-use/SKILL.md",
         "skills/browser-use/SKILL.md",
         "skills/phone-use/SKILL.md",
+        "resources/pi/sky-cua-image-capability.ts",
         "docs/README.md",
         "docs/inventories/api-inventory.json",
         "docs/inventories/capability-inventory.json",
@@ -596,16 +619,79 @@ def _set_top_level_toml_string(text: str, key: str, value: str) -> str:
 
 
 def _write_text_atomically(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    mode = path.stat().st_mode if path.exists() else 0o600
-    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    write_path = path.resolve(strict=False) if path.is_symlink() else path
+    write_path.parent.mkdir(parents=True, exist_ok=True)
+    mode = write_path.stat().st_mode if write_path.exists() else 0o600
+    temporary = write_path.with_name(f".{write_path.name}.tmp-{os.getpid()}")
     _remove_path(temporary)
     try:
         temporary.write_text(text, encoding="utf-8")
         temporary.chmod(mode)
-        os.replace(temporary, path)
+        os.replace(temporary, write_path)
     finally:
         _remove_path(temporary)
+
+
+def _install_pi_mcp(
+    install_root: Path,
+    *,
+    home: Path,
+    env: Mapping[str, str],
+) -> Path | None:
+    """Project the fixed-root MCP launcher into an existing Pi installation."""
+    wrapper = install_root / "pi_mcp_wrapper.sh"
+    forwarded = {
+        name: value.strip() for name in PI_MCP_RUNTIME_ENV if (value := env.get(name, "")).strip()
+    }
+    forwarded.setdefault("SKY_CUA_PRESENCE_ENABLED", "1")
+    exports = "".join(f"export {name}={shlex.quote(value)}\n" for name, value in forwarded.items())
+    wrapper.write_text(
+        "".join(
+            (
+                "#!/bin/bash\n",
+                f"export SKY_CUA_REPO_ROOT={shlex.quote(str(install_root))}\n",
+                exports,
+                "export SKY_CUA_MCP_CALLER_PROVENANCE=pi\n",
+                f'exec {shlex.quote(str(install_root / "bin/sky-cua-client"))} mcp "$@"\n',
+            )
+        ),
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+
+    agent_dir = home / ".pi/agent"
+    if not agent_dir.is_dir():
+        return None
+    extension_source = install_root / "resources/pi/sky-cua-image-capability.ts"
+    extension_dir = agent_dir / "extensions"
+    extension_dir.mkdir(parents=True, exist_ok=True)
+    extension_path = extension_dir / "sky-cua-image-capability.ts"
+    if extension_path.exists() or extension_path.is_symlink():
+        if (
+            not extension_path.is_symlink()
+            or extension_path.resolve(strict=False) != extension_source
+        ):
+            raise ValueError(f"refusing to replace an unmanaged Pi extension: {extension_path}")
+        extension_path.unlink()
+    extension_path.symlink_to(extension_source)
+    config_path = agent_dir / "mcp.json"
+    if config_path.exists():
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        if not isinstance(config, dict):
+            raise ValueError(f"Pi MCP config must be a JSON object: {config_path}")
+    else:
+        config = {}
+    servers = config.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        raise ValueError(f"Pi MCP config mcpServers must be a JSON object: {config_path}")
+    servers["sky_cua"] = {
+        "command": str(wrapper),
+        "args": [],
+        "lifecycle": "lazy",
+        "directTools": True,
+    }
+    _write_text_atomically(config_path, json.dumps(config, indent=2) + "\n")
+    return config_path
 
 
 def _configure_openclaw_no_prompt_permissions(
@@ -699,6 +785,7 @@ def install_payload(
     )
     durable_skill_names = _durable_skill_names(install_home, active_env)
     skills = _project_skills(install_root, install_home, durable_skill_names)
+    pi_config = _install_pi_mcp(install_root, home=install_home, env=active_env)
     opencode_report = _opencode_config.install_opencode_config(
         install_root, home=install_home, env=active_env
     )
@@ -752,6 +839,7 @@ def install_payload(
         "launchers": [str(path) for path in launchers],
         "native_manifests": [str(path) for path in manifests],
         "skills": [str(path) for path in skills],
+        "pi_config": str(pi_config) if pi_config is not None else None,
         "codex_plugins": list(plugins),
         "openclaw_node_repl": openclaw,
         "openclaw_permission_configs": [str(path) for path in openclaw_permission_configs],
