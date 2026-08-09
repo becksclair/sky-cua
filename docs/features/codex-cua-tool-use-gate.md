@@ -11,7 +11,7 @@ gate (KDE Wayland `testing-vm`).
 One `codex exec` run exercises the full sky-cua computer-use **and** browser-use
 tool surface against live fixtures, a deterministic gate proves from the
 transcript that the right tools were called with no errors, and a host-side
-gpt-5.5 judge scores the agent's tool-use quality and emits an actionable triage
+configured `performance_judge` profile scores the agent's tool-use quality and emits an actionable triage
 list. This replaced four redundant agent dialog-dismiss runs and the scattered
 single-purpose codex smokes.
 
@@ -30,8 +30,9 @@ single-purpose codex smokes.
 - Smoke result schema: `scripts/schemas/cua_full_smoke_result.json`.
 - Tunables: `SKY_CUA_JUDGE_THRESHOLD` / `--threshold` (default 70);
   `SKY_CUA_SMOKE_OPENCODE_MODEL` / `SKY_CUA_SMOKE_PI_MODEL` for the wiring-check
-  model (default `opencode/deepseek-v4-flash-free`); `--model` / `--reasoning-effort`
+  model; `--model` / `--reasoning-effort`
   on the smoke and judge.
+- Harness model and reasoning defaults: `scripts/model_profiles.yaml`.
 
 ## Behavior
 
@@ -46,7 +47,7 @@ single-purpose codex smokes.
    records `extension_loaded_by_agent` / `native_host_socket_up` in the summary.
    (Chrome 137+ disables the `--load-extension` switch, so the UI path is also the
    durable one.)
-2. One `codex exec` run (default gpt-5.5/low) drives every required tool against
+2. One `codex exec` run using the `codex_cua` profile drives every required tool against
    the **production `computer-use@openai-bundled` compat plugin**. The runner
    stages the openai-bundled marketplace into the VM
    (`--openai-bundled-resource-root`, default the host's
@@ -64,7 +65,7 @@ single-purpose codex smokes.
 4. The runner pulls the transcript + summary + last-message to the host and runs
    `scripts/live_agent_perf_judge.py`. The judge condenses the transcript
    (image/result payloads stripped, head/tail elision, char budget), runs in an
-   isolated tool-free codex home with host gpt-5.5 auth, scores against the rubric
+   isolated tool-free Codex home with host auth, scores against the rubric
    with the coverage matrix as ground truth, hard-fails below the threshold, and
    always emits triage. It runs even when the deterministic gate failed.
 5. Overall success = deterministic gate passed AND judge passed.
@@ -97,7 +98,7 @@ single-purpose codex smokes.
 - The browser half depends on a live Chrome + extension + native-host socket in
   the VM; that bring-up is the most fragile dependency (the profile fails loudly
   if the socket never appears).
-- Exact operation/tool spellings and the free model id (`opencode/deepseek-v4-flash-free`)
+- Exact operation/tool spellings and model-profile defaults
   are validated on the first live VM run; the required set is tuned honestly if a
   fixture cannot prove a tool.
 - The judge is an LLM and is non-deterministic near the threshold; it is layered

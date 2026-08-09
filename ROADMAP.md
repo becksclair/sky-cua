@@ -299,11 +299,11 @@ notifications) and optional scrcpy acceleration.
         per-session matrix rather than the one-session trimmed gate.
 - [x] Consolidated agent test matrix and tool-use performance judge — [`docs/features/codex-cua-tool-use-gate.md`](docs/features/codex-cua-tool-use-gate.md)
   - [x] opencode/pi collapsed from four dialog-dismiss runs to one read-only
-        wiring check each on the free `opencode/deepseek-v4-flash-free` model
+        wiring check each on their centralized model profiles
   - [x] Single-run `codex-cua` profile exercises the full computer-use +
         browser-use surface (live Chrome + extension + native host) with a
         deterministic coverage/no-error gate; retired the standalone WebP smoke
-  - [x] Host-side gpt-5.5 judge scores tool-use 0-100, hard-fails below a
+  - [x] Host-side `performance_judge` model profile scores tool-use 0-100, hard-fails below a
         threshold, and always emits a triage list for follow-up
 - [ ] Doctor/setup wording improvements as new launch environments expose blockers
 

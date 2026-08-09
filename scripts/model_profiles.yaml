@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "_comment": "Harness defaults live here; CLI flags and SKY_CUA_SMOKE_* variables may override one run.",
+  "harnesses": {
+    "codex_exec": {
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "medium"
+    },
+    "codex_cua": {
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "medium"
+    },
+    "performance_judge": {
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "medium"
+    },
+    "opencode_mcp": {
+      "model": "opencode/deepseek-v4-flash-free"
+    },
+    "pi_mcp": {
+      "model": "opencode/deepseek-v4-flash-free"
+    },
+    "claude_mcp": {
+      "model": "claude-sonnet-4-6"
+    },
+    "fallback_anchor": {
+      "candidates": [
+        "opencode-go/deepseek-v4-pro",
+        "opencode-go/deepseek-v4-flash",
+        "opencode/deepseek-v4-flash-free"
+      ]
+    }
+  }
+}

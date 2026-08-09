@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Idempotently ensure Pi's OpenCode zen free-model provider exists in the VM.
+"""Idempotently ensure Pi's configured OpenCode provider exists in the VM.
 
-The pi VM smoke drives ``opencode/deepseek-v4-flash-free`` (``DEFAULT_PI_SMOKE_MODEL``
-in ``scripts/_agent_mcp_smoke.py``), but a stock ``~/.pi`` ships with no ``opencode``
-provider and a default model that resolves to nothing, so pi fails before it can
+The caller supplies the centralized ``pi_mcp`` model profile. A stock ``~/.pi``
+ships with no matching provider and a default model that resolves to nothing, so Pi fails before it can
 list the sky-cua MCP tools. ``sync-pi-to-vm.sh`` pipes this script into the VM's
 ``python3`` so the provider, free model, and default are guaranteed regardless of
 the host ``~/.pi`` that was rsynced in.
@@ -17,10 +16,14 @@ from __future__ import annotations
 
 import json
 import pathlib
+import sys
 from typing import Any
 
-PROVIDER = "opencode"
-MODEL_ID = "deepseek-v4-flash-free"
+if len(sys.argv) != 3:
+    raise SystemExit("usage: ensure-pi-opencode-provider.py PROVIDER MODEL_ID")
+
+PROVIDER = sys.argv[1]
+MODEL_ID = sys.argv[2]
 MODEL_REF = f"{PROVIDER}/{MODEL_ID}"
 DEAD_MODEL_REF = "opencode-go/kimi-k2.7-code"
 
@@ -50,7 +53,22 @@ def main() -> None:
 
     models = _load(models_path, {})
     providers = models.setdefault("providers", {})
-    providers.setdefault(PROVIDER, PROVIDER_BLOCK)
+    provider = providers.get(PROVIDER)
+    if not isinstance(provider, dict):
+        provider = dict(PROVIDER_BLOCK)
+    else:
+        provider = dict(provider)
+        provider_models = provider.get("models")
+        if not isinstance(provider_models, list):
+            provider_models = []
+        selected_model = PROVIDER_BLOCK["models"][0]
+        provider["models"] = [
+            entry
+            for entry in provider_models
+            if not isinstance(entry, dict) or entry.get("id") != MODEL_ID
+        ]
+        provider["models"].insert(0, selected_model)
+    providers[PROVIDER] = provider
     models_path.write_text(json.dumps(models, indent=1) + "\n")
 
     settings = _load(settings_path, {})

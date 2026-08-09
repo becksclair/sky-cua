@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import os
 
-LIVE_SMOKE_MODEL = "gpt-5.5"
-LIVE_SMOKE_REASONING_EFFORT = "low"
+from _model_profiles import model_profile, required_reasoning_effort
+
+_CODEX_EXEC_PROFILE = model_profile("codex_exec")
+LIVE_SMOKE_MODEL = _CODEX_EXEC_PROFILE.model
+LIVE_SMOKE_REASONING_EFFORT = required_reasoning_effort("codex_exec")
 
 
 def env_flag(name: str) -> bool:

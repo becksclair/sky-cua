@@ -233,7 +233,7 @@ The `opencode-mcp` profile installs sky-cua as an MCP server for OpenCode,
 deploys the `computer-use` skill, and runs a single **wiring check** through
 OpenCode's tool-calling loop: the agent must see the sky-cua tool schema and
 call one read-only tool (`doctor`/`observe`) without error. It runs on the free
-model `opencode/deepseek-v4-flash-free` (override with
+model from the `opencode_mcp` profile (override with
 `SKY_CUA_SMOKE_OPENCODE_MODEL`). Substantive tool-use coverage is the
 `codex-cua` profile, not this lane.
 
@@ -269,7 +269,7 @@ The `pi-mcp` profile installs sky-cua as an MCP server for Pi, merges the
 `sky_cua` entry into Pi's `~/.pi/agent/mcp.json`, deploys the
 `computer-use` and `browser-use` skills to `~/.pi/agent/skills/`, and runs the
 same single **wiring check** through Pi's tool-calling loop (schema visible +
-one read-only tool call, no error) on `opencode/deepseek-v4-flash-free`
+one read-only tool call, no error) on the configured `pi_mcp` profile
 (override with `SKY_CUA_SMOKE_PI_MODEL`).
 
 ## Codex CUA full tool-use profile and the performance judge
@@ -312,10 +312,10 @@ Two gates apply:
    every required tool/operation/surface was called (see `scripts/_cua_coverage.py`),
    no tool call errored, and the fixtures' ground truth confirms the actions
    landed. It writes `coverage-summary.json` next to the transcript.
-2. **Performance judge (on the host):** because the VM lacks host gpt-5.5 auth,
+2. **Performance judge (on the host):** because the VM lacks host Codex auth,
    the runner pulls the transcript + `coverage-summary.json` + `last-message.json`
-   back to the host and runs `scripts/live_agent_perf_judge.py` (gpt-5.5, high
-   reasoning). The judge scores tool-use 0-100 across tool-selection,
+   back to the host and runs `scripts/live_agent_perf_judge.py` with the
+   `performance_judge` profile. The judge scores tool-use 0-100 across tool-selection,
    error-recovery, efficiency, and task-completion, **hard-fails below the
    threshold** (default 70, override `--threshold` / `SKY_CUA_JUDGE_THRESHOLD`),
    and **always** writes `judge-verdict.json` and `judge-triage.json`. The judge
@@ -415,7 +415,7 @@ Profiles live under `scripts/testing-vm/profiles/`.
 - `opencode-mcp`: real-session OpenCode MCP **wiring check**. Installs sky-cua as
   an MCP server for OpenCode, deploys skills, and runs one read-only tool call
   (schema visible + `doctor`/`observe`, no error) on
-  `opencode/deepseek-v4-flash-free`. It proves MCP is wired for the agent;
+  the `opencode_mcp` profile. It proves MCP is wired for the agent;
   substantive tool-use coverage is `codex-cua`.
 - `pi-mcp`: real-session Pi MCP **wiring check**. Installs sky-cua as an MCP
   server for Pi via `pi-mcp-adapter`, deploys skills, and runs the same
@@ -425,9 +425,9 @@ Profiles live under `scripts/testing-vm/profiles/`.
   browser-use surface in one `codex exec` run against the GTK pointer fixture and
   a live browser page. A deterministic coverage/no-error gate runs in the VM
   (`scripts/live_codex_cua_smoke.py` + `scripts/_cua_coverage.py`); the host-side
-  performance judge (`scripts/live_agent_perf_judge.py`, gpt-5.5/high) scores
+  performance judge (`scripts/live_agent_perf_judge.py`, `performance_judge` profile) scores
   tool-use and emits a triage list. Dispatch routes through the host so the judge
-  has gpt-5.5 auth. See "Codex CUA full tool-use profile and the performance
+  has host Codex auth. See "Codex CUA full tool-use profile and the performance
   judge".
 - `codex-desktop`: real-session launch smoke for the installed
   CodexDesktop-Rebuild package. It requires a visible Codex window on the VM's

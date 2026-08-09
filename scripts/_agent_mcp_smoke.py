@@ -14,12 +14,14 @@ import time
 from pathlib import Path
 from typing import Any
 
+from _model_profiles import model_profile
 from _smoke_config import env_flag
 from deploy_freshness import assert_runtime_fresh, deployed_client_path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OPENCODE_SMOKE_MODEL = "opencode/deepseek-v4-flash-free"
-DEFAULT_PI_SMOKE_MODEL = "opencode/deepseek-v4-flash-free"
+DEFAULT_OPENCODE_SMOKE_MODEL = model_profile("opencode_mcp").model
+DEFAULT_PI_SMOKE_MODEL = model_profile("pi_mcp").model
+DEFAULT_CLAUDE_SMOKE_MODEL = model_profile("claude_mcp").model
 TOOL_FAILURE_STATUSES = {"canceled", "cancelled", "error", "failed", "failure", "timeout"}
 SKY_CUA_CTX_EXECUTE_MCP_WRAPPER_MARKERS = (
     "pi_mcp_wrapper.sh",
@@ -195,7 +197,9 @@ def run_agent(
         claude_bin = shutil.which("claude") or shutil.which("openclaude")
         if claude_bin is None:
             raise FileNotFoundError("neither claude nor openclaude is on PATH")
-        claude_model = os.environ.get("SKY_CUA_SMOKE_CLAUDE_MODEL", "claude-sonnet-4-6")
+        claude_model = model or os.environ.get(
+            "SKY_CUA_SMOKE_CLAUDE_MODEL", DEFAULT_CLAUDE_SMOKE_MODEL
+        )
         argv = [
             claude_bin,
             "--dangerously-skip-permissions",

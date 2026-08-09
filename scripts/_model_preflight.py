@@ -26,15 +26,13 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Protocol
 
+from _model_profiles import model_candidates
+
 PROBE_PROMPT = "Reply with exactly one word: READY"
 
 # Preference order: most capable / most cost-effective for the caller first.
 # select_working_model returns the first of these that is actually reachable.
-DEFAULT_FALLBACK_ANCHOR_MODELS: tuple[str, ...] = (
-    "opencode-go/deepseek-v4-pro",
-    "opencode-go/deepseek-v4-flash",
-    "opencode/deepseek-v4-flash-free",
-)
+DEFAULT_FALLBACK_ANCHOR_MODELS = model_candidates("fallback_anchor")
 
 _SUCCESS_EVENT_TYPES = {"text", "step_finish"}
 

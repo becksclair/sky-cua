@@ -156,7 +156,7 @@ VM_PROFILE_DESCRIPTORS: dict[str, VmProfileDescriptor] = {
         VmProfileDescriptor("opencode-mcp", preauthorize_screenshot_portal=True),
         VmProfileDescriptor("pi-mcp", preauthorize_screenshot_portal=True),
         # Heavy single-run codex tool-use profile. The deterministic coverage gate
-        # runs in the VM; the host-side judge runs after the remote run (host gpt-5.5
+        # runs in the VM; the host-side judge runs after the remote run (host Codex
         # auth is not available in the VM), hence the dedicated dispatch.
         VmProfileDescriptor(
             "codex-cua",
@@ -909,7 +909,7 @@ def run_codex_cua_judge_profile(
     """Run the codex CUA smoke in the VM, then judge its tool use on the host.
 
     The VM produces the transcript + deterministic coverage summary; the host
-    pulls them back and runs the gpt-5.5 judge (host-only auth). Overall success
+    pulls them back and runs the configured performance judge (host-only auth). Overall success
     requires both the deterministic VM gate and the judge to pass, but the judge
     runs even when the VM gate failed so a triage list is always produced.
     """

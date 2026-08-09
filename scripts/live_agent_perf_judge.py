@@ -2,7 +2,7 @@
 """Host-side judge CLI for sky-cua agent tool-use performance.
 
 Given a codex CUA smoke's transcript, final message, and deterministic coverage
-summary, run the host codex judge (gpt-5.5/high) and emit a verdict. Always
+summary, run the host Codex ``performance_judge`` profile and emit a verdict. Always
 writes ``judge-verdict.json`` and ``judge-triage.json`` into the artifact dir,
 even on failure, so follow-up tooling has a stable path to the triage list.
 Exits non-zero when the score is below the threshold.

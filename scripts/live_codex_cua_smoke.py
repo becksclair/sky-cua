@@ -52,7 +52,6 @@ from _chrome_bridge import (
     wait_for_socket,
 )
 from _codex_exec import (
-    DEFAULT_MODEL,
     DESKTOP_E2E_EXEC_ARGS,
     make_artifact_dir,
     plugin_mention,
@@ -64,13 +63,16 @@ from _codex_exec import (
     with_plugin_mention,
 )
 from _cua_coverage import analyze_coverage
+from _model_profiles import model_profile, required_reasoning_effort
 from _plugin_bundle import REPO_ROOT
 from live_desktop_smoke import load_state, run_pointer_fixture, wait_for_stable_pointer_fixture
 
 RESULT_SCHEMA = REPO_ROOT / "scripts" / "schemas" / "cua_full_smoke_result.json"
-# The agent installs the extension through the Chrome UI and drives three apps in
-# one run, so default to medium reasoning rather than the live-smoke low default.
-DEFAULT_CUA_REASONING_EFFORT = "medium"
+# This profile remains separately named even when it matches codex_exec, so the
+# YAML states which model each harness owns.
+_CODEX_CUA_PROFILE = model_profile("codex_cua")
+DEFAULT_CUA_MODEL = _CODEX_CUA_PROFILE.model
+DEFAULT_CUA_REASONING_EFFORT = required_reasoning_effort("codex_cua")
 # Default native-host socket dir. The deployed MCP server discovers sockets here
 # (and via /proc), so launching Chrome against this dir needs no .mcp.json change.
 DEFAULT_SOCKET_DIR = Path("/tmp/codex-browser-use")
@@ -229,7 +231,11 @@ def _ground_truth(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--symlink", action="store_true", help="Symlink the built bundle.")
-    parser.add_argument("--model", default=None, help="Override the codex model (default gpt-5.5).")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=f"Override the codex model (default {DEFAULT_CUA_MODEL}).",
+    )
     parser.add_argument("--reasoning-effort", default=None, help="Override codex reasoning effort.")
     parser.add_argument(
         "--browser", default="chrome", choices=["auto", "chrome", "chromium", "brave"]
@@ -326,7 +332,7 @@ def main() -> int:
                 prompt=prompt,
                 artifact_dir=artifact_dir,
                 output_schema=RESULT_SCHEMA,
-                model=args.model or DEFAULT_MODEL,
+                model=args.model or DEFAULT_CUA_MODEL,
                 reasoning_effort=args.reasoning_effort or DEFAULT_CUA_REASONING_EFFORT,
                 extra_env={"CODEX_HOME": str(codex_home), "SKY_CUA_BROWSER": "chrome"},
                 extra_args=DESKTOP_E2E_EXEC_ARGS,

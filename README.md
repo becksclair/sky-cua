@@ -300,7 +300,8 @@ The substantive codex tool-use gate is the `codex-cua` profile: one `codex exec`
 run that exercises the full computer-use and browser-use tool surface against
 live fixtures (it brings up Chrome + the sky-cua extension + native host in the
 VM), enforces a deterministic coverage/no-error gate, then runs a host-side
-gpt-5.5 judge that scores tool-use quality and emits a triage list:
+configured host judge that scores tool-use quality and emits a triage list. Harness model
+defaults live in `scripts/model_profiles.yaml`:
 
 ```bash
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile codex-cua --sync-codex-settings

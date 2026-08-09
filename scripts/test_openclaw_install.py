@@ -117,7 +117,7 @@ def test_openclaw_bundle_mode_pins_bundle_resource_root(
     openclaw_dir = tmp_path / "openclaw"
     agent_config = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
     agent_config.parent.mkdir(parents=True)
-    agent_config.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+    agent_config.write_text('model = "gpt-5.6-luna"\n', encoding="utf-8")
 
     config_path = _openclaw_install.install_openclaw(
         target_dir,
@@ -140,12 +140,12 @@ def test_openclaw_codex_home_toml_upsert_is_idempotent(
     monkeypatch.setenv(BROWSER_SELECTION_ENV, "brave")
     config_path = tmp_path / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
-    config_path.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+    config_path.write_text('model = "gpt-5.6-luna"\n', encoding="utf-8")
     client_path = tmp_path / "bin" / "sky-cua-client"
 
     _openclaw_install.install_openclaw_agent_codex_mcp_servers(tmp_path, client_path)
     first = config_path.read_text(encoding="utf-8")
-    assert 'model = "gpt-5.5"' in first
+    assert 'model = "gpt-5.6-luna"' in first
     assert "[mcp_servers.sky_cua]" in first
     assert f'command = "{client_path}"' in first
     assert BROWSER_SELECTION_ENV not in first
@@ -176,7 +176,7 @@ def test_openclaw_provenance_is_consistent_idempotent_and_preserves_other_env(
     openclaw_dir = tmp_path / "openclaw"
     agent_config = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
     agent_config.parent.mkdir(parents=True)
-    agent_config.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+    agent_config.write_text('model = "gpt-5.6-luna"\n', encoding="utf-8")
     client_path = target_dir / "bin" / "sky-cua-client"
     calls: list[list[str]] = []
 
@@ -234,7 +234,7 @@ def test_openclaw_forwards_optional_browser_control_env_without_default(
     openclaw_dir = tmp_path / "openclaw"
     agent_config = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
     agent_config.parent.mkdir(parents=True)
-    agent_config.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+    agent_config.write_text('model = "gpt-5.6-luna"\n', encoding="utf-8")
     client_path = target_dir / "bin" / "sky-cua-client"
     monkeypatch.setattr(
         _openclaw_install.subprocess,
@@ -312,7 +312,7 @@ def test_openclaw_codex_home_pin_refusal_keeps_batch_unmodified(
     corrupt_path = tmp_path / "agents" / "zulu" / "agent" / "codex-home" / "config.toml"
     valid_path.parent.mkdir(parents=True)
     corrupt_path.parent.mkdir(parents=True)
-    valid_config = 'model = "gpt-5.5"\n'
+    valid_config = 'model = "gpt-5.6-luna"\n'
     corrupt_config = f"{_openclaw_install.CODEX_MCP_SERVER_TOML_BEGIN}\nuser_key = 1\n"
     valid_path.write_text(valid_config, encoding="utf-8")
     corrupt_path.write_text(corrupt_config, encoding="utf-8")
@@ -336,8 +336,8 @@ def test_openclaw_codex_home_write_failure_rolls_back_batch(
     zulu_path = tmp_path / "agents" / "zulu" / "agent" / "codex-home" / "config.toml"
     alpha_path.parent.mkdir(parents=True)
     zulu_path.parent.mkdir(parents=True)
-    alpha_config = 'model = "gpt-5.5"\n'
-    zulu_config = 'model = "gpt-5.5-mini"\n'
+    alpha_config = 'model = "gpt-5.6-luna"\n'
+    zulu_config = 'model = "gpt-5.6-luna"\n'
     alpha_path.write_text(alpha_config, encoding="utf-8")
     zulu_path.write_text(zulu_config, encoding="utf-8")
     real_write = _install_shared.write_text_atomically
@@ -397,7 +397,7 @@ def test_openclaw_install_codex_home_write_failure_precedes_registration(
     openclaw_dir = tmp_path / "openclaw"
     config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
-    original_config = 'model = "gpt-5.5"\n'
+    original_config = 'model = "gpt-5.6-luna"\n'
     config_path.write_text(original_config, encoding="utf-8")
     calls: list[list[str]] = []
 
@@ -496,7 +496,7 @@ def test_openclaw_install_reports_registration_timeout(
     openclaw_dir = tmp_path / "openclaw"
     config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
-    original_config = 'model = "gpt-5.5"\n'
+    original_config = 'model = "gpt-5.6-luna"\n'
     config_path.write_text(original_config, encoding="utf-8")
 
     with pytest.raises(TimeoutError, match="timed out registering sky-cua with OpenClaw"):
@@ -518,7 +518,7 @@ def test_openclaw_install_registration_error_rolls_back_snippet_without_pin_mess
     openclaw_dir = tmp_path / "openclaw"
     config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
-    original_config = 'model = "gpt-5.5"\n'
+    original_config = 'model = "gpt-5.6-luna"\n'
     config_path.write_text(original_config, encoding="utf-8")
 
     def fake_run(
@@ -556,7 +556,7 @@ def test_openclaw_install_registration_error_preserves_broken_snippet_symlink(
     openclaw_dir = tmp_path / "openclaw"
     config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
-    original_config = 'model = "gpt-5.5"\n'
+    original_config = 'model = "gpt-5.6-luna"\n'
     config_path.write_text(original_config, encoding="utf-8")
 
     def fake_run(
@@ -702,7 +702,7 @@ def test_openclaw_install_survives_unspawnable_reload_after_registration(
     openclaw_dir = tmp_path / "openclaw"
     config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
-    config_path.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+    config_path.write_text('model = "gpt-5.6-luna"\n', encoding="utf-8")
     calls: list[list[str]] = []
 
     def fake_run(
@@ -865,7 +865,7 @@ def test_openclaw_install_interrupt_during_registration_rolls_back(
     openclaw_dir = tmp_path / "openclaw"
     config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
-    original_config = 'model = "gpt-5.5"\n'
+    original_config = 'model = "gpt-5.6-luna"\n'
     config_path.write_text(original_config, encoding="utf-8")
 
     def fake_run(
@@ -905,7 +905,7 @@ def test_openclaw_install_post_commit_timeout_keeps_committed_state(
     openclaw_dir = tmp_path / "openclaw"
     config_path = openclaw_dir / "agents" / "sky" / "agent" / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
-    config_path.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+    config_path.write_text('model = "gpt-5.6-luna"\n', encoding="utf-8")
 
     def fake_run(
         command: list[str],

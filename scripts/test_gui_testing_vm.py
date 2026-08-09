@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1260,7 +1261,7 @@ def test_testing_vm_runner_syncs_essential_codex_settings(
     codex_home = tmp_path / ".codex"
     (codex_home / "browser").mkdir(parents=True)
     (codex_home / "auth.json").write_text("{}", encoding="utf-8")
-    (codex_home / "config.toml").write_text("model = 'gpt-5'\n", encoding="utf-8")
+    (codex_home / "config.toml").write_text("model = 'gpt-5.6-luna'\n", encoding="utf-8")
     (codex_home / "browser" / "config.toml").write_text("", encoding="utf-8")
     (codex_home / "plugins").mkdir()
 
@@ -1306,3 +1307,47 @@ def test_codex_cua_profile_and_openai_bundled_compat_wiring() -> None:
     ).read_text(encoding="utf-8")
     assert "SKY_CUA_OPENAI_BUNDLED_RESOURCE_ROOT" in profile
     assert "${HOME}/.cache/sky-cua/openai-bundled" in profile
+
+
+def test_pi_provider_bootstrap_reconciles_centralized_model_into_existing_provider(
+    tmp_path: Path,
+) -> None:
+    agent_dir = tmp_path / ".pi" / "agent"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "models.json").write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "opencode": {
+                        "custom": "preserved",
+                        "models": [{"id": "old-model", "name": "Old"}],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "testing-vm"
+        / "ensure-pi-opencode-provider.py"
+    )
+    env = os.environ.copy()
+    env["HOME"] = str(tmp_path)
+
+    subprocess.run(
+        [sys.executable, str(script), "opencode", "new-model"],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    models = json.loads((agent_dir / "models.json").read_text(encoding="utf-8"))
+    provider = models["providers"]["opencode"]
+    assert provider["custom"] == "preserved"
+    assert [model["id"] for model in provider["models"]] == ["new-model", "old-model"]
+    settings = json.loads((agent_dir / "settings.json").read_text(encoding="utf-8"))
+    assert settings["defaultProvider"] == "opencode"
+    assert settings["defaultModel"] == "new-model"

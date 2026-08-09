@@ -200,14 +200,6 @@ def test_select_working_model_handles_empty_candidate_list() -> None:
     assert results == []
 
 
-def test_default_fallback_anchor_models_preference_order() -> None:
-    assert DEFAULT_FALLBACK_ANCHOR_MODELS == (
-        "opencode-go/deepseek-v4-pro",
-        "opencode-go/deepseek-v4-flash",
-        "opencode/deepseek-v4-flash-free",
-    )
-
-
 def test_format_probe_table_renders_each_result() -> None:
     results = [
         ModelProbeResult("a", True, "ok", 1.23),

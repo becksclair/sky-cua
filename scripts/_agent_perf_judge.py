@@ -2,12 +2,12 @@
 
 After the codex CUA smoke runs in the VM and produces a transcript plus a
 deterministic coverage summary, this module condenses the transcript, asks a
-HOST codex exec run (gpt-5.5, high reasoning) to score the agent's tool use
+HOST codex exec run using the ``performance_judge`` model profile to score the agent's tool use
 against a fixed rubric, and returns a structured verdict. The verdict carries a
 0-100 score, four 0-25 subscores, and an always-present triage list of
 tool/workflow issues for follow-up.
 
-The judge runs on the host (which has gpt-5.5 auth); the VM only produces the
+The judge runs on the authenticated host; the VM only produces the
 transcript. The judge itself calls no tools: it runs in an isolated codex home
 that contains only auth, and the rubric demands JSON-only output.
 """
@@ -22,14 +22,16 @@ from typing import Any
 
 from _codex_exec import read_last_message, run_codex_exec, transcript_mcp_tool_calls
 from _cua_coverage import bare_tool_name, call_failed
+from _model_profiles import model_profile, required_reasoning_effort
 from _plugin_bundle import DEFAULT_CODEX_HOME, REPO_ROOT
 
 AGENT_PERF_JUDGE_VERDICT_SCHEMA = (
     REPO_ROOT / "scripts" / "schemas" / "agent_perf_judge_verdict.json"
 )
 DEFAULT_THRESHOLD = 70
-DEFAULT_JUDGE_MODEL = "gpt-5.5"
-DEFAULT_JUDGE_REASONING_EFFORT = "high"
+_JUDGE_PROFILE = model_profile("performance_judge")
+DEFAULT_JUDGE_MODEL = _JUDGE_PROFILE.model
+DEFAULT_JUDGE_REASONING_EFFORT = required_reasoning_effort("performance_judge")
 
 _ARGS_EXCERPT_LIMIT = 400
 _ERROR_EXCERPT_LIMIT = 300
@@ -42,12 +44,13 @@ def prepare_judge_codex_home(artifact_dir: Path) -> Path:
     auth_src = DEFAULT_CODEX_HOME / "auth.json"
     if not auth_src.exists():
         raise FileNotFoundError(
-            f"host codex auth not found at {auth_src}; the judge needs host gpt-5.5 auth"
+            f"host codex auth not found at {auth_src}; the judge needs host Codex auth"
         )
     shutil.copy2(auth_src, judge_home / "auth.json")
     # Disable the apps/plugin surface so the judge run never loads sky-cua tools.
     (judge_home / "config.toml").write_text(
-        'model_reasoning_effort = "high"\n\n[features]\napps = false\n',
+        f'model_reasoning_effort = "{DEFAULT_JUDGE_REASONING_EFFORT}"\n\n'
+        "[features]\napps = false\n",
         encoding="utf-8",
     )
     return judge_home

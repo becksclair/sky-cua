@@ -12,6 +12,7 @@ import pytest
 import _agent_mcp_smoke
 import _agent_perf_judge
 import _cua_coverage
+import _model_profiles
 import live_agent_mcp_smoke
 import live_agentic_loop_smoke
 import live_desktop_smoke
@@ -25,8 +26,9 @@ from _smoke_config import LIVE_SMOKE_MODEL, LIVE_SMOKE_REASONING_EFFORT
 
 
 def test_live_smoke_model_config_is_centralized() -> None:
-    assert LIVE_SMOKE_MODEL == "gpt-5.5"
-    assert LIVE_SMOKE_REASONING_EFFORT == "low"
+    configured = _model_profiles.model_profile("codex_exec")
+    assert configured.model == LIVE_SMOKE_MODEL
+    assert configured.reasoning_effort == LIVE_SMOKE_REASONING_EFFORT
     assert DEFAULT_MODEL == LIVE_SMOKE_MODEL
     assert DEFAULT_REASONING_EFFORT == LIVE_SMOKE_REASONING_EFFORT
 
@@ -713,8 +715,13 @@ def test_opencode_neutral_cwd_gets_installed_project_config(
 
 
 def test_pi_smoke_default_model_is_free_opencode_model() -> None:
-    assert _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL == "opencode/deepseek-v4-flash-free"
-    assert _agent_mcp_smoke.DEFAULT_OPENCODE_SMOKE_MODEL == "opencode/deepseek-v4-flash-free"
+    assert _model_profiles.model_profile("pi_mcp").model == (
+        _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL
+    )
+    assert (
+        _model_profiles.model_profile("opencode_mcp").model
+        == _agent_mcp_smoke.DEFAULT_OPENCODE_SMOKE_MODEL
+    )
     assert "OPENAI_API_KEY" not in _agent_mcp_smoke.model_auth_environment_keys(
         "pi", _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL
     )
@@ -1491,7 +1498,7 @@ def test_opencode_agent_runner_preserves_status_and_redacts_stdout(
     assert '"result": {"redacted": true}' in stdout
 
 
-def test_opencode_agent_runner_defaults_to_opencode_go_kimi_model(
+def test_opencode_agent_runner_uses_configured_default_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: dict[str, Any] = {}
@@ -1508,9 +1515,31 @@ def test_opencode_agent_runner_defaults_to_opencode_go_kimi_model(
     proc = _agent_mcp_smoke.run_agent("opencode", "use sky cua", tmp_path, gate_deploy=False)
 
     assert proc.returncode == 0
-    assert "--model opencode/deepseek-v4-flash-free" in captured["argv"][4]
+    assert f"--model {_agent_mcp_smoke.DEFAULT_OPENCODE_SMOKE_MODEL}" in captured["argv"][4]
     env = cast(dict[str, str], captured["env"])
     assert env["OPENCODE_API_KEY"] == "opencode-secret"
+
+
+def test_claude_agent_runner_explicit_model_precedes_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> object:
+        captured["argv"] = argv
+        return _agent_mcp_smoke.subprocess.CompletedProcess(argv, returncode=0)
+
+    monkeypatch.setenv("SKY_CUA_SMOKE_CLAUDE_MODEL", "environment-model")
+    monkeypatch.setattr(_agent_mcp_smoke.shutil, "which", lambda _name: "/usr/bin/claude")
+    monkeypatch.setattr(_agent_mcp_smoke.subprocess, "run", fake_run)
+
+    proc = _agent_mcp_smoke.run_agent(
+        "claude", "use sky cua", tmp_path, model="explicit-model", gate_deploy=False
+    )
+
+    assert proc.returncode == 0
+    argv = cast(list[str], captured["argv"])
+    assert argv[argv.index("--model") + 1] == "explicit-model"
 
 
 def test_openclaw_agent_runner_preserves_state_and_auth_env(
@@ -1696,7 +1725,7 @@ def test_openclaw_smoke_codex_home_stage_validates_pins(tmp_path: Path) -> None:
 
     missing_pin = state_dir / "agents" / "esther" / "agent" / "codex-home" / "config.toml"
     missing_pin.parent.mkdir(parents=True)
-    missing_pin.write_text('model = "gpt-5.5"\n', encoding="utf-8")
+    missing_pin.write_text('model = "gpt-5.6-luna"\n', encoding="utf-8")
     broken = state_dir / "agents" / "luke" / "agent" / "codex-home" / "config.toml"
     broken.parent.mkdir(parents=True)
     broken.write_text("browser = ", encoding="utf-8")

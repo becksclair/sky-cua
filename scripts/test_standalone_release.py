@@ -647,7 +647,7 @@ def test_detected_hosts_receive_native_plugins_and_hash_free_openclaw_definition
     main_codex_config = home / ".openclaw/agents/main/agent/codex-home/config.toml"
     _write(
         main_codex_config,
-        'model = "gpt-5"\napproval_policy = "on-request"\n\n[plugins.example]\nenabled = true\n',
+        'model = "gpt-5.6-luna"\napproval_policy = "on-request"\n\n[plugins.example]\nenabled = true\n',
     )
     sky_codex_config = home / ".openclaw/agents/sky/agent/codex-home/config.toml"
     _write(sky_codex_config, '[plugins."computer-use@openai-bundled"]\nenabled = true\n')
@@ -740,7 +740,7 @@ def test_openclaw_no_prompt_permissions_are_idempotent_and_preserve_agent_config
     config_path = home / ".openclaw/agents/sky/agent/codex-home/config.toml"
     _write(
         config_path,
-        'model = "gpt-5"\napproval_policy = "on-request"\n\n[plugins.example]\nenabled = true\n',
+        'model = "gpt-5.6-luna"\napproval_policy = "on-request"\n\n[plugins.example]\nenabled = true\n',
     )
     calls: list[list[str]] = []
 
