@@ -1,0 +1,11 @@
+version = 1
+name = "sky-cua"
+
+[setup]
+script = """
+set -euo pipefail
+cd "$CODEX_WORKTREE_PATH"
+cargo fetch --locked
+uv sync --dev --frozen
+bun install --frozen-lockfile --cwd packages/browser-use
+"""
