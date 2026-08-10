@@ -4,6 +4,12 @@ The autonomous, phone-initiated protocol is documented separately in
 [`phone-control-v2.md`](phone-control-v2.md). v1 remains the optional
 ADB-forwarded compatibility path.
 
+SMS observation is not part of this v1 protocol. The observation-only
+`sms.query` method is defined and dispatched only by authenticated
+`phone-control.v2`; it is absent from the v1 method registry and has no ADB or
+MCP fallback. See the lockstep v2 contract for its named-profile, cursor, raw
+provider-field, permission, and error semantics.
+
 This document is the authoritative wire contract between the sky-cua host
 (`crates/sky-cua-service/src/phone/companion/`) and the Android phone companion
 app. It is the source of truth for both the Rust host client and the Android app

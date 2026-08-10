@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use sky_cua_platform::config::{PhoneConfig, resolve_phone_selection};
+use sky_cua_platform::config::{PhoneConfig, PhoneProfileConfig, resolve_phone_selection};
 use sky_cua_platform::model::PhoneDirectControlFrame;
 use sky_cua_platform::model::{
     AppShotActionSnapshot, AppShotCapture, AppShotConsistency, AppShotCoverage, AppShotEnvelope,
@@ -14,7 +14,7 @@ use sky_cua_platform::model::{
     PhoneCompanionStatusRequest, PhoneConnectRequest, PhoneConnectionKind, PhoneContentRequest,
     PhoneFeatureCall, PhoneListDevicesRequest, PhoneObserveRequest, PhonePressKeyRequest,
     PhoneRefreshCapabilitiesRequest, PhoneRequest, PhoneResponse, PhoneScreenshotRequest,
-    PhoneSessionSelector, PhoneTapRequest, PhoneTypeTextRequest, PixelSize,
+    PhoneSessionSelector, PhoneSmsQueryRequest, PhoneTapRequest, PhoneTypeTextRequest, PixelSize,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -28,6 +28,186 @@ const SERIAL: &str = "emulator-5554";
 const COMPANION_TOKEN: &str = "app-op-token";
 const COMPANION_CERT_SHA256: &str =
     "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
+
+#[test]
+fn sms_page_contract_rejects_contradictory_continuation_evidence() {
+    let response: sky_cua_platform::model::PhoneSmsQueryResponse =
+        serde_json::from_value(serde_json::json!({
+            "messages": [],
+            "next_cursor": null,
+            "scan": {
+                "has_more": true,
+                "exhausted_as_observed": false,
+                "snapshot": false,
+                "observed_at_ms": 300
+            }
+        }))
+        .unwrap();
+
+    assert!(!super::sms_page_contract_valid(&response, 250));
+}
+
+#[tokio::test]
+async fn sms_query_requires_named_direct_profile_and_keeps_one_page_contract() {
+    let runner = Arc::new(FakeCommandRunner::new());
+    let mut selection = resolve_phone_selection(&PhoneConfig::default());
+    selection.profiles.insert(
+        "primary".into(),
+        PhoneProfileConfig {
+            device_id: "sms-device".into(),
+            transport: "companion_direct".into(),
+            access: "observation_only".into(),
+            required_capabilities: vec!["sms.read".into()],
+        },
+    );
+    let mut manager = PhoneManager::with_runner(runner, selection);
+    let direct = DirectRuntimeHandle::new();
+    let (mut control, _bulk) = direct.register_fake("sms-device", 4);
+    direct.set_fake_capabilities("sms-device", 4, ["sms.read"]);
+    manager.set_direct_runtime(Some(direct.clone()));
+    let responder = tokio::spawn(async move {
+        let tokio_tungstenite::tungstenite::Message::Text(text) = control.recv().await.unwrap()
+        else {
+            panic!("expected sms.query request")
+        };
+        let PhoneDirectControlFrame::Request {
+            request_id,
+            device_id,
+            link_epoch,
+            method,
+            params,
+            idempotent,
+            ..
+        } = serde_json::from_str(&text).unwrap()
+        else {
+            panic!("expected request frame")
+        };
+        assert_eq!(method, "sms.query");
+        assert_eq!(device_id, "sms-device");
+        assert_eq!(link_epoch, 4);
+        assert!(idempotent);
+        assert_eq!(params["start_ms"], 100);
+        assert_eq!(params["end_ms"], 200);
+        direct.respond(PhoneDirectControlFrame::Response {
+            request_id,
+            device_id,
+            link_epoch,
+            result: serde_json::json!({
+                "messages": [{"_id": 1, "thread_id": null, "address": null, "person": null, "date": 100, "date_sent": null, "protocol": null, "read": null, "status": null, "type": 1, "reply_path_present": null, "subject": null, "body": null, "service_center": null, "locked": null, "sub_id": null, "creator": null, "seen": null, "priority": null, "subscription_id": null, "error_code": null, "message_class": null}],
+                "next_cursor": null,
+                "scan": {"has_more": false, "exhausted_as_observed": true, "snapshot": false, "observed_at_ms": 300}
+            }),
+        });
+    });
+    let response = manager
+        .handle(PhoneRequest::SmsQuery(PhoneSmsQueryRequest {
+            profile: "primary".into(),
+            start_ms: 100,
+            end_ms: 200,
+            limit: 250,
+            cursor: None,
+        }))
+        .await;
+    let PhoneResponse::SmsQuery(response) = response else {
+        panic!("expected sms response")
+    };
+    assert!(response.error.is_none());
+    assert_eq!(response.device_id.as_deref(), Some("sms-device"));
+    assert_eq!(response.transport.as_deref(), Some("companion_direct"));
+    assert_eq!(response.access.as_deref(), Some("observation_only"));
+    assert_eq!(response.messages.len(), 1);
+    responder.await.unwrap();
+}
+
+#[tokio::test]
+async fn sms_query_fails_closed_when_phone_is_disabled() {
+    let runner = Arc::new(FakeCommandRunner::new());
+    let mut config = PhoneConfig {
+        enabled: Some(false),
+        ..PhoneConfig::default()
+    };
+    config.profiles.insert(
+        "primary".into(),
+        PhoneProfileConfig {
+            device_id: "sms-device".into(),
+            transport: "companion_direct".into(),
+            access: "observation_only".into(),
+            required_capabilities: vec!["sms.read".into()],
+        },
+    );
+    let mut manager = PhoneManager::with_runner(runner, resolve_phone_selection(&config));
+    let direct = DirectRuntimeHandle::new();
+    let (mut control, _bulk) = direct.register_fake("sms-device", 4);
+    direct.set_fake_capabilities("sms-device", 4, ["sms.read"]);
+    manager.set_direct_runtime(Some(direct));
+
+    let PhoneResponse::SmsQuery(response) = manager
+        .handle(PhoneRequest::SmsQuery(PhoneSmsQueryRequest {
+            profile: "primary".into(),
+            start_ms: 100,
+            end_ms: 200,
+            limit: 250,
+            cursor: None,
+        }))
+        .await
+    else {
+        panic!("expected sms response")
+    };
+    assert_eq!(response.error.unwrap().code, "PHONE_DISABLED");
+    assert!(control.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn sms_query_requires_current_device_capability_without_dispatch() {
+    let runner = Arc::new(FakeCommandRunner::new());
+    let mut selection = resolve_phone_selection(&PhoneConfig::default());
+    selection.profiles.insert(
+        "primary".into(),
+        PhoneProfileConfig {
+            device_id: "sms-device".into(),
+            transport: "companion_direct".into(),
+            access: "observation_only".into(),
+            required_capabilities: vec!["sms.read".into()],
+        },
+    );
+    let mut manager = PhoneManager::with_runner(runner, selection);
+    let direct = DirectRuntimeHandle::new();
+    let (mut control, _bulk) = direct.register_fake("sms-device", 4);
+    manager.set_direct_runtime(Some(direct));
+
+    let PhoneResponse::SmsQuery(response) = manager
+        .handle(PhoneRequest::SmsQuery(PhoneSmsQueryRequest {
+            profile: "primary".into(),
+            start_ms: 100,
+            end_ms: 200,
+            limit: 250,
+            cursor: None,
+        }))
+        .await
+    else {
+        panic!("expected sms response")
+    };
+    assert_eq!(response.error.unwrap().code, "SMS_CAPABILITY_UNAVAILABLE");
+    assert!(control.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn sms_query_rejects_missing_profile_without_direct_dispatch() {
+    let (mut manager, _runner) = adb_only_manager();
+    let response = manager
+        .handle(PhoneRequest::SmsQuery(PhoneSmsQueryRequest {
+            profile: "missing".into(),
+            start_ms: 100,
+            end_ms: 200,
+            limit: 250,
+            cursor: None,
+        }))
+        .await;
+    let PhoneResponse::SmsQuery(response) = response else {
+        panic!("expected sms response")
+    };
+    assert_eq!(response.error.unwrap().code, "PHONE_PROFILE_NOT_FOUND");
+}
 
 /// A valid PNG of the given size, used as the scripted `screencap` payload.
 fn png_bytes(width: u32, height: u32) -> Vec<u8> {

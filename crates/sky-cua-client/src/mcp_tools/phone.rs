@@ -402,6 +402,11 @@ fn shape_phone_response(
     model: &crate::mcp_server::ModelSessionInfo,
 ) -> Result<Value> {
     match response {
+        PhoneResponse::SmsQuery(_) => Ok(serde_json::json!({
+            "content": [{"type": "text", "text": "sms.query is operator-only and is not exposed through MCP"}],
+            "structuredContent": {"error": "operator_only"},
+            "isError": true
+        })),
         PhoneResponse::Observe(response) => {
             phone_observe_result(response, model.can_receive_images())
         }

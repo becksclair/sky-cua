@@ -135,6 +135,7 @@ class AndroidDirectLinkOwner(
             if (snapshot.state == LinkState.BACKOFF) {
                 synchronized(lifecycleLock) { if (started && lifecycleGeneration == generation) controller.connect() }
             }
+            controller.updateCapabilities(methodHandler.directCapabilityNames())
             synchronized(lifecycleLock) {
                 if (started && lifecycleGeneration == generation) handler.postDelayed(this, 1_000L + (System.nanoTime().ushr(4) % 1_000L))
             }

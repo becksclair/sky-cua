@@ -51,6 +51,7 @@ class DeviceMethodHandler(
     private val clipboardController = ClipboardController(context, contentResolver)
     private val storageController = StorageController(context, contentResolver)
     private val cameraController = CameraController(context)
+    private val smsController = SmsController(context)
 
     private fun accessibility(): SkyAccessibilityService? = SkyAccessibilityService.instance()
 
@@ -61,6 +62,7 @@ class DeviceMethodHandler(
         val state = health()
         return buildSet {
             addAll(listOf("content", "clipboard", "editor", "camera", "storage", "app_management"))
+            if (smsController.isReadable()) add("sms.read")
             if (state.accessibilityEnabled) add("accessibility")
             if (state.canPerformGestures) add("gestures")
             if (state.canRetrieveWindowContent) add("accessibility_tree")
@@ -233,6 +235,8 @@ class DeviceMethodHandler(
 
     override fun key(params: JsonValue.Obj): JsonValue.Obj =
         requireAccessibility().performKey(params.string("key") ?: "")
+
+    override fun smsQuery(params: JsonValue.Obj): JsonValue.Obj = smsController.query(params)
 
     private fun requireAccessibility(): SkyAccessibilityService =
         accessibility()

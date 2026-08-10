@@ -17,7 +17,7 @@ use sky_cua_platform::model::{
     PhoneEnrollmentCommitted,
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fs, io,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex, OnceLock},
@@ -55,6 +55,7 @@ pub(crate) struct DirectDeviceSnapshot {
     pub(crate) device_id: String,
     pub(crate) link_epoch: u64,
     pub(crate) connected: bool,
+    pub(crate) capabilities: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -80,6 +81,7 @@ struct DirectLink {
     bulk: mpsc::Sender<BulkFrame>,
     pending: Mutex<HashMap<String, PendingRequest>>,
     content: Mutex<InboundContentStore>,
+    capabilities: Mutex<BTreeSet<String>>,
 }
 
 /// Cloneable service-internal handle used by phone providers.  It is
@@ -119,6 +121,11 @@ impl DirectRuntimeHandle {
                 device_id: device_id.clone(),
                 link_epoch: link.epoch,
                 connected: true,
+                capabilities: link
+                    .capabilities
+                    .lock()
+                    .expect("capabilities mutex poisoned")
+                    .clone(),
             })
             .collect()
     }
@@ -132,6 +139,11 @@ impl DirectRuntimeHandle {
                 device_id: device_id.to_owned(),
                 link_epoch: link.epoch,
                 connected: true,
+                capabilities: link
+                    .capabilities
+                    .lock()
+                    .expect("capabilities mutex poisoned")
+                    .clone(),
             })
     }
 
@@ -238,9 +250,42 @@ impl DirectRuntimeHandle {
                 bulk: bulk_tx,
                 pending: Mutex::new(HashMap::new()),
                 content: Mutex::new(InboundContentStore::default()),
+                capabilities: Mutex::new(BTreeSet::new()),
             }),
         );
         (control_rx, bulk_rx)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_fake_capabilities(
+        &self,
+        device_id: &str,
+        epoch: u64,
+        capabilities: impl IntoIterator<Item = &'static str>,
+    ) {
+        self.set_capabilities(
+            device_id,
+            epoch,
+            capabilities.into_iter().map(str::to_owned).collect(),
+        );
+    }
+
+    fn set_capabilities(&self, device_id: &str, epoch: u64, capabilities: BTreeSet<String>) {
+        let Some(link) = self
+            .links
+            .lock()
+            .expect("direct link mutex poisoned")
+            .get(device_id)
+            .cloned()
+        else {
+            return;
+        };
+        if link.epoch == epoch {
+            *link
+                .capabilities
+                .lock()
+                .expect("capabilities mutex poisoned") = capabilities;
+        }
     }
 
     #[cfg(test)]
@@ -562,6 +607,7 @@ impl DirectRuntimeHandle {
             bulk: bulk_tx,
             pending: Mutex::new(HashMap::new()),
             content: Mutex::new(InboundContentStore::default()),
+            capabilities: Mutex::new(BTreeSet::new()),
         });
         self.links
             .lock()
@@ -742,6 +788,29 @@ impl DirectRuntimeHandle {
                 payload,
                 ..
             } if event_device == device_id && event_epoch == epoch => {
+                if event == "capability_changed" {
+                    let Some(values) = payload
+                        .get("capabilities")
+                        .and_then(|value| value.as_array())
+                    else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "capability_changed omitted capabilities",
+                        ));
+                    };
+                    let capabilities = values
+                        .iter()
+                        .map(|value| {
+                            value.as_str().map(str::to_owned).ok_or_else(|| {
+                                io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "capability_changed contained a non-string capability",
+                                )
+                            })
+                        })
+                        .collect::<io::Result<BTreeSet<_>>>()?;
+                    self.set_capabilities(device_id, epoch, capabilities);
+                }
                 let _ = self.events.send(DirectDeviceEvent {
                     device_id: event_device,
                     link_epoch: event_epoch,
@@ -2754,8 +2823,21 @@ mod tests {
             vec![DirectDeviceSnapshot {
                 device_id: "device-a".into(),
                 link_epoch: 4,
-                connected: true
+                connected: true,
+                capabilities: BTreeSet::new(),
             }]
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_snapshot_tracks_current_direct_capabilities() {
+        let handle = DirectRuntimeHandle::new();
+        let (_control, _bulk) = handle.register_fake("device-a", 4);
+        handle.set_fake_capabilities("device-a", 4, ["sms.read", "content"]);
+
+        assert_eq!(
+            handle.snapshot("device-a").unwrap().capabilities,
+            BTreeSet::from(["content".to_owned(), "sms.read".to_owned()])
         );
     }
 

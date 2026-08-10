@@ -1,6 +1,8 @@
 package com.skycua.phonecompanion
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
@@ -265,6 +267,17 @@ class MainActivity : AppCompatActivity() {
         statusBody.addView(
             statusRow(getString(R.string.status_notification_listener), enabledChip(health.notificationListenerEnabled)),
         )
+        val smsGranted = checkSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED
+        statusBody.addView(divider(), marginParams(top = 8))
+        statusBody.addView(statusRow(getString(R.string.status_sms_read), enabledChip(smsGranted)))
+        if (!smsGranted) {
+            statusBody.addView(
+                tonalButton(getString(R.string.request_sms_permission)) {
+                    requestPermissions(arrayOf(Manifest.permission.READ_SMS), SMS_PERMISSION_REQUEST_CODE)
+                },
+                marginParams(top = 6),
+            )
+        }
     }
 
     // --- component builders ---------------------------------------------------
@@ -460,6 +473,7 @@ class MainActivity : AppCompatActivity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private companion object {
+        const val SMS_PERMISSION_REQUEST_CODE = 47685
         /** Fixed width for every status badge so the right column lines up. */
         const val BADGE_WIDTH_DP = 92
 

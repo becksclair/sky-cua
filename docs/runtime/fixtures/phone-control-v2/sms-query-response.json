@@ -1,0 +1,43 @@
+{
+  "schema": "sky-cua.sms-query.v1",
+  "ok": true,
+  "profile": "primary",
+  "device_id": "00000000-0000-4000-8000-000000000001",
+  "transport": "companion_direct",
+  "access": "observation_only",
+  "page": {
+    "messages": [
+      {
+        "_id": 7,
+        "thread_id": null,
+        "address": "+34123",
+        "person": null,
+        "date": 1718600000000,
+        "date_sent": null,
+        "protocol": null,
+        "read": 1,
+        "status": null,
+        "type": 1,
+        "reply_path_present": null,
+        "subject": null,
+        "body": "hello",
+        "service_center": null,
+        "locked": null,
+        "sub_id": null,
+        "creator": null,
+        "seen": null,
+        "priority": null,
+        "subscription_id": null,
+        "error_code": null,
+        "message_class": null
+      }
+    ],
+    "next_cursor": null,
+    "scan": {
+      "has_more": false,
+      "exhausted_as_observed": true,
+      "snapshot": false,
+      "observed_at_ms": 1718600000123
+    }
+  }
+}

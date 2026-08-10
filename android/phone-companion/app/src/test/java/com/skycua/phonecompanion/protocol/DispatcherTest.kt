@@ -75,6 +75,10 @@ class DispatcherTest {
     private lateinit var dispatcher: RpcDispatcher
     private val now = 1_000L
 
+    @Test fun smsQueryIsNotPartOfLegacyV1MethodRegistry() {
+        assertTrue(!Protocol.Methods.ALL.contains(Protocol.Methods.SMS_QUERY))
+    }
+
     @Before
     fun setUp() {
         handler = FakeHandler()

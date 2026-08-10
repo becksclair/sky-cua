@@ -53,12 +53,12 @@ pub use content::{
     PHONE_CONTROL_MAX_JSON_BYTES, decode_content_chunk, encode_content_chunk,
 };
 pub use phone::{
-    PhoneAccessibilityNode, PhoneAccessibilitySummary, PhoneAccessibilityTreeRequest,
-    PhoneAccessibilityTreeResponse, PhoneActionResponse, PhoneAppCurrentRequest,
-    PhoneAppForceStopRequest, PhoneAppInfo, PhoneAppInstallMode, PhoneAppInstallRequest,
-    PhoneAppLaunchRequest, PhoneAppListRequest, PhoneAppOpenIntentRequest, PhoneAppResponse,
-    PhoneAppResponseKind, PhoneAvailableAction, PhoneBackendCapabilities, PhoneBackendKind,
-    PhoneCallerProvenance, PhoneCapabilityProfile, PhoneCapabilityRefreshState,
+    PHONE_SMS_QUERY_SCHEMA, PhoneAccessibilityNode, PhoneAccessibilitySummary,
+    PhoneAccessibilityTreeRequest, PhoneAccessibilityTreeResponse, PhoneActionResponse,
+    PhoneAppCurrentRequest, PhoneAppForceStopRequest, PhoneAppInfo, PhoneAppInstallMode,
+    PhoneAppInstallRequest, PhoneAppLaunchRequest, PhoneAppListRequest, PhoneAppOpenIntentRequest,
+    PhoneAppResponse, PhoneAppResponseKind, PhoneAvailableAction, PhoneBackendCapabilities,
+    PhoneBackendKind, PhoneCallerProvenance, PhoneCapabilityProfile, PhoneCapabilityRefreshState,
     PhoneCompanionCapabilities, PhoneCompanionStatusRequest, PhoneCompanionStatusResponse,
     PhoneConnectRequest, PhoneConnectionKind, PhoneCoordinateMapping, PhoneCursorCapabilities,
     PhoneCursorState, PhoneDevice, PhoneDeviceState, PhoneDisconnectRequest,
@@ -71,8 +71,9 @@ pub use phone::{
     PhonePairWirelessResponse, PhonePoint, PhonePressKeyRequest, PhoneRefreshCapabilitiesRequest,
     PhoneRequest, PhoneRequestContext, PhoneResponse, PhoneScrcpyCapabilities,
     PhoneScreenshotRequest, PhoneScreenshotResponse, PhoneSession, PhoneSessionSelector,
-    PhoneSettingsScreen, PhoneStatusReport, PhoneStatusRequest, PhoneSwipeRequest, PhoneTapRequest,
-    PhoneTargetDeviceKind, PhoneTypeTextRequest, PhoneUnavailableAction,
+    PhoneSettingsScreen, PhoneSmsQueryError, PhoneSmsQueryRequest, PhoneSmsQueryResponse,
+    PhoneSmsRecord, PhoneSmsScan, PhoneStatusReport, PhoneStatusRequest, PhoneSwipeRequest,
+    PhoneTapRequest, PhoneTargetDeviceKind, PhoneTypeTextRequest, PhoneUnavailableAction,
 };
 pub use phone_capability::{
     PhoneActivationClass, PhoneCapabilityAvailability, PhoneCapabilityFidelity,

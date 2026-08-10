@@ -8,6 +8,7 @@ import com.skycua.phonecompanion.protocol.RpcDispatcher
 import com.skycua.phonecompanion.protocol.RpcResponse
 import com.skycua.phonecompanion.protocol.TokenStore
 import com.skycua.phonecompanion.protocol.Protocol
+import com.skycua.phonecompanion.protocol.MethodApplicationException
 import java.io.File
 import java.util.Base64
 
@@ -15,11 +16,12 @@ fun interface DirectRequestHandler {
     fun dispatch(frame: String, deviceId: String, linkEpoch: String, nowMs: Long): String
 }
 
-/** Dispatches authenticated phone-control.v2 request frames through the v1 method handler. */
+/** Dispatches authenticated phone-control.v2 frames; direct-only methods bypass the v1 handler. */
 class DirectRequestDispatcher(
     private val rpc: RpcDispatcher,
     private val contentSender: (() -> ContentTransferSender?)? = null,
     private val contentResolver: DirectContentResolver? = null,
+    private val directSmsQuery: ((JsonValue.Obj) -> JsonValue.Obj)? = null,
 ) : DirectRequestHandler {
     override fun dispatch(frame: String, deviceId: String, linkEpoch: String, nowMs: Long): String {
         var requestId: String? = null
@@ -45,7 +47,11 @@ class DirectRequestDispatcher(
             } else if (nowMs >= expires) {
                 errorFrame(requestId, incomingDevice, incomingEpoch, "expired", "request has expired")
             } else {
-                val directContent = handleDirectContent(method, params, incomingEpoch)
+                val directOnly = if (method == Protocol.Methods.SMS_QUERY) {
+                    directSmsQuery?.invoke(params)
+                        ?: throw MethodApplicationException("SMS_QUERY_FAILED", "SMS query is unavailable")
+                } else null
+                val directContent = directOnly ?: handleDirectContent(method, params, incomingEpoch)
                 if (directContent != null) successFrame(requestId, deviceId, incomingEpoch, directContent)
                 else {
                     val canonical = alias(method, params)
@@ -67,6 +73,8 @@ class DirectRequestDispatcher(
                     }
                 }
             }
+        } catch (e: MethodApplicationException) {
+            errorFrame(requestId, incomingDevice, incomingEpoch, e.code, e.message ?: "method failed")
         } catch (e: Exception) {
             errorFrame(requestId, incomingDevice, incomingEpoch, "bad_request", e.message ?: "malformed request")
         }
@@ -219,7 +227,7 @@ class DirectRequestDispatcher(
             contentResolver: DirectContentResolver? = null,
         ): DirectRequestDispatcher {
             val tokens = TokenStore().also { it.install(DIRECT_TOKEN, Long.MAX_VALUE) }
-            return DirectRequestDispatcher(RpcDispatcher(handler, tokens), contentSender, contentResolver)
+            return DirectRequestDispatcher(RpcDispatcher(handler, tokens), contentSender, contentResolver, handler::smsQuery)
         }
     }
 }

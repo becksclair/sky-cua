@@ -143,6 +143,16 @@ fn sample_mapping() -> PhoneCoordinateMapping {
 fn phone_request_variants_preserve_type_tags() {
     let requests: Vec<(PhoneRequest, &str)> = vec![
         (
+            PhoneRequest::SmsQuery(PhoneSmsQueryRequest {
+                profile: "primary".to_string(),
+                start_ms: 1_000,
+                end_ms: 2_000,
+                limit: 250,
+                cursor: None,
+            }),
+            "sms_query",
+        ),
+        (
             PhoneRequest::Observe(PhoneObserveRequest::default()),
             "observe",
         ),
@@ -316,7 +326,7 @@ fn phone_request_variants_preserve_type_tags() {
         ),
     ];
 
-    assert_eq!(requests.len(), 27, "all 27 canonical tools are covered");
+    assert_eq!(requests.len(), 28, "all phone request variants are covered");
 
     for (request, expected) in requests {
         let rendered = serde_json::to_value(&request).expect("request should serialize");
@@ -325,6 +335,54 @@ fn phone_request_variants_preserve_type_tags() {
             serde_json::from_value(rendered).expect("request should round-trip");
         assert_eq!(parsed, request, "round-trip for {expected}");
     }
+}
+
+#[test]
+fn sms_query_response_keeps_nullable_raw_fields_and_scan_contract() {
+    let response = PhoneResponse::SmsQuery(PhoneSmsQueryResponse {
+        schema: PHONE_SMS_QUERY_SCHEMA.to_owned(),
+        profile: "primary".to_owned(),
+        device_id: Some("device-1".to_owned()),
+        transport: Some("companion_direct".to_owned()),
+        access: Some("observation_only".to_owned()),
+        messages: vec![PhoneSmsRecord {
+            id: Some(7),
+            thread_id: None,
+            address: Some("+34123".to_owned()),
+            person: None,
+            date: Some(1_000),
+            date_sent: None,
+            protocol: None,
+            read: Some(1),
+            status: None,
+            message_type: Some(1),
+            reply_path_present: None,
+            subject: None,
+            body: Some("hello".to_owned()),
+            service_center: None,
+            locked: None,
+            sub_id: None,
+            creator: None,
+            seen: None,
+            priority: None,
+            subscription_id: None,
+            error_code: None,
+            message_class: None,
+        }],
+        next_cursor: None,
+        scan: Some(PhoneSmsScan {
+            has_more: false,
+            exhausted_as_observed: true,
+            snapshot: false,
+            observed_at_ms: 2_000,
+        }),
+        error: None,
+    });
+    let value = serde_json::to_value(response).expect("SMS response serializes");
+    assert_eq!(value["type"], "sms_query");
+    assert!(value.get("thread_id").is_none());
+    assert!(value["messages"][0]["thread_id"].is_null());
+    assert_eq!(value["scan"]["snapshot"], false);
 }
 
 #[test]

@@ -3,8 +3,9 @@ use std::process::ExitCode;
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
-    AppSelector, CaptureScreenMode, ServiceRequest, ServiceResponse, SessionPresenceAction,
-    SessionPresenceIntent,
+    AppSelector, CaptureScreenMode, PHONE_SMS_QUERY_SCHEMA, PhoneRequest, PhoneResponse,
+    PhoneSmsQueryRequest, PhoneSmsQueryResponse, ServiceRequest, ServiceResponse,
+    SessionPresenceAction, SessionPresenceIntent,
 };
 
 use crate::app_state::AppStateDetail;
@@ -35,6 +36,7 @@ pub(crate) enum OperatorCommand {
     GetAppState(GetAppStateArgs),
     SessionPresence(SessionPresenceAction),
     CuaRequest(Box<ServiceRequest>),
+    SmsQuery(PhoneSmsQueryArgs),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +44,15 @@ pub(crate) struct GetAppStateArgs {
     selector: Option<AppSelector>,
     detail: AppStateDetail,
     capture_screen: CaptureScreenMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PhoneSmsQueryArgs {
+    profile: String,
+    start_ms: u64,
+    end_ms: u64,
+    limit: u32,
+    cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +79,16 @@ impl OperatorCommand {
                 action: action.clone(),
             },
             Self::CuaRequest(request) => request.as_ref().clone(),
+            Self::SmsQuery(args) => ServiceRequest::Phone {
+                request: PhoneRequest::SmsQuery(PhoneSmsQueryRequest {
+                    profile: args.profile.clone(),
+                    start_ms: args.start_ms,
+                    end_ms: args.end_ms,
+                    limit: args.limit,
+                    cursor: args.cursor.clone(),
+                }),
+                context: None,
+            },
         }
     }
 }
@@ -106,6 +127,7 @@ where
         "cua-request" => Ok(CliMode::Operator(OperatorCommand::CuaRequest(Box::new(
             parse_cua_request(&rest)?,
         )))),
+        "phone" => Ok(CliMode::Operator(parse_phone_operator_command(&rest)?)),
         other => bail!("unsupported sky-cua-client mode: {other}"),
     }
 }
@@ -178,7 +200,65 @@ fn command_name(command: &OperatorCommand) -> &'static str {
         OperatorCommand::GetAppState(_) => "get-app-state",
         OperatorCommand::SessionPresence(_) => "session-presence",
         OperatorCommand::CuaRequest(_) => "cua-request",
+        OperatorCommand::SmsQuery(_) => "phone sms query",
     }
+}
+
+fn parse_phone_operator_command(args: &[String]) -> Result<OperatorCommand> {
+    if args.len() < 2 || args[0] != "sms" || args[1] != "query" {
+        bail!("phone requires the command: sms query");
+    }
+    Ok(OperatorCommand::SmsQuery(parse_sms_query_args(&args[2..])?))
+}
+
+fn parse_sms_query_args(args: &[String]) -> Result<PhoneSmsQueryArgs> {
+    let mut profile = None;
+    let mut start_ms = None;
+    let mut end_ms = None;
+    let mut limit = 250_u32;
+    let mut cursor = None;
+    let mut index = 0;
+    while index < args.len() {
+        let flag = args[index].as_str();
+        let value = next_arg_value(args, index, flag)?;
+        match flag {
+            "--profile" => profile = Some(value.to_owned()),
+            "--start-ms" => start_ms = Some(parse_sms_u64(flag, value)?),
+            "--end-ms" => end_ms = Some(parse_sms_u64(flag, value)?),
+            "--limit" => {
+                limit = value
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("invalid value for --limit: {value}"))?;
+                if !(1..=500).contains(&limit) {
+                    bail!("--limit must be between 1 and 500");
+                }
+            }
+            "--cursor" => cursor = Some(value.to_owned()),
+            other => bail!("unsupported phone sms query flag: {other}"),
+        }
+        index += 2;
+    }
+    let profile = profile
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("phone sms query requires --profile NAME"))?;
+    let start_ms = start_ms.ok_or_else(|| anyhow!("phone sms query requires --start-ms VALUE"))?;
+    let end_ms = end_ms.ok_or_else(|| anyhow!("phone sms query requires --end-ms VALUE"))?;
+    if start_ms >= end_ms {
+        bail!("--start-ms must be before --end-ms");
+    }
+    Ok(PhoneSmsQueryArgs {
+        profile,
+        start_ms,
+        end_ms,
+        limit,
+        cursor,
+    })
+}
+
+fn parse_sms_u64(flag: &str, value: &str) -> Result<u64> {
+    value
+        .parse::<u64>()
+        .map_err(|_| anyhow!("invalid value for {flag}: {value}"))
 }
 
 fn parse_cua_request(args: &[String]) -> Result<ServiceRequest> {
@@ -420,11 +500,31 @@ fn render_operator_response(
                 exit_code: ExitCode::SUCCESS,
             })
         }
+        (
+            OperatorCommand::SmsQuery(args),
+            ServiceResponse::Phone {
+                response: PhoneResponse::SmsQuery(response),
+            },
+        ) => Ok(render_sms_query_response(args, response)),
         (OperatorCommand::CuaRequest(_), response) => {
             let success = !matches!(response, ServiceResponse::Error { .. });
             Ok(RenderedResponse {
                 payload: serde_json::to_value(response)?,
                 exit_code: exit_code(success),
+            })
+        }
+        (OperatorCommand::SmsQuery(_), ServiceResponse::Error { code, message, .. }) => {
+            Ok(RenderedResponse {
+                payload: json!({
+                    "schema": PHONE_SMS_QUERY_SCHEMA,
+                    "ok": false,
+                    "error": {
+                        "code": code,
+                        "message": message,
+                        "retryable": sms_error_retryable(&code),
+                    },
+                }),
+                exit_code: ExitCode::from(1),
             })
         }
         (_, ServiceResponse::Error { code, message, .. }) => Ok(RenderedResponse {
@@ -439,6 +539,82 @@ fn render_operator_response(
             command_name(other_command)
         ),
     }
+}
+
+fn render_sms_query_response(
+    args: &PhoneSmsQueryArgs,
+    response: PhoneSmsQueryResponse,
+) -> RenderedResponse {
+    let Some(error) = response.error else {
+        let scan_valid = response.scan.as_ref().is_some_and(|scan| {
+            !scan.snapshot
+                && scan.has_more != scan.exhausted_as_observed
+                && scan.has_more == response.next_cursor.is_some()
+        });
+        let authority_valid = response
+            .device_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            && response.schema == PHONE_SMS_QUERY_SCHEMA
+            && response.profile == args.profile
+            && response.transport.as_deref() == Some("companion_direct")
+            && response.access.as_deref() == Some("observation_only")
+            && response.messages.len() <= args.limit as usize
+            && response
+                .next_cursor
+                .as_deref()
+                .is_none_or(|value| !value.trim().is_empty())
+            && scan_valid;
+        if !authority_valid {
+            return RenderedResponse {
+                payload: json!({
+                    "schema": PHONE_SMS_QUERY_SCHEMA,
+                    "ok": false,
+                    "error": {
+                        "code": "PROTOCOL_ERROR",
+                        "message": "sms.query success omitted or changed its direct observation authority",
+                        "retryable": false,
+                    },
+                }),
+                exit_code: ExitCode::from(1),
+            };
+        }
+        return RenderedResponse {
+            payload: json!({
+                "schema": PHONE_SMS_QUERY_SCHEMA,
+                "ok": true,
+                "profile": response.profile,
+                "device_id": response.device_id,
+                "transport": response.transport,
+                "access": response.access,
+                "page": {
+                    "messages": response.messages,
+                    "next_cursor": response.next_cursor,
+                    "scan": response.scan,
+                },
+            }),
+            exit_code: ExitCode::SUCCESS,
+        };
+    };
+    RenderedResponse {
+        payload: json!({
+            "schema": PHONE_SMS_QUERY_SCHEMA,
+            "ok": false,
+            "error": {
+                "code": error.code,
+                "message": error.message,
+                "retryable": sms_error_retryable(&error.code),
+            },
+        }),
+        exit_code: ExitCode::from(1),
+    }
+}
+
+fn sms_error_retryable(code: &str) -> bool {
+    matches!(
+        code,
+        "DEVICE_OFFLINE" | "SMS_PROVIDER_UNAVAILABLE" | "SMS_QUERY_FAILED" | "DEADLINE_EXCEEDED"
+    )
 }
 
 fn exit_code(success: bool) -> ExitCode {
@@ -503,6 +679,99 @@ mod tests {
             panic!("mode should be a CUA request");
         };
         assert!(matches!(*request, ServiceRequest::GetScreenshot { .. }));
+    }
+
+    #[test]
+    fn parses_phone_sms_query_with_required_profile_and_fixed_window() {
+        let mode = parse_cli_mode(
+            [
+                "phone",
+                "sms",
+                "query",
+                "--profile",
+                "primary",
+                "--start-ms",
+                "100",
+                "--end-ms",
+                "200",
+                "--limit",
+                "7",
+                "--cursor",
+                "opaque",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .expect("SMS query parses");
+        let CliMode::Operator(OperatorCommand::SmsQuery(args)) = mode else {
+            panic!("expected SMS query command");
+        };
+        assert_eq!(args.profile, "primary");
+        assert_eq!(args.start_ms, 100);
+        assert_eq!(args.end_ms, 200);
+        assert_eq!(args.limit, 7);
+        assert_eq!(args.cursor.as_deref(), Some("opaque"));
+    }
+
+    #[test]
+    fn sms_renderer_fails_closed_when_authority_fields_are_missing() {
+        let args = PhoneSmsQueryArgs {
+            profile: "primary".to_owned(),
+            start_ms: 100,
+            end_ms: 200,
+            limit: 250,
+            cursor: None,
+        };
+        let rendered = render_sms_query_response(
+            &args,
+            PhoneSmsQueryResponse {
+                schema: PHONE_SMS_QUERY_SCHEMA.to_owned(),
+                profile: "primary".to_owned(),
+                device_id: None,
+                transport: None,
+                access: None,
+                messages: Vec::new(),
+                next_cursor: None,
+                scan: None,
+                error: None,
+            },
+        );
+        assert_eq!(rendered.exit_code, ExitCode::from(1));
+        assert_eq!(rendered.payload["ok"], false);
+        assert_eq!(rendered.payload["error"]["code"], "PROTOCOL_ERROR");
+    }
+
+    #[test]
+    fn sms_renderer_rejects_contradictory_page_evidence() {
+        let args = PhoneSmsQueryArgs {
+            profile: "primary".to_owned(),
+            start_ms: 100,
+            end_ms: 200,
+            limit: 1,
+            cursor: None,
+        };
+        let rendered = render_sms_query_response(
+            &args,
+            PhoneSmsQueryResponse {
+                schema: PHONE_SMS_QUERY_SCHEMA.to_owned(),
+                profile: "primary".to_owned(),
+                device_id: Some("device-1".to_owned()),
+                transport: Some("companion_direct".to_owned()),
+                access: Some("observation_only".to_owned()),
+                messages: Vec::new(),
+                next_cursor: None,
+                scan: Some(sky_cua_platform::model::PhoneSmsScan {
+                    has_more: true,
+                    exhausted_as_observed: false,
+                    snapshot: false,
+                    observed_at_ms: 300,
+                }),
+                error: None,
+            },
+        );
+
+        assert_eq!(rendered.exit_code, ExitCode::from(1));
+        assert_eq!(rendered.payload["error"]["code"], "PROTOCOL_ERROR");
     }
 
     #[test]

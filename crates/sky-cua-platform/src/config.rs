@@ -14,7 +14,7 @@
 //! rebuilding that manager/restarting the runtime. Tests can point
 //! `SKY_CUA_CONFIG_PATH` at fixtures.
 
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::Deserialize;
 
@@ -198,8 +198,26 @@ pub struct PhoneConfig {
     pub direct_advertised_endpoint: Option<String>,
     pub direct_enrollment_ttl_ms: Option<u64>,
     pub direct_state_path: Option<String>,
+    /// Named, non-secret direct-device profiles used by observation-only
+    /// phone data lanes such as SMS. Profiles are never inferred from the
+    /// default serial or an active session.
+    #[serde(default)]
+    pub profiles: BTreeMap<String, PhoneProfileConfig>,
     #[serde(default)]
     pub primary_target_models: Vec<String>,
+}
+
+/// Non-secret operator selection for one named phone profile. Credentials stay
+/// in the direct-link state store; this table only selects an enrolled device
+/// and its explicitly allowed, read-only capabilities.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PhoneProfileConfig {
+    pub device_id: String,
+    pub transport: String,
+    pub access: String,
+    #[serde(default)]
+    pub required_capabilities: Vec<String>,
 }
 
 /// Default companion package id when neither config nor env overrides it.
@@ -331,6 +349,7 @@ pub struct ResolvedPhoneSelection {
     pub direct_advertised_endpoint: Option<String>,
     pub direct_enrollment_ttl_ms: u64,
     pub direct_state_path: Option<String>,
+    pub profiles: BTreeMap<String, PhoneProfileConfig>,
 }
 
 /// Every `SKY_CUA_*` environment key declared as a `pub const *_ENV` in this
@@ -724,6 +743,7 @@ pub fn resolve_phone_selection(phone: &PhoneConfig) -> ResolvedPhoneSelection {
             .unwrap_or(PHONE_DEFAULT_DIRECT_ENROLLMENT_TTL_MS),
         direct_state_path: env_string(PHONE_DIRECT_STATE_PATH_ENV)
             .or_else(|| normalize(phone.direct_state_path.clone())),
+        profiles: phone.profiles.clone(),
     }
 }
 
@@ -1047,6 +1067,12 @@ direct_advertised_endpoint = "wss://saga.example.ts.net/phone/control"
 direct_enrollment_ttl_ms = 120000
 direct_state_path = "/var/lib/sky-cua/phone-direct.json"
 primary_target_models = ["Galaxy S26 Ultra", "Redmi Pad 15 Pro"]
+
+[phone.profiles.primary]
+device_id = "00000000-0000-4000-8000-000000000001"
+transport = "companion_direct"
+access = "observation_only"
+required_capabilities = ["sms.read"]
 "#;
 
     #[test]
@@ -1059,6 +1085,14 @@ primary_target_models = ["Galaxy S26 Ultra", "Redmi Pad 15 Pro"]
         assert_eq!(phone.companion_rpc_port, Some(47683));
         assert_eq!(phone.capability_cache_ttl_ms, Some(30000));
         assert_eq!(phone.direct_enabled, Some(true));
+        assert_eq!(
+            phone.profiles["primary"].device_id,
+            "00000000-0000-4000-8000-000000000001"
+        );
+        assert_eq!(
+            phone.profiles["primary"].required_capabilities,
+            vec!["sms.read"]
+        );
         assert_eq!(
             phone.direct_listen_addr.as_deref(),
             Some("100.64.0.10:47684")

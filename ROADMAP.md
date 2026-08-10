@@ -264,6 +264,9 @@ notifications) and optional scrcpy acceleration.
       diagnostic (and opens the on-device Accessibility screen) when an OEM gates
       the grant. Proven end-to-end on the API-36 emulator (both services bind,
       existing services preserved)
+- [x] Observation-only native SMS ingress (source, installed companion/runtime,
+      `READ_SMS`, named-profile provider query, and replay/checkpoint acceptance
+      proven live) — [`docs/features/sms-observation.md`](docs/features/sms-observation.md)
 - [ ] Phase 7 adversarial testing
 - [ ] Phase 8 full live-smoke and release proof (Redmi/API-36 tablet lane
       blocked until that device is connected). Agent-driven companion-setup

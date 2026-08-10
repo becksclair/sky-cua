@@ -1,0 +1,9 @@
+{
+  "schema": "sky-cua.sms-query.v1",
+  "ok": false,
+  "error": {
+    "code": "SMS_PERMISSION_NOT_GRANTED",
+    "message": "READ_SMS is not available to the companion",
+    "retryable": false
+  }
+}

@@ -129,6 +129,83 @@ Requests include `request_id`, `device_id`, `link_epoch`, `idempotent`, absolute
 Non-idempotent requests are never replayed after an ambiguous disconnect.
 Responses and events must match the authenticated device and epoch.
 
+### Observation-only SMS query
+
+`sms.query` is a direct-only method carried inside the authenticated v2 request
+frame. It is intentionally absent from the Android v1 `Protocol.Methods.ALL`
+registry, the MCP surface, generic v1/ADB RPC, and fallback routing. The host
+requires a named, non-secret `[phone.profiles.<name>]` profile with exactly
+`transport = "companion_direct"`, `access = "observation_only"`, and
+`required_capabilities = ["sms.read"]` (additional capabilities are allowed).
+The CLI always requires `--profile`; no default or implicit serial is used.
+
+The direct request params are:
+
+```json
+{
+  "start_ms": 1718600000000,
+  "end_ms": 1718603600000,
+  "limit": 250,
+  "cursor": "<opaque cursor>"
+}
+```
+
+`start_ms` is inclusive and `end_ms` exclusive. `limit` is 1..500 and defaults
+to 250. Each invocation returns one page, ordered by provider `date ASC, _id
+ASC`, using a fixed query window. The cursor encodes only the query window and
+last key; a malformed cursor is `INVALID_CURSOR` and a cursor for another
+window is `CURSOR_QUERY_MISMATCH`.
+
+The result contains `messages` with the nullable raw `Telephony.Sms` provider
+columns (`_id`, `thread_id`, `address`, `person`, `date`, `date_sent`,
+`protocol`, `read`, `status`, `type`, `reply_path_present`, `subject`, `body`,
+`service_center`, `locked`, `sub_id`, `creator`, `seen`, `priority`,
+`subscription_id`, `error_code`, and `message_class`) plus `next_cursor` and:
+
+```json
+{
+  "has_more": false,
+  "exhausted_as_observed": true,
+  "snapshot": false,
+  "observed_at_ms": 1718600000123
+}
+```
+
+The provider is read through Android `ContentResolver` at
+`Telephony.Sms.CONTENT_URI`; only `MESSAGE_TYPE_INBOX` rows are paged. The
+provider query requests only the portable identity/ingress subset. Optional
+columns omitted by OEM restricted views remain in the nullable wire object as
+`null` rather than making the whole query fail.
+`READ_SMS` is the only SMS permission declared;
+the companion does not send messages, become the default SMS handler, or write
+provider rows. Permission status and an explicit operator request action are
+shown in the companion's main screen. No permission is granted automatically.
+Provider, permission, transport, deadline, or decode errors fail the whole
+request and never return a partial page or continuation cursor. Defined error
+codes are `PHONE_DISABLED`, `PHONE_PROFILE_NOT_FOUND`, `PHONE_PROFILE_INVALID`,
+`DIRECT_DEVICE_REQUIRED`, `DEVICE_OFFLINE`, `SMS_PERMISSION_NOT_GRANTED`,
+`SMS_PERMISSION_RESTRICTED`, `SMS_PROVIDER_UNAVAILABLE`, `INVALID_ARGUMENT`,
+`INVALID_CURSOR`, `CURSOR_QUERY_MISMATCH`, `SMS_QUERY_FAILED`,
+`SMS_CAPABILITY_UNAVAILABLE`, `DEADLINE_EXCEEDED`, and `PROTOCOL_ERROR`.
+
+The stable CLI envelope is `sky-cua.sms-query.v1`:
+
+```json
+{
+  "schema": "sky-cua.sms-query.v1",
+  "ok": true,
+  "profile": "primary",
+  "device_id": "<stable direct device id>",
+  "transport": "companion_direct",
+  "access": "observation_only",
+  "page": { "messages": [], "next_cursor": null, "scan": {} }
+}
+```
+
+Failure is `{ "schema": "sky-cua.sms-query.v1", "ok": false,
+"error": { "code", "message", "retryable" } }` and exits nonzero. See the
+cross-language fixtures in `fixtures/phone-control-v2/sms-query-*.json`.
+
 The stable JSON enum is defined by
 `crates/sky-cua-platform/src/model/phone_direct.rs`. Unknown frame types or
 invalid shapes are protocol errors, not capability fallbacks.

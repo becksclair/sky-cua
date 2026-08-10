@@ -66,6 +66,11 @@ interface MethodHandler {
 
     fun key(params: JsonValue.Obj): JsonValue.Obj =
         throw MethodApplicationException("unsupported_api", "key input is unavailable")
+
+    /** Observation-only direct phone-control.v2 SMS query. This is not part of
+     * the legacy v1 RPC method registry. */
+    fun smsQuery(params: JsonValue.Obj): JsonValue.Obj =
+        throw MethodApplicationException("SMS_QUERY_FAILED", "SMS query is unavailable")
 }
 
 /**

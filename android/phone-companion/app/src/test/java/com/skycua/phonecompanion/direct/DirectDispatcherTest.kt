@@ -20,6 +20,13 @@ class DirectDispatcherTest {
         assertTrue(response.contains("\"type\":\"response\"")); assertTrue(response.contains("\"request_id\":\"r1\"")); assertEquals(1, h.healthCalls)
     }
 
+    @Test fun smsQueryIsDirectOnlyAndReturnsStructuredResult() {
+        val (d, _) = dispatcher(FakeHandler(sms = true))
+        val response = d.dispatch(request("sms.query", params = "{\"start_ms\":1,\"end_ms\":2}"), device, "7", 100)
+        assertTrue(response.contains("\"type\":\"response\""))
+        assertTrue(response.contains("\"messages\":[ ]") || response.contains("\"messages\":[]"))
+    }
+
     @Test fun wrongDeviceEpochAndExpiredRequestsDoNotCallHandler() {
         val (d, h) = dispatcher()
         assertTrue(d.dispatch(request("companion.status", deviceId = "00000000-0000-4000-8000-000000000002"), device, "7", 100).contains("device_mismatch"))
@@ -124,6 +131,7 @@ class DirectDispatcherTest {
         private val appError: Boolean = false,
         private val appShotBytes: ByteArray? = null,
         private val localContentFile: File? = null,
+        private val sms: Boolean = false,
     ) : MethodHandler {
         var healthCalls = 0
         override fun health() = HealthState("test", 1, "pkg", true, true, true, true, false, false, true, null).also { healthCalls++ }
@@ -140,6 +148,14 @@ class DirectDispatcherTest {
         override fun currentApp(): CurrentAppResult = error("unused")
         override fun appList(params: AppListParams): AppListResult = error("unused")
         override fun appOp(params: AppOpParams): JsonValue.Obj = error("unused")
+        override fun smsQuery(params: JsonValue.Obj): JsonValue.Obj {
+            if (!sms) return error("unused")
+            return jsonObject {
+                put("messages", com.skycua.phonecompanion.json.jsonArray(emptyList()))
+                put("next_cursor", null)
+                put("scan", jsonObject { put("has_more", false); put("exhausted_as_observed", true); put("snapshot", false); put("observed_at_ms", 2L) })
+            }
+        }
         override fun camera(params: JsonValue.Obj): JsonValue.Obj = jsonObject {
             val file = localContentFile ?: error("unused")
             put("_content_path", file.absolutePath)

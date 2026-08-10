@@ -25,6 +25,7 @@
     <string name="status_native_overlay">Native overlay</string>
     <string name="status_overlay_passthrough">Overlay pass-through</string>
     <string name="status_notification_listener">Notification listener</string>
+    <string name="status_sms_read">SMS read access</string>
     <string name="chip_running">Running</string>
     <string name="chip_connecting">Connecting</string>
     <string name="chip_idle">Idle</string>
@@ -36,6 +37,7 @@
     <string name="state_enabled">Enabled</string>
     <string name="state_disabled">Disabled</string>
     <string name="retry_host_connection">Retry host connection</string>
+    <string name="request_sms_permission">Allow SMS read access</string>
 
     <!-- Direct enrollment -->
     <string name="enrollment_activity_label">Connect Companion</string>

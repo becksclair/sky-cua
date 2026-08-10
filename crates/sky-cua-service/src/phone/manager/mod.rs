@@ -39,13 +39,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sky_cua_platform::config::{ResolvedPhoneSelection, resolved_phone_selection};
 use sky_cua_platform::model::{
-    DiagnosticEntry, PhoneBackendCapabilities, PhoneBackendKind, PhoneCapabilityProfile,
-    PhoneCapabilityRefreshState, PhoneCompanionCapabilities, PhoneConnectRequest,
-    PhoneConnectionIdentity, PhoneConnectionKind, PhoneDeviceState, PhoneDisconnectRequest,
-    PhoneDisconnectResponse, PhoneListDevicesResponse, PhoneObserveRequest,
+    DiagnosticEntry, PHONE_SMS_QUERY_SCHEMA, PhoneBackendCapabilities, PhoneBackendKind,
+    PhoneCapabilityProfile, PhoneCapabilityRefreshState, PhoneCompanionCapabilities,
+    PhoneConnectRequest, PhoneConnectionIdentity, PhoneConnectionKind, PhoneDeviceState,
+    PhoneDisconnectRequest, PhoneDisconnectResponse, PhoneListDevicesResponse, PhoneObserveRequest,
     PhonePairWirelessRequest, PhonePairWirelessResponse, PhoneRequest, PhoneResponse,
-    PhoneScrcpyCapabilities, PhoneSession, PhoneSessionSelector, PhoneStatusReport,
-    PhoneTargetDeviceKind, PixelSize,
+    PhoneScrcpyCapabilities, PhoneSession, PhoneSessionSelector, PhoneSmsQueryError,
+    PhoneSmsQueryRequest, PhoneSmsQueryResponse, PhoneStatusReport, PhoneTargetDeviceKind,
+    PixelSize,
 };
 
 use super::adb;
@@ -55,8 +56,8 @@ use super::companion::client::CompanionClient;
 use super::companion::identity::CompanionBootstrapOptions;
 use super::cursor::PhoneCursorTracker;
 use super::device;
-use super::direct::DirectRuntimeHandle;
 use super::direct::provider::CompanionDirectProvider;
+use super::direct::{DirectRuntimeError, DirectRuntimeHandle};
 use super::scrcpy;
 use super::snapshot::{DEFAULT_SNAPSHOT_CAPACITY, PhoneSnapshotRegistry};
 
@@ -463,6 +464,9 @@ impl PhoneManager {
             PhoneRequest::Status(request) => {
                 PhoneResponse::Status(self.status(request.refresh_devices).await)
             }
+            PhoneRequest::SmsQuery(request) => {
+                PhoneResponse::SmsQuery(self.sms_query(request).await)
+            }
             _request if !self.selection.enabled => {
                 PhoneResponse::Status(self.disabled_status().await)
             }
@@ -566,6 +570,129 @@ impl PhoneManager {
                 .map(PhoneResponse::Storage)
                 .unwrap_or_else(PhoneResponse::FeatureError),
         }
+    }
+
+    /// Execute the named, observation-only SMS lane. This deliberately does
+    /// not call `resolve_session_id`: profile resolution owns device identity,
+    /// and the only accepted transport is the authenticated direct provider.
+    async fn sms_query(&self, request: PhoneSmsQueryRequest) -> PhoneSmsQueryResponse {
+        let failure = |code: &str, message: String| -> PhoneSmsQueryResponse {
+            schema_sms_failure(&request.profile, code, message)
+        };
+
+        if !self.selection.enabled {
+            return failure("PHONE_DISABLED", "phone support is disabled".into());
+        }
+
+        if request.profile.trim().is_empty()
+            || request.start_ms >= request.end_ms
+            || !(1..=500).contains(&request.limit)
+        {
+            return failure(
+                "INVALID_ARGUMENT",
+                "profile must be non-empty, start_ms must be before end_ms, and limit must be 1..500".into(),
+            );
+        }
+        let Some(profile) = self.selection.profiles.get(&request.profile) else {
+            return failure(
+                "PHONE_PROFILE_NOT_FOUND",
+                format!("named phone profile {:?} was not found", request.profile),
+            );
+        };
+        if profile.device_id.trim().is_empty()
+            || profile.transport != "companion_direct"
+            || profile.access != "observation_only"
+            || !profile
+                .required_capabilities
+                .iter()
+                .any(|capability| capability == "sms.read")
+        {
+            return failure(
+                "PHONE_PROFILE_INVALID",
+                format!(
+                    "named phone profile {:?} is not a valid SMS observation profile",
+                    request.profile
+                ),
+            );
+        }
+        let Some(provider) = self.direct_provider.as_ref() else {
+            return failure(
+                "DIRECT_DEVICE_REQUIRED",
+                "SMS observation requires an authenticated CompanionDirect device".into(),
+            );
+        };
+        let Some(snapshot) = provider.device(&profile.device_id) else {
+            return failure(
+                "DEVICE_OFFLINE",
+                format!("CompanionDirect device {:?} is offline", profile.device_id),
+            );
+        };
+        if !snapshot.capabilities.contains("sms.read") {
+            return failure(
+                "SMS_CAPABILITY_UNAVAILABLE",
+                format!(
+                    "CompanionDirect device {:?} does not advertise sms.read",
+                    profile.device_id
+                ),
+            );
+        }
+
+        let params = serde_json::json!({
+            "start_ms": request.start_ms,
+            "end_ms": request.end_ms,
+            "limit": request.limit,
+            "cursor": request.cursor,
+        });
+        let result = provider
+            .dispatch(
+                &profile.device_id,
+                snapshot.link_epoch,
+                "sms.query",
+                params,
+                true,
+                std::time::Duration::from_secs(30),
+            )
+            .await;
+        let value = match result {
+            Ok(value) => value,
+            Err(error) => {
+                return failure(
+                    sms_direct_error_code(&error),
+                    sms_direct_error_message(error),
+                );
+            }
+        };
+        let mut response: PhoneSmsQueryResponse = match serde_json::from_value(value) {
+            Ok(response) => response,
+            Err(error) => {
+                return failure(
+                    "PROTOCOL_ERROR",
+                    format!("invalid sms.query response: {error}"),
+                );
+            }
+        };
+        // The host is the final whole-request boundary: even if a future
+        // companion returns an accidental partial cursor/error combination,
+        // do not surface it as a successful page.
+        if response.error.is_some() {
+            response.messages.clear();
+            response.next_cursor = None;
+            response.scan = None;
+            response.schema = PHONE_SMS_QUERY_SCHEMA.to_owned();
+            return response;
+        }
+        if !sms_page_contract_valid(&response, request.limit) {
+            return failure(
+                "PROTOCOL_ERROR",
+                "sms.query returned an invalid or contradictory page".into(),
+            );
+        }
+        response.schema = PHONE_SMS_QUERY_SCHEMA.to_owned();
+        response.profile = request.profile;
+        response.device_id = Some(profile.device_id.clone());
+        response.transport = Some("companion_direct".to_owned());
+        response.access = Some("observation_only".to_owned());
+        response
     }
 
     fn reconcile_direct_sessions(&mut self) {
@@ -1961,9 +2088,70 @@ fn companion_from_direct_health(health: Option<&serde_json::Value>) -> PhoneComp
     companion
 }
 
+fn schema_sms_failure(profile: &str, code: &str, message: String) -> PhoneSmsQueryResponse {
+    PhoneSmsQueryResponse {
+        schema: PHONE_SMS_QUERY_SCHEMA.to_owned(),
+        profile: profile.to_owned(),
+        device_id: None,
+        transport: None,
+        access: None,
+        messages: Vec::new(),
+        next_cursor: None,
+        scan: None,
+        error: Some(PhoneSmsQueryError {
+            code: code.to_owned(),
+            message,
+        }),
+    }
+}
+
+fn sms_page_contract_valid(response: &PhoneSmsQueryResponse, limit: u32) -> bool {
+    let Some(scan) = response.scan.as_ref() else {
+        return false;
+    };
+    !scan.snapshot
+        && scan.has_more != scan.exhausted_as_observed
+        && scan.has_more == response.next_cursor.is_some()
+        && response.messages.len() <= limit as usize
+        && response
+            .next_cursor
+            .as_deref()
+            .is_none_or(|value| !value.trim().is_empty())
+}
+
+fn sms_direct_error_code(error: &DirectRuntimeError) -> &'static str {
+    match error {
+        DirectRuntimeError::NotConnected
+        | DirectRuntimeError::LinkEpochChanged { .. }
+        | DirectRuntimeError::Disconnected => "DEVICE_OFFLINE",
+        DirectRuntimeError::DeadlineExceeded => "DEADLINE_EXCEEDED",
+        DirectRuntimeError::Protocol(_) => "PROTOCOL_ERROR",
+        DirectRuntimeError::Remote { code, .. } => match code.as_str() {
+            "SMS_PERMISSION_NOT_GRANTED" => "SMS_PERMISSION_NOT_GRANTED",
+            "SMS_PERMISSION_RESTRICTED" => "SMS_PERMISSION_RESTRICTED",
+            "SMS_PROVIDER_UNAVAILABLE" => "SMS_PROVIDER_UNAVAILABLE",
+            "INVALID_ARGUMENT" => "INVALID_ARGUMENT",
+            "INVALID_CURSOR" => "INVALID_CURSOR",
+            "CURSOR_QUERY_MISMATCH" => "CURSOR_QUERY_MISMATCH",
+            "SMS_QUERY_FAILED" => "SMS_QUERY_FAILED",
+            "DEADLINE_EXCEEDED" => "DEADLINE_EXCEEDED",
+            "PROTOCOL_ERROR" => "PROTOCOL_ERROR",
+            _ => "SMS_QUERY_FAILED",
+        },
+    }
+}
+
+fn sms_direct_error_message(error: DirectRuntimeError) -> String {
+    match error {
+        DirectRuntimeError::Remote { message, .. } => message,
+        other => format!("CompanionDirect SMS query failed: {other:?}"),
+    }
+}
+
 fn phone_request_activity_selector(request: &PhoneRequest) -> Option<&PhoneSessionSelector> {
     match request {
-        PhoneRequest::Status(_)
+        PhoneRequest::SmsQuery(_)
+        | PhoneRequest::Status(_)
         | PhoneRequest::ListDevices(_)
         | PhoneRequest::PairWireless(_)
         | PhoneRequest::Connect(_)

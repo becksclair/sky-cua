@@ -35,6 +35,8 @@ object Protocol {
         const val STORAGE = "phone_storage"
         const val CAMERA = "phone_camera"
         const val KEY = "phone_key"
+        /** Direct-only phone-control.v2 method; intentionally absent from ALL. */
+        const val SMS_QUERY = "sms.query"
 
         val ALL =
             setOf(

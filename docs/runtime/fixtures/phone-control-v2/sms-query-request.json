@@ -1,0 +1,9 @@
+{
+  "schema": "sky-cua.sms-query.v1",
+  "method": "sms.query",
+  "profile": "primary",
+  "start_ms": 1718600000000,
+  "end_ms": 1718603600000,
+  "limit": 250,
+  "cursor": null
+}
