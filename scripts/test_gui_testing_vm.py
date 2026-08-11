@@ -157,6 +157,8 @@ def test_testing_vm_opencode_sync_has_user_writable_latest_fallback() -> None:
         assert "missing_fixtures=()" not in profile
     assert "--agent opencode --mode wiring" in opencode_profile
     assert "--agent pi --mode wiring" in pi_profile
+    assert "${HOME}/.agents/skills" in pi_profile
+    assert "${HOME}/.pi/agent/skills" not in pi_profile
 
 
 def test_testing_vm_pi_sync_has_user_writable_latest_fallback() -> None:

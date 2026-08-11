@@ -266,10 +266,10 @@ python3 scripts/run_gui_testing_vm_smoke.py \
 ```
 
 The `pi-mcp` profile installs sky-cua as an MCP server for Pi, merges the
-`sky_cua` entry into Pi's `~/.pi/agent/mcp.json`, deploys the
-`computer-use` and `browser-use` skills to `~/.pi/agent/skills/`, and runs the
-same single **wiring check** through Pi's tool-calling loop (schema visible +
-one read-only tool call, no error) on the configured `pi_mcp` profile
+`sky_cua` entry into Pi's `~/.pi/agent/mcp.json`, deploys the `computer-use`
+and `browser-use` skills to the shared `~/.agents/skills/` root imported by Pi,
+and runs the same single **wiring check** through Pi's tool-calling loop (schema
+visible + one read-only tool call, no error) on the configured `pi_mcp` profile
 (override with `SKY_CUA_SMOKE_PI_MODEL`).
 
 ## Codex CUA full tool-use profile and the performance judge

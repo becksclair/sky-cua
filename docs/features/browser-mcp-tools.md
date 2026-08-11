@@ -271,11 +271,12 @@ Install outputs:
   that preserves `SKY_CUA_BROWSER` when set during install.
 - `scripts/install_mcp_server.py --host pi` writes `pi_mcp_wrapper.sh` and a
   copyable MCP snippet. If `~/.pi/agent` exists, it also merges the `sky_cua`
-  entry into `~/.pi/agent/mcp.json` and copies sky-cua skills into
-  `~/.pi/agent/skills` without replacing unrelated Pi MCP servers. The wrapper
-  uses an absolute `/bin/bash` interpreter so Pi's reduced MCP subprocess PATH
-  cannot break startup, and the Pi override pins `args: []` so arguments from a
-  lower-precedence shared `sky_cua` config cannot leak into the wrapper call.
+  entry into `~/.pi/agent/mcp.json` without replacing unrelated Pi MCP servers.
+  Pi imports the shared sky-cua skills projected into `~/.agents/skills`. The
+  wrapper uses an absolute `/bin/bash` interpreter so Pi's reduced MCP
+  subprocess PATH cannot break startup, and the Pi override pins `args: []` so
+  arguments from a lower-precedence shared `sky_cua` config cannot leak into the
+  wrapper call.
 - `python3 install.py install` supplies OpenClaw through native Codex
   compatibility plugins, registers global `node_repl`, projects an existing
   Pi installation's fixed-root MCP wrapper/config, and enables no-prompt

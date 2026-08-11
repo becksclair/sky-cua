@@ -781,7 +781,6 @@ def install_pi(
     agent_dir = (pi_agent_dir or (Path.home() / ".pi" / "agent")).expanduser()
     if agent_dir.exists():
         merge_pi_mcp_config(agent_dir / "mcp.json", snippet)
-        install_pi_skills(agent_dir / "skills")
     return path
 
 
@@ -802,10 +801,6 @@ def merge_pi_mcp_config(config_path: Path, snippet: dict[str, object]) -> None:
         raise ValueError("generated Pi MCP snippet is missing mcpServers")
     servers["sky_cua"] = snippet_servers["sky_cua"]
     write_text_atomically(config_path, json.dumps(config, indent=2) + "\n")
-
-
-def install_pi_skills(skills_dir: Path) -> None:
-    install_sky_cua_skills(skills_dir)
 
 
 def install_hermes(
@@ -1159,9 +1154,9 @@ def print_next_steps(host: str, target_dir: Path, client_path: Path, config_path
         print("\nNext steps for Pi:")
         print(f"  1. Snippet written for inspection: {config_path}")
         print("  2. If ~/.pi/agent exists, sky_cua was merged into ~/.pi/agent/mcp.json")
-        print("     and sky-cua skills were copied into ~/.pi/agent/skills")
-        print("  3. Ensure pi-mcp-adapter is installed: npm install -g pi-mcp-adapter")
-        print("  4. Restart Pi or run /reload after --restart-runtime stops the old MCP process")
+        print("  3. Pi imports the shared sky-cua skills from ~/.agents/skills")
+        print("  4. Ensure pi-mcp-adapter is installed: npm install -g pi-mcp-adapter")
+        print("  5. Restart Pi or run /reload after --restart-runtime stops the old MCP process")
     elif host == "hermes":
         print("\nNext steps for Hermes Agent:")
         print(f"  1. Both sky_cua and node_repl were merged into {config_path}")

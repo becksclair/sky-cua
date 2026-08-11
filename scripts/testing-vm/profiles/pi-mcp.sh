@@ -50,11 +50,11 @@ else
 fi
 rm -f "${HOME}/.pi/agent/mcp-cache.json"
 
-# Deploy sky-cua skills for Pi
-mkdir -p "${HOME}/.pi/agent/skills"
+# Deploy sky-cua skills to the shared agent skill root imported by Pi
+mkdir -p "${HOME}/.agents/skills"
 for skill in computer-use browser-use; do
-	rm -rf "${HOME}/.pi/agent/skills/${skill}"
-	cp -r "${remote_root}/skills/${skill}" "${HOME}/.pi/agent/skills/"
+	rm -rf "${HOME}/.agents/skills/${skill}"
+	cp -r "${remote_root}/skills/${skill}" "${HOME}/.agents/skills/"
 done
 
 # Minimal wiring check: prove Pi sees the sky-cua schema and one read-only tool

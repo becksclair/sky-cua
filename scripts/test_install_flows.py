@@ -535,6 +535,8 @@ def test_generic_mcp_next_steps_document_restart_runtime(
     assert "--restart-runtime" in output
     assert "Restart or reload the OpenCode session" in output
     assert "Restart Pi or run /reload" in output
+    assert "~/.agents/skills" in output
+    assert "~/.pi/agent/skills" not in output
     assert "live_openclaw_mcp_smoke.py" in output
     assert "hermes mcp test sky_cua" in output
     assert "~/.openclaw/workspace/skills" not in output
@@ -1346,18 +1348,11 @@ def test_machine_config_seeding_refuses_unparseable_file(
     assert config_path.read_text(encoding="utf-8") == "browser = "
 
 
-def test_pi_install_merges_mcp_config_and_copies_sky_cua_skills(
+def test_pi_install_merges_mcp_config_without_touching_legacy_skill_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(_install_shared.BROWSER_SELECTION_ENV, "brave")
-    repo_root = tmp_path / "repo"
-    for skill_name in _install_shared.SKY_CUA_SKILLS:
-        skill_dir = repo_root / "skills" / skill_name
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(f"# {skill_name}\n", encoding="utf-8")
-    monkeypatch.setattr(_install_shared, "REPO_ROOT", repo_root)
-
     target_dir = tmp_path / "installed"
     target_dir.mkdir()
     client_path = target_dir / "bin" / "sky-cua-client"
@@ -1367,12 +1362,9 @@ def test_pi_install_merges_mcp_config_and_copies_sky_cua_skills(
         json.dumps({"mcpServers": {"context7": {"command": "context7"}}}),
         encoding="utf-8",
     )
-    stale_skill = agent_dir / "skills" / _install_shared.SKY_CUA_SKILLS[0]
-    stale_skill.mkdir(parents=True)
-    (stale_skill / "obsolete.md").write_text("old", encoding="utf-8")
-    unrelated_skill = agent_dir / "skills" / "other-skill"
-    unrelated_skill.mkdir(parents=True)
-    (unrelated_skill / "SKILL.md").write_text("# other\n", encoding="utf-8")
+    legacy_skills = agent_dir / "skills"
+    legacy_skills.mkdir()
+    (legacy_skills / "sentinel.txt").write_text("untouched\n", encoding="utf-8")
 
     snippet_path = install_mcp_server.install_pi(target_dir, client_path, agent_dir)
 
@@ -1386,25 +1378,13 @@ def test_pi_install_merges_mcp_config_and_copies_sky_cua_skills(
     merged = json.loads((agent_dir / "mcp.json").read_text(encoding="utf-8"))
     assert merged["mcpServers"]["context7"] == {"command": "context7"}
     assert merged["mcpServers"]["sky_cua"]["command"] == str(wrapper)
-    for skill_name in _install_shared.SKY_CUA_SKILLS:
-        assert (agent_dir / "skills" / skill_name / "SKILL.md").read_text(
-            encoding="utf-8"
-        ) == f"# {skill_name}\n"
-    assert not (stale_skill / "obsolete.md").exists()
-    assert (unrelated_skill / "SKILL.md").read_text(encoding="utf-8") == "# other\n"
+    assert sorted(path.name for path in legacy_skills.iterdir()) == ["sentinel.txt"]
+    assert (legacy_skills / "sentinel.txt").read_text(encoding="utf-8") == "untouched\n"
 
 
 def test_pi_install_preserves_symlinked_mcp_config(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repo_root = tmp_path / "repo"
-    for skill_name in _install_shared.SKY_CUA_SKILLS:
-        skill_dir = repo_root / "skills" / skill_name
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(f"# {skill_name}\n", encoding="utf-8")
-    monkeypatch.setattr(_install_shared, "REPO_ROOT", repo_root)
-
     target_dir = tmp_path / "installed"
     target_dir.mkdir()
     client_path = target_dir / "bin" / "sky-cua-client"
@@ -1493,38 +1473,6 @@ def test_pi_mcp_config_merge_preserves_existing_file_permissions(tmp_path: Path)
     )
 
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
-
-
-def test_pi_skill_install_keeps_existing_skill_when_copy_fails(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    skill_name = "computer-use"
-    monkeypatch.setattr(_install_shared, "SKY_CUA_SKILLS", (skill_name,))
-    repo_root = tmp_path / "repo"
-    source = repo_root / "skills" / skill_name
-    source.mkdir(parents=True)
-    (source / "SKILL.md").write_text("# new\n", encoding="utf-8")
-    monkeypatch.setattr(_install_shared, "REPO_ROOT", repo_root)
-
-    skills_dir = tmp_path / "skills"
-    destination = skills_dir / skill_name
-    destination.mkdir(parents=True)
-    (destination / "SKILL.md").write_text("# old\n", encoding="utf-8")
-
-    def fail_copytree(_source: Path, destination: Path) -> None:
-        destination.mkdir(parents=True)
-        (destination / "partial.md").write_text("partial\n", encoding="utf-8")
-        raise OSError("copy failed")
-
-    monkeypatch.setattr(_install_shared.shutil, "copytree", fail_copytree)
-
-    with pytest.raises(OSError, match="copy failed"):
-        install_mcp_server.install_pi_skills(skills_dir)
-
-    assert (destination / "SKILL.md").read_text(encoding="utf-8") == "# old\n"
-    assert not (destination / "partial.md").exists()
-    assert not list(skills_dir.glob(f".{skill_name}.tmp-*"))
 
 
 def test_replace_tree_atomically_restores_file_destination_when_replace_fails(
