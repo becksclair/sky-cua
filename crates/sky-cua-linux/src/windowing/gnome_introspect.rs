@@ -104,6 +104,7 @@ fn window_from_properties(
         client_type: get_u32(properties, "client-type").map(client_type_name),
         backend: GNOME_SHELL_INTROSPECT_BACKEND.to_string(),
         terminal: None,
+        terminal_target_sessions: Vec::new(),
     }
 }
 

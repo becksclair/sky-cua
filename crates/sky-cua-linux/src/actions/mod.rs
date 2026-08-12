@@ -587,6 +587,9 @@ where
 
     async fn scroll(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
         let input_backend = input_backend_for(&request);
+        let x11_window = matches!(input_backend, InputBackendKind::PortalRemoteDesktop)
+            .then(|| self.runtime.matched_x11_window_for_request(&request))
+            .flatten();
         let target_point = match action_point_for_backend(&request, input_backend.clone()) {
             Ok(point) => Some(point),
             Err(error) if scroll_target_requested(&request) => return Err(error),
@@ -619,7 +622,14 @@ where
             };
             let steps = ((pixels / 120.0).ceil() as i32).max(1) * delta_x.signum() as i32;
             return self
-                .scroll_horizontal(&request, input_backend, target_point, delta_x, steps)
+                .scroll_horizontal(
+                    &request,
+                    input_backend,
+                    x11_window.as_ref(),
+                    target_point,
+                    delta_x,
+                    steps,
+                )
                 .await;
         }
 
@@ -635,6 +645,34 @@ where
         match input_backend {
             InputBackendKind::PortalRemoteDesktop => {
                 if let Some((x, y)) = target_point {
+                    if let Some(x11_window) = x11_window.as_ref() {
+                        if !self.runtime.xtest_is_available() {
+                            return Err(BackendError::new(
+                                BackendErrorCode::ActionUnsupportedForEnvironment,
+                                "the exact XWayland target requires XTest scroll injection, but XTest is unavailable; refusing to mix Wayland EIS motion with an unproven X11 scroll path",
+                            ));
+                        }
+                        self.runtime.activate_x11_window(Some(x11_window));
+                        // Keep motion and wheel injection in the same XTest pointer state.
+                        // `target_point` is deliberately the portal/compositor-logical point;
+                        // XWayland applies its output scale when xdotool moves to it.
+                        self.runtime.xtest_pointer_move_absolute(x, y)?;
+                        // `xdotool mousemove --sync` waits for the server pointer position,
+                        // but GTK still processes the child enter transition asynchronously.
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        self.runtime.xtest_scroll_vertical(delta_y, Some(steps))?;
+                        if xwayland_scroll_needs_bridge_retry(&request) {
+                            // KWin's XWayland bridge consumes the first core wheel event
+                            // after an absolute XTest move while establishing the XI2 target.
+                            // Other compositors receive the first event normally, so retry
+                            // only on KWin to preserve one requested scroll as one delivery.
+                            tokio::time::sleep(Duration::from_millis(75)).await;
+                            self.runtime.xtest_scroll_vertical(delta_y, Some(steps))?;
+                        }
+                        return Ok(success(
+                            "Scrolled the X11 target through XTest in compositor-logical coordinates.",
+                        ));
+                    }
                     if let Err(portal_error) = self
                         .runtime
                         .portal_scroll_vertical_at(x, y, delta_y, steps)
@@ -717,6 +755,7 @@ where
         &self,
         request: &ActionRequest,
         input_backend: InputBackendKind,
+        x11_window: Option<&X11WindowInfo>,
         target_point: Option<(f64, f64)>,
         delta_x: f64,
         steps: i32,
@@ -724,6 +763,27 @@ where
         match input_backend {
             InputBackendKind::PortalRemoteDesktop => {
                 if let Some((x, y)) = target_point {
+                    if let Some(x11_window) = x11_window {
+                        if !self.runtime.xtest_is_available() {
+                            return Err(BackendError::new(
+                                BackendErrorCode::ActionUnsupportedForEnvironment,
+                                "the exact XWayland target requires XTest horizontal scroll injection, but XTest is unavailable; refusing to mix Wayland EIS motion with an unproven X11 scroll path",
+                            ));
+                        }
+                        self.runtime.activate_x11_window(Some(x11_window));
+                        self.runtime.xtest_pointer_move_absolute(x, y)?;
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        self.runtime
+                            .xtest_scroll_horizontal(Some(delta_x), Some(steps))?;
+                        if xwayland_scroll_needs_bridge_retry(request) {
+                            tokio::time::sleep(Duration::from_millis(75)).await;
+                            self.runtime
+                                .xtest_scroll_horizontal(Some(delta_x), Some(steps))?;
+                        }
+                        return Ok(success(
+                            "Scrolled the X11 target horizontally through XTest in compositor-logical coordinates.",
+                        ));
+                    }
                     self.runtime
                         .portal_scroll_horizontal_at(x, y, Some(delta_x), steps)
                         .await?;
@@ -1293,6 +1353,14 @@ fn scroll_target_requested(request: &ActionRequest) -> bool {
     explicit_point(&request.arguments).is_some()
         || request.element_index.is_some()
         || request.resolved_element.is_some()
+}
+
+fn xwayland_scroll_needs_bridge_retry(request: &ActionRequest) -> bool {
+    request
+        .environment
+        .as_ref()
+        .and_then(|environment| environment.compositor.as_deref())
+        .is_some_and(|compositor| compositor.to_ascii_lowercase().contains("kwin"))
 }
 
 fn portal_targeted_scroll_fallback_diagnostic(error: &BackendError) -> DiagnosticEntry {
@@ -1925,6 +1993,7 @@ mod tests {
     struct FakeRuntime {
         semantic_default: bool,
         xtest_available: bool,
+        matched_x11_window: bool,
         portal_scroll_at_denied: bool,
         cancel_drag_after_input_down: bool,
         fail_modifier_release: bool,
@@ -2026,7 +2095,26 @@ mod tests {
             &self,
             _request: &ActionRequest,
         ) -> Option<X11WindowInfo> {
-            None
+            self.matched_x11_window.then(|| X11WindowInfo {
+                window_id: "0x2400006".to_string(),
+                instance_name: Some("pointer-smoke".to_string()),
+                class_name: Some("PointerSmoke".to_string()),
+                app: sky_cua_platform::model::AppInfo {
+                    app_id: "x11:0x2400006".to_string(),
+                    name: "Pointer smoke".to_string(),
+                    pid: Some(1234),
+                    executable: None,
+                    desktop_file_id: None,
+                    app_user_model_id: None,
+                    window_handle: None,
+                    toolkit_guess: Some("XWayland".to_string()),
+                    window_title: Some("sky-cua pointer smoke".to_string()),
+                    is_focused_candidate: true,
+                },
+                bounds: None,
+                workspace: None,
+                child_regions: Vec::new(),
+            })
         }
 
         fn xtest_is_available(&self) -> bool {
@@ -2312,6 +2400,35 @@ mod tests {
             resolved_focused_app: None,
             environment: Some(wayland_pipewire_environment()),
         }
+    }
+
+    fn targeted_scroll_request(direction: &str) -> ActionRequest {
+        let mut request = action_request(
+            ActionName::Scroll,
+            json!({"direction": direction, "pages": 1}),
+        );
+        request.resolved_element = Some(ElementNode {
+            element_index: 7,
+            parent_index: None,
+            role: "scroll_pane".to_string(),
+            name: Some("Scroll region".to_string()),
+            description: None,
+            value: None,
+            text: None,
+            numeric_value: None,
+            supports_editable_text: false,
+            state_flags: Vec::new(),
+            semantic_actions: Vec::new(),
+            bounds: Some(RectF {
+                x: 10.0,
+                y: 20.0,
+                width: 30.0,
+                height: 40.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            backend_ref: None,
+        });
+        request
     }
 
     fn element_with_backend_ref() -> ElementNode {
@@ -3111,6 +3228,176 @@ mod tests {
             "Scrolled through the RemoteDesktop portal."
         );
         assert_eq!(runtime.take_events(), vec!["portal_scroll_smooth:240"]);
+    }
+
+    #[tokio::test]
+    async fn executor_targeted_x11_scroll_uses_xtest_with_portal_coordinates() {
+        let runtime = FakeRuntime {
+            matched_x11_window: true,
+            xtest_available: true,
+            ..FakeRuntime::default()
+        };
+        let mut request =
+            action_request(ActionName::Scroll, json!({"direction": "down", "pages": 1}));
+        request.resolved_element = Some(ElementNode {
+            element_index: 7,
+            parent_index: None,
+            role: "scroll_pane".to_string(),
+            name: Some("Scroll region".to_string()),
+            description: None,
+            value: None,
+            text: None,
+            numeric_value: None,
+            supports_editable_text: false,
+            state_flags: Vec::new(),
+            semantic_actions: Vec::new(),
+            bounds: Some(RectF {
+                x: 10.0,
+                y: 20.0,
+                width: 30.0,
+                height: 40.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            backend_ref: None,
+        });
+
+        LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect("targeted X11 scroll should move and wheel through XTest");
+
+        assert_eq!(
+            runtime.take_events(),
+            vec![
+                "xtest_move:25,40",
+                "xtest_scroll:Some(-120.0):Some(1)",
+                "xtest_scroll:Some(-120.0):Some(1)"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn executor_targeted_x11_scroll_retries_only_on_kwin() {
+        let runtime = FakeRuntime {
+            matched_x11_window: true,
+            xtest_available: true,
+            ..FakeRuntime::default()
+        };
+        let mut request = targeted_scroll_request("down");
+        request.environment = Some(EnvironmentInfo {
+            compositor: Some("gnome-shell-wayland".to_string()),
+            desktop_environment: Some("GNOME".to_string()),
+            ..wayland_pipewire_environment()
+        });
+
+        LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect("non-KWin targeted X11 scroll should inject one wheel action");
+
+        assert_eq!(
+            runtime.take_events(),
+            vec!["xtest_move:25,40", "xtest_scroll:Some(-120.0):Some(1)"]
+        );
+    }
+
+    #[tokio::test]
+    async fn executor_targeted_x11_horizontal_scroll_uses_xtest() {
+        let runtime = FakeRuntime {
+            matched_x11_window: true,
+            xtest_available: true,
+            ..FakeRuntime::default()
+        };
+        let mut request = targeted_scroll_request("right");
+        request.environment = Some(EnvironmentInfo {
+            compositor: Some("gnome-shell-wayland".to_string()),
+            desktop_environment: Some("GNOME".to_string()),
+            ..wayland_pipewire_environment()
+        });
+
+        let outcome = LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect("targeted X11 horizontal scroll should stay on XTest");
+
+        assert_eq!(
+            outcome.message,
+            "Scrolled the X11 target horizontally through XTest in compositor-logical coordinates."
+        );
+        assert_eq!(
+            runtime.take_events(),
+            vec![
+                "xtest_move:25,40",
+                "xtest_scroll_horizontal:Some(100.0):Some(1)"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn executor_targeted_x11_horizontal_scroll_without_xtest_fails_closed() {
+        let runtime = FakeRuntime {
+            matched_x11_window: true,
+            ..FakeRuntime::default()
+        };
+
+        let error = LinuxActionExecutor::new(&runtime)
+            .execute(targeted_scroll_request("right"))
+            .await
+            .expect_err("an exact XWayland horizontal target must not use Wayland EIS");
+
+        assert_eq!(
+            error.code,
+            BackendErrorCode::ActionUnsupportedForEnvironment.as_str()
+        );
+        assert!(
+            error
+                .message
+                .contains("requires XTest horizontal scroll injection")
+        );
+        assert!(runtime.take_events().is_empty());
+    }
+
+    #[tokio::test]
+    async fn executor_targeted_x11_scroll_without_xtest_fails_closed() {
+        let runtime = FakeRuntime {
+            matched_x11_window: true,
+            ..FakeRuntime::default()
+        };
+        let mut request =
+            action_request(ActionName::Scroll, json!({"direction": "down", "pages": 1}));
+        request.resolved_element = Some(ElementNode {
+            element_index: 7,
+            parent_index: None,
+            role: "scroll_pane".to_string(),
+            name: Some("Scroll region".to_string()),
+            description: None,
+            value: None,
+            text: None,
+            numeric_value: None,
+            supports_editable_text: false,
+            state_flags: Vec::new(),
+            semantic_actions: Vec::new(),
+            bounds: Some(RectF {
+                x: 10.0,
+                y: 20.0,
+                width: 30.0,
+                height: 40.0,
+                space: CoordinateSpace::DesktopLogical,
+            }),
+            backend_ref: None,
+        });
+
+        let error = LinuxActionExecutor::new(&runtime)
+            .execute(request)
+            .await
+            .expect_err("an exact XWayland target must not fall through to Wayland EIS");
+
+        assert_eq!(
+            error.code,
+            BackendErrorCode::ActionUnsupportedForEnvironment.as_str()
+        );
+        assert!(error.message.contains("requires XTest scroll injection"));
+        assert!(runtime.take_events().is_empty());
     }
 
     #[tokio::test]

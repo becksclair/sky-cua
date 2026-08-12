@@ -1371,6 +1371,7 @@ mod tests {
             client_type: None,
             backend: "test".to_string(),
             terminal: None,
+            terminal_target_sessions: Vec::new(),
         }];
 
         assign_window_displays(&mut windows, &displays);
@@ -1697,6 +1698,7 @@ mod tests {
             client_type: None,
             backend: "test".to_string(),
             terminal: None,
+            terminal_target_sessions: Vec::new(),
         };
         let windows = &mut [window];
         assign_window_displays(windows, &[left, right]);

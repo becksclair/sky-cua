@@ -1,4 +1,7 @@
-use super::elements::{linux_fallback_snapshot, selector_or_window_summary, window_summary};
+use super::elements::{
+    fallback_window_elements, linux_fallback_snapshot, normalize_correlated_atspi_bounds,
+    selector_or_window_summary, window_summary,
+};
 use super::*;
 
 #[async_trait::async_trait]
@@ -448,7 +451,7 @@ impl DesktopBackend for LinuxDesktopBackend {
         focused_app.display = focused_window.and_then(|window| window.display.clone());
         let focused_app = Some(focused_app);
 
-        let (elements, snapshot_diags) = self
+        let (mut elements, snapshot_diags) = self
             .at_spi_call_with_timeout(snapshot_for_app(&connection, &chosen_app))
             .await?;
         for entry in snapshot_diags {
@@ -457,6 +460,24 @@ impl DesktopBackend for LinuxDesktopBackend {
                 entry.message,
                 entry.details,
             );
+        }
+        if let Some(window) = focused_window {
+            let (omitted, scaled) =
+                normalize_correlated_atspi_bounds(&mut elements, window.bounds.as_ref());
+            if omitted > 0 {
+                diagnostics.push_code(
+                    "AccessibilityBoundsUnavailable",
+                    "AT-SPI reported ambiguous zero-origin child bounds; unsafe physical targets were omitted while semantic actions remain available.",
+                    Some(format!("omitted_child_bounds={omitted}")),
+                );
+            }
+            if scaled {
+                diagnostics.push_code(
+                    "AccessibilityBoundsNormalized",
+                    "AT-SPI physical-pixel bounds were normalized to compositor-logical coordinates.",
+                    None,
+                );
+            }
         }
 
         let capture = self
@@ -523,7 +544,7 @@ impl DesktopBackend for LinuxDesktopBackend {
             })?;
         let current_window: sky_cua_platform::model::WindowInfo = target_window.clone().into();
 
-        let elements = match self
+        let mut elements = match self
             .discover_accessible_apps_for_window_pid(current_window.pid)
             .await
         {
@@ -587,6 +608,39 @@ impl DesktopBackend for LinuxDesktopBackend {
                 Vec::new()
             }
         };
+        let normalization_bounds = crate::windowing::registry::unique_cross_backend_focus_target(
+            &registry_windows,
+            target_window,
+        )
+        .and_then(|candidate| candidate.bounds.as_ref())
+        .or(target_window.bounds.as_ref());
+        let (omitted, scaled) =
+            normalize_correlated_atspi_bounds(&mut elements, normalization_bounds);
+        if omitted > 0 {
+            diagnostics.push_code(
+                "AccessibilityBoundsUnavailable",
+                "AT-SPI reported ambiguous zero-origin child bounds; unsafe physical targets were omitted while semantic actions remain available.",
+                Some(format!("omitted_child_bounds={omitted}")),
+            );
+        }
+        if scaled {
+            diagnostics.push_code(
+                "AccessibilityBoundsNormalized",
+                "AT-SPI physical-pixel bounds were normalized to compositor-logical coordinates.",
+                None,
+            );
+        }
+        if elements.is_empty() {
+            elements = fallback_window_elements(target_window);
+            diagnostics.push_code(
+                "AccessibilityCoverageLimited",
+                "The exact window had no usable AT-SPI tree; native window-region anchors were retained for physical actions.",
+                Some(format!(
+                    "backend={}; window_id={}",
+                    target_window.backend, target_window.window_id
+                )),
+            );
+        }
 
         let capture = self
             .get_app_state_capture(

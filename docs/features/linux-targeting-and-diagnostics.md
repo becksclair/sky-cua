@@ -44,7 +44,9 @@ setup messages that say exactly which state the extension install reached.
 - Terminal enrichment reads `/proc/<pid>/cmdline` as NUL-separated
   arguments and joins the non-empty ones; both the root and active terminal
   processes carry the full command line through
-  `enrich_terminal_windows_with_processes`.
+  `enrich_terminal_windows_with_processes`. One ancestry walk per process
+  builds a terminal-PID/TTY session index for the whole enrichment pass, so
+  multiple terminal windows do not repeatedly rescan every process tree.
 - The ydotool socket check walks candidate paths in order — the
   `$YDOTOOL_SOCKET` env override, `$XDG_RUNTIME_DIR/.ydotool_socket`, then
   `/tmp/.ydotool_socket` — and reports a connect attempt per candidate, so
@@ -89,7 +91,9 @@ cargo test -p sky-cua-linux setup
 ```
 
 Key tests: `process_summary_preserves_full_command_line` and its
-command-name fallback twin; ydotool socket connect success/failure against
+command-name fallback twin;
+`indexes_multiple_terminal_process_trees_in_one_ancestry_pass` and the nested
+terminal-ancestor regression; ydotool socket connect success/failure against
 a bound Unix socket; `select_app_prefers_focused_candidate_when_selector_scores_tie`;
 `setup_window_targeting_message_reports_reload_only_after_successful_enable`.
 

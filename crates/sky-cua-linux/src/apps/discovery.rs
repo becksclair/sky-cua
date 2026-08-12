@@ -1,11 +1,11 @@
 use std::fs;
 use std::path::PathBuf;
 
-use atspi::AccessibilityConnection;
 use atspi::CoordType;
 use atspi::State;
 use atspi::proxy::accessible::ObjectRefExt;
 use atspi::proxy::proxy_ext::ProxyExt;
+use atspi_connection::AccessibilityConnection;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{AppInfo, CoordinateSpace, RectF};
 use tracing::debug;

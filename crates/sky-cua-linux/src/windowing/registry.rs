@@ -196,7 +196,7 @@ pub async fn verify_window_focused(
     let mut last_focused = None;
     loop {
         if let Some(focused) = focused_window_override() {
-            if same_focus_target(&focused, expected) {
+            if same_focus_target_strong(&focused, expected) {
                 return Ok(focused);
             }
             last_focused = Some(focused);
@@ -212,11 +212,11 @@ pub async fn verify_window_focused(
             return Ok(focused);
         }
         let windows = discover_windows(environment).await?;
-        if let Some(focused) = windows.into_iter().find(|window| window.focused) {
-            if same_focus_target(&focused, expected) {
-                return Ok(focused);
+        if let Some(focused) = windows.iter().find(|window| window.focused) {
+            if same_focus_target(focused, expected, &windows) {
+                return Ok(focused.clone());
             }
-            last_focused = Some(focused);
+            last_focused = Some(focused.clone());
         }
         if std::time::Instant::now() >= deadline {
             break;
@@ -477,6 +477,7 @@ fn linux_window_from_kwin(window: KWinWindowInfo) -> LinuxWindowInfo {
         client_type: Some("wayland".to_string()),
         backend: KWIN_BACKEND.to_string(),
         terminal: None,
+        terminal_target_sessions: Vec::new(),
     }
 }
 
@@ -503,6 +504,7 @@ fn linux_window_from_x11(window: X11WindowInfo) -> LinuxWindowInfo {
             .map(|value| value.to_ascii_lowercase()),
         backend: X11_BACKEND.to_string(),
         terminal: None,
+        terminal_target_sessions: Vec::new(),
     }
 }
 
@@ -556,11 +558,41 @@ fn same_window_identity(left: &LinuxWindowInfo, right: &LinuxWindowInfo) -> bool
         && left.bounds == right.bounds
 }
 
-fn same_focus_target(left: &LinuxWindowInfo, right: &LinuxWindowInfo) -> bool {
+fn same_focus_target_strong(left: &LinuxWindowInfo, right: &LinuxWindowInfo) -> bool {
     (left.backend == right.backend && left.window_id == right.window_id)
         || same_window_identity(left, right)
         || (left.pid.is_some() && left.pid == right.pid && optional_same(&left.title, &right.title))
-        || (optional_same(&left.app_id, &right.app_id) && optional_same(&left.title, &right.title))
+}
+
+fn cross_backend_focus_alias(left: &LinuxWindowInfo, right: &LinuxWindowInfo) -> bool {
+    left.backend != right.backend
+        && optional_same(&left.title, &right.title)
+        && (optional_same(&left.app_id, &right.app_id)
+            || optional_same(&left.wm_class, &right.wm_class))
+}
+
+pub(crate) fn unique_cross_backend_focus_target<'a>(
+    candidates: &'a [LinuxWindowInfo],
+    expected: &LinuxWindowInfo,
+) -> Option<&'a LinuxWindowInfo> {
+    let mut matches = candidates.iter().filter(|candidate| {
+        candidate.backend != expected.backend
+            && (same_focus_target_strong(candidate, expected)
+                || cross_backend_focus_alias(candidate, expected))
+    });
+    let candidate = matches.next()?;
+    matches.next().is_none().then_some(candidate)
+}
+
+pub(crate) fn same_focus_target(
+    focused: &LinuxWindowInfo,
+    expected: &LinuxWindowInfo,
+    candidates: &[LinuxWindowInfo],
+) -> bool {
+    same_focus_target_strong(focused, expected)
+        || unique_cross_backend_focus_target(candidates, expected).is_some_and(|candidate| {
+            candidate.backend == focused.backend && candidate.window_id == focused.window_id
+        })
 }
 
 fn optional_same(left: &Option<String>, right: &Option<String>) -> bool {
@@ -640,6 +672,7 @@ mod tests {
             client_type: None,
             backend: backend.to_string(),
             terminal: None,
+            terminal_target_sessions: Vec::new(),
         }
     }
 
@@ -746,6 +779,7 @@ mod tests {
             client_type: None,
             backend: GNOME_SHELL_INTROSPECT_BACKEND.to_string(),
             terminal: None,
+            terminal_target_sessions: Vec::new(),
         };
 
         assert!(ensure_backend_can_exact_focus(&window).is_err());
@@ -881,5 +915,49 @@ mod tests {
         assert_eq!(windows.len(), 1);
         assert!(windows[0].focused);
         assert_eq!(windows[0].backend, KWIN_BACKEND);
+    }
+
+    #[test]
+    fn focus_verification_correlates_xwayland_handles_by_class_and_title() {
+        let mut x11 = linux_window(X11_BACKEND, "0x3600030");
+        x11.pid = None;
+        x11.app_id = Some("xmessage.desktop".to_string());
+        x11.wm_class = Some("Xmessage".to_string());
+        x11.title = Some("sky-cua xmessage probe".to_string());
+
+        let mut kwin = linux_window(KWIN_BACKEND, "kwin:{uuid}");
+        kwin.pid = Some(4242);
+        kwin.app_id = Some("kwin:{uuid}".to_string());
+        kwin.wm_class = Some("xmessage".to_string());
+        kwin.title = Some("sky-cua xmessage probe".to_string());
+
+        assert!(same_focus_target(&x11, &kwin, &[x11.clone()]));
+        kwin.title = Some("a different xmessage window".to_string());
+        assert!(!same_focus_target(&x11, &kwin, &[x11.clone()]));
+    }
+
+    #[test]
+    fn focus_verification_rejects_duplicate_cross_backend_aliases() {
+        let mut expected = linux_window(KWIN_BACKEND, "kwin:{expected}");
+        expected.pid = None;
+        expected.app_id = Some("kwin:{expected}".to_string());
+        expected.wm_class = Some("xmessage".to_string());
+        expected.title = Some("duplicate title".to_string());
+
+        let mut first = linux_window(X11_BACKEND, "0x100");
+        first.pid = None;
+        first.app_id = Some("xmessage.desktop".to_string());
+        first.wm_class = Some("Xmessage".to_string());
+        first.title = expected.title.clone();
+        first.focused = true;
+        let mut second = first.clone();
+        second.window_id = "0x200".to_string();
+        second.focused = false;
+
+        assert!(!same_focus_target(
+            &first,
+            &expected,
+            &[first.clone(), second]
+        ));
     }
 }

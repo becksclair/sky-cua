@@ -21,7 +21,7 @@ use sky_cua_platform::model::{
     CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode, CoordinateSpace, DisplayInfo,
     DisplayRef, DoctorDisplayTopologyReport, DoctorSessionEnvRepair, DoctorSessionEnvReport,
     ElementNode, ElementNumericValueReadback, EnvironmentInfo, InputBackendKind, PixelSize,
-    PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
+    PortalCapabilities, RectF, ScrollDirection, SemanticBackendKind, SessionKind,
 };
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
@@ -151,6 +151,7 @@ fn test_window(bounds: Option<RectF>, display: Option<DisplayRef>) -> LinuxWindo
         client_type: None,
         backend: "kwin".to_string(),
         terminal: None,
+        terminal_target_sessions: Vec::new(),
     }
 }
 
@@ -867,6 +868,7 @@ fn registry_fallback_prefers_refreshed_x11_child_regions() {
         client_type: Some("xwayland".to_string()),
         backend: "x11".to_string(),
         terminal: None,
+        terminal_target_sessions: Vec::new(),
     };
     let x11_window = X11WindowInfo {
         window_id: "0x3800030".to_string(),
@@ -920,6 +922,7 @@ fn emits_only_the_honest_window_anchor_for_kwin_fallback_windows() {
         client_type: Some("wayland".to_string()),
         backend: "kwin".to_string(),
         terminal: None,
+        terminal_target_sessions: Vec::new(),
     };
 
     let elements = linux_window_elements(&window);
@@ -965,6 +968,15 @@ fn emits_only_the_honest_window_anchor_for_kwin_fallback_windows() {
 fn linux_fallback_snapshot_preserves_doctor_report() {
     let environment = wayland_pipewire_environment();
     let capabilities = LinuxDesktopBackend::capabilities(&environment);
+    assert_eq!(
+        capabilities.supported_scroll_directions,
+        vec![
+            ScrollDirection::Up,
+            ScrollDirection::Down,
+            ScrollDirection::Left,
+            ScrollDirection::Right,
+        ]
+    );
     let report =
         crate::doctor::build_doctor_report(environment.clone(), DoctorSessionEnvReport::default());
     let window = LinuxWindowInfo {
@@ -988,6 +1000,7 @@ fn linux_fallback_snapshot_preserves_doctor_report() {
         client_type: Some("wayland".to_string()),
         backend: "kwin".to_string(),
         terminal: None,
+        terminal_target_sessions: Vec::new(),
     };
 
     let snapshot = linux_fallback_snapshot(
@@ -1020,6 +1033,7 @@ fn registry_window_app_does_not_invent_executable() {
         client_type: Some("wayland".to_string()),
         backend: "kwin".to_string(),
         terminal: None,
+        terminal_target_sessions: Vec::new(),
     });
 
     assert_eq!(app.desktop_file_id.as_deref(), Some("tidal-hifi.desktop"));

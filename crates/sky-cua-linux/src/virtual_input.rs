@@ -24,6 +24,7 @@ use crate::portal::eis_keymap::{
     resolve_eis_keystroke,
 };
 use crate::portal::remote_desktop::MouseButton;
+use crate::x11::input_xtest::horizontal_scroll_button;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 const HELPER_COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
@@ -378,7 +379,7 @@ impl LinuxVirtualInput {
             return Ok(());
         }
         self.move_absolute(x, y)?;
-        let button = if steps > 0 { "6" } else { "7" };
+        let button = horizontal_scroll_button(steps);
         self.run_ydotool([
             "click".to_string(),
             "--repeat".to_string(),

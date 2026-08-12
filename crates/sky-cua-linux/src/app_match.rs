@@ -645,6 +645,7 @@ mod tests {
             client_type: Some("wayland".to_string()),
             backend: "kwin".to_string(),
             terminal: None,
+            terminal_target_sessions: Vec::new(),
         }
     }
 

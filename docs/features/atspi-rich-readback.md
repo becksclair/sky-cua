@@ -2,10 +2,10 @@
 
 ## Status
 
-Shipped on Linux. Linux AT-SPI extraction is complete. Windows/UIA still
-compiles with empty structured readback metadata until that backend grows
-native extraction behind the same public model fields. Last verified:
-2026-05-17 on the Arch `testing-vm` Plasma session.
+Shipped on Linux and Windows. Linux AT-SPI extraction is complete; Windows
+UIA populates the same public fields from ValuePattern, TextPattern, and
+RangeValuePattern. Last live-verified: Linux on 2026-05-17 and Windows on
+2026-07-07.
 
 ## Summary
 
@@ -79,12 +79,17 @@ message: at least one `get_app_state` tool result must contain
 `stale-readback`, and a later `get_app_state` tool result must contain
 `verified-readback`.
 
+Windows live proof:
+
+- Notepad editable text populated `text` and `supports_editable_text`.
+- Mouse Properties pointer speed populated `numeric_value` from RangeValue
+  with current value 50 and range 0–100.
+
 ## Known limitations
 
-- Windows/UIA backend currently compiles with empty structured readback
-  metadata. Native UIA extraction (`text`, `numeric_value`,
-  `supports_editable_text`) is tracked as a follow-up workstream in
-  `ROADMAP.md` under "Windows parity".
+- The top-level Win32 fallback node has no UIA control pattern and therefore
+  has no structured text or numeric readback. Descendant UIA controls expose
+  the metadata supported by their patterns.
 - Live numeric Value extraction is implemented but live proof currently
   centers on `zenity` text-entry controls. Broader live numeric-control
   proof needs a stable desktop fixture.

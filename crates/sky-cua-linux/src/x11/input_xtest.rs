@@ -90,8 +90,13 @@ pub fn scroll_horizontal(delta_x: Option<f64>, steps: Option<i32>) -> Result<(),
         return Ok(());
     }
 
-    let button = if signed_steps > 0 { "6" } else { "7" };
+    let button = horizontal_scroll_button(signed_steps);
     run_xdotool(["click", "--repeat", &signed_steps.abs().to_string(), button])
+}
+
+/// X11 core button convention: 6 scrolls left and 7 scrolls right.
+pub(crate) fn horizontal_scroll_button(signed_steps: i32) -> &'static str {
+    if signed_steps > 0 { "7" } else { "6" }
 }
 
 pub fn send_text(text: &str) -> Result<(), BackendError> {
@@ -249,12 +254,21 @@ fn command_exists(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{X11MouseButton, normalize_key_name, round_coordinate, xdotool_button};
+    use super::{
+        X11MouseButton, horizontal_scroll_button, normalize_key_name, round_coordinate,
+        xdotool_button,
+    };
 
     #[test]
     fn maps_mouse_buttons() {
         assert_eq!(xdotool_button(X11MouseButton::Left), "1");
         assert_eq!(xdotool_button(X11MouseButton::Right), "3");
+    }
+
+    #[test]
+    fn maps_horizontal_scroll_sign_to_x11_buttons() {
+        assert_eq!(horizontal_scroll_button(-1), "6");
+        assert_eq!(horizontal_scroll_button(1), "7");
     }
 
     #[test]

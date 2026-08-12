@@ -1,9 +1,17 @@
 pub mod actions;
+mod repair;
 pub mod snapshot;
 pub mod tree;
 
-use atspi::AccessibilityConnection;
-use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+use atspi_connection::AccessibilityConnection;
+pub(crate) use repair::{AccessibilityConnectFailure, RepairCoordinator, connect_with_repair};
+use sky_cua_platform::diagnostics::BackendError;
+use std::time::Duration;
+
+#[cfg(not(test))]
+const ACCESSIBILITY_CONNECTION_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const ACCESSIBILITY_CONNECTION_TIMEOUT: Duration = Duration::from_millis(50);
 
 pub(crate) fn normalize_action(value: &str) -> String {
     value
@@ -52,17 +60,32 @@ pub(crate) fn semantic_action_supported(action: &str, role: &str, state_flags: &
 }
 
 pub async fn connect() -> Result<AccessibilityConnection, BackendError> {
-    AccessibilityConnection::new().await.map_err(|error| {
-        BackendError::new(
-            BackendErrorCode::AccessibilityUnavailable,
-            format!("failed to connect to the AT-SPI accessibility bus: {error}"),
-        )
-    })
+    connect_attempt()
+        .await
+        .map_err(AccessibilityConnectFailure::into_backend_error)
+}
+
+pub(crate) async fn connect_attempt() -> Result<AccessibilityConnection, AccessibilityConnectFailure>
+{
+    connect_with_timeout(AccessibilityConnection::new()).await
+}
+
+async fn connect_with_timeout<T, E>(
+    future: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, AccessibilityConnectFailure>
+where
+    E: std::fmt::Display,
+{
+    match tokio::time::timeout(ACCESSIBILITY_CONNECTION_TIMEOUT, future).await {
+        Ok(Ok(connection)) => Ok(connection),
+        Ok(Err(error)) => Err(AccessibilityConnectFailure::Error(error.to_string())),
+        Err(_) => Err(AccessibilityConnectFailure::Timeout),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::semantic_action_supported;
+    use super::{connect_with_timeout, semantic_action_supported};
 
     fn flags(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
@@ -138,5 +161,16 @@ mod tests {
             "check box",
             &flags(&["checkable"])
         ));
+    }
+
+    #[tokio::test]
+    async fn accessibility_connection_attempt_is_deadline_bounded() {
+        let result = connect_with_timeout(async {
+            std::future::pending::<()>().await;
+            Ok::<(), &str>(())
+        })
+        .await;
+        let error = result.expect_err("a permanently pending connection must time out");
+        assert!(matches!(error, super::AccessibilityConnectFailure::Timeout));
     }
 }

@@ -22,6 +22,11 @@ pub struct LinuxWindowInfo {
     pub backend: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal: Option<TerminalWindowContext>,
+    /// PTY sessions known to belong to this window for exact terminal target
+    /// resolution. This stays internal because the public window contract can
+    /// describe only one active terminal session.
+    #[serde(default, skip)]
+    pub(crate) terminal_target_sessions: Vec<TerminalTargetSession>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +67,12 @@ pub struct TerminalProcess {
     pub command_name: String,
     pub command_line: String,
     pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TerminalTargetSession {
+    pub tty: String,
+    pub processes: Vec<TerminalProcess>,
 }
 
 impl WindowTarget {

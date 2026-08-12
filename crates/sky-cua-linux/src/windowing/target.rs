@@ -100,42 +100,65 @@ fn unique_window_match<'a>(
 }
 
 fn window_matches_terminal_target(window: &LinuxWindowInfo, target: &WindowTarget) -> bool {
+    if !window.terminal_target_sessions.is_empty() {
+        return window.terminal_target_sessions.iter().any(|session| {
+            terminal_session_matches_target(&session.tty, &session.processes, target)
+        });
+    }
+
     let Some(terminal) = &window.terminal else {
         return false;
     };
+    let mut processes = vec![&terminal.root_process];
+    if let Some(active) = &terminal.active_process
+        && active.pid != terminal.root_process.pid
+    {
+        processes.push(active);
+    }
+    terminal_session_matches_target_refs(&terminal.tty, &processes, target)
+}
 
-    if let Some(tty) = normalized_target(target.tty.as_deref())
-        && !tty_matches(&terminal.tty, &tty)
+fn terminal_session_matches_target(
+    tty: &str,
+    processes: &[TerminalProcess],
+    target: &WindowTarget,
+) -> bool {
+    terminal_session_matches_target_refs(tty, &processes.iter().collect::<Vec<_>>(), target)
+}
+
+fn terminal_session_matches_target_refs(
+    actual_tty: &str,
+    processes: &[&TerminalProcess],
+    target: &WindowTarget,
+) -> bool {
+    if let Some(requested_tty) = normalized_target(target.tty.as_deref())
+        && !tty_matches(actual_tty, &requested_tty)
     {
         return false;
     }
 
-    if let Some(pid) = target.terminal_pid {
-        let active_pid = terminal.active_process.as_ref().map(|process| process.pid);
-        if active_pid != Some(pid) && terminal.root_process.pid != pid {
-            return false;
-        }
+    if let Some(pid) = target.terminal_pid
+        && !processes.iter().any(|process| process.pid == pid)
+    {
+        return false;
     }
 
     if let Some(command) = normalized_target(target.terminal_command.as_deref()) {
         let command = command.to_ascii_lowercase();
-        let active_matches = terminal
-            .active_process
-            .as_ref()
-            .is_some_and(|process| terminal_process_matches_command(process, &command));
-        if !active_matches && !terminal_process_matches_command(&terminal.root_process, &command) {
+        if !processes
+            .iter()
+            .any(|process| terminal_process_matches_command(process, &command))
+        {
             return false;
         }
     }
 
-    if let Some(cwd) = normalized_target(target.terminal_cwd.as_deref()) {
-        let active_matches = terminal
-            .active_process
-            .as_ref()
-            .is_some_and(|process| terminal_process_matches_cwd(process, &cwd));
-        if !active_matches && !terminal_process_matches_cwd(&terminal.root_process, &cwd) {
-            return false;
-        }
+    if let Some(cwd) = normalized_target(target.terminal_cwd.as_deref())
+        && !processes
+            .iter()
+            .any(|process| terminal_process_matches_cwd(process, &cwd))
+    {
+        return false;
     }
 
     true
@@ -240,6 +263,7 @@ mod tests {
                 confidence: "high".to_string(),
                 match_reason: "test".to_string(),
             }),
+            terminal_target_sessions: Vec::new(),
         }
     }
 
@@ -270,6 +294,54 @@ mod tests {
         let error = resolve_window_target(&windows, &target).unwrap_err();
         assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
         assert!(error.message.contains("matched multiple"));
+    }
+
+    #[test]
+    fn resolves_any_session_owned_by_a_single_terminal_window() {
+        let mut terminal = window("abc");
+        terminal.terminal = None;
+        terminal.terminal_target_sessions = vec![
+            crate::windowing::types::TerminalTargetSession {
+                tty: "/dev/pts/7".to_string(),
+                processes: vec![TerminalProcess {
+                    pid: 201,
+                    command_name: "simyo-renew".to_string(),
+                    command_line: "python simyo-renew.py".to_string(),
+                    cwd: Some("/home/user/simyo".to_string()),
+                }],
+            },
+            crate::windowing::types::TerminalTargetSession {
+                tty: "/dev/pts/8".to_string(),
+                processes: vec![TerminalProcess {
+                    pid: 301,
+                    command_name: "codex".to_string(),
+                    command_line: "codex".to_string(),
+                    cwd: Some("/home/user/project".to_string()),
+                }],
+            },
+        ];
+        let windows = vec![terminal];
+
+        for target in [
+            WindowTarget {
+                terminal_pid: Some(201),
+                ..WindowTarget::default()
+            },
+            WindowTarget {
+                terminal_command: Some("simyo-renew".to_string()),
+                ..WindowTarget::default()
+            },
+            WindowTarget {
+                tty: Some("pts/8".to_string()),
+                terminal_cwd: Some("project".to_string()),
+                ..WindowTarget::default()
+            },
+        ] {
+            assert_eq!(
+                resolve_window_target(&windows, &target).unwrap().window_id,
+                "abc"
+            );
+        }
     }
 
     #[test]

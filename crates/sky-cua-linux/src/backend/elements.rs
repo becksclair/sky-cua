@@ -1,5 +1,110 @@
 use super::*;
 
+pub(super) fn normalize_correlated_atspi_bounds(
+    elements: &mut [ElementNode],
+    window_bounds: Option<&RectF>,
+) -> (usize, bool) {
+    let Some(window_bounds) = window_bounds.filter(|bounds| {
+        bounds.space == sky_cua_platform::model::CoordinateSpace::DesktopLogical
+            && bounds.width > 0.0
+            && bounds.height > 0.0
+    }) else {
+        return (0, false);
+    };
+    let Some(root_index) = elements
+        .iter()
+        .position(|element| element.parent_index.is_none())
+    else {
+        return (0, false);
+    };
+    let Some(root_bounds) = elements[root_index].bounds.as_ref() else {
+        return (0, false);
+    };
+    if root_bounds.space != sky_cua_platform::model::CoordinateSpace::DesktopLogical {
+        return (0, false);
+    }
+
+    if let Some((scale_x, scale_y)) = correlated_coordinate_scale(root_bounds, window_bounds) {
+        let root_x = root_bounds.x;
+        let root_y = root_bounds.y;
+        for element in elements.iter_mut() {
+            let Some(bounds) = element.bounds.as_mut() else {
+                continue;
+            };
+            bounds.x = window_bounds.x + (bounds.x - root_x) * scale_x;
+            bounds.y = window_bounds.y + (bounds.y - root_y) * scale_y;
+            bounds.width *= scale_x;
+            bounds.height *= scale_y;
+        }
+        elements[root_index].bounds = Some(window_bounds.clone());
+        return (0, true);
+    }
+    if !dimensions_approximately_match(root_bounds, window_bounds) {
+        return (0, false);
+    }
+
+    let positioned_count = elements
+        .iter()
+        .filter(|element| element.bounds.is_some())
+        .count();
+    let zero_origin_count = elements
+        .iter()
+        .filter_map(|element| element.bounds.as_ref())
+        .filter(|bounds| near_zero(bounds.x) && near_zero(bounds.y))
+        .count();
+    if zero_origin_count < 2 || zero_origin_count * 2 < positioned_count {
+        return (0, false);
+    }
+
+    let translate_local_coordinates = near_zero(root_bounds.x)
+        && near_zero(root_bounds.y)
+        && (!near_zero(window_bounds.x) || !near_zero(window_bounds.y));
+    let offset_x = window_bounds.x - root_bounds.x;
+    let offset_y = window_bounds.y - root_bounds.y;
+    let mut omitted = 0;
+    for (index, element) in elements.iter_mut().enumerate() {
+        if index == root_index {
+            element.bounds = Some(window_bounds.clone());
+            continue;
+        }
+        let Some(bounds) = element.bounds.as_mut() else {
+            continue;
+        };
+        if near_zero(bounds.x) && near_zero(bounds.y) {
+            element.bounds = None;
+            omitted += 1;
+        } else if translate_local_coordinates {
+            bounds.x += offset_x;
+            bounds.y += offset_y;
+        }
+    }
+    (omitted, false)
+}
+
+fn correlated_coordinate_scale(root: &RectF, window: &RectF) -> Option<(f64, f64)> {
+    let scale_x = window.width / root.width;
+    let scale_y = window.height / root.height;
+    let uniform_tolerance = scale_x.abs().max(scale_y.abs()) * 0.02;
+    (scale_x.is_finite()
+        && scale_y.is_finite()
+        && (0.25..=4.0).contains(&scale_x)
+        && (0.25..=4.0).contains(&scale_y)
+        && (scale_x - scale_y).abs() <= uniform_tolerance
+        && (scale_x - 1.0).abs() > 0.02)
+        .then_some((scale_x, scale_y))
+}
+
+fn dimensions_approximately_match(left: &RectF, right: &RectF) -> bool {
+    let width_tolerance = (right.width * 0.02).max(2.0);
+    let height_tolerance = (right.height * 0.02).max(2.0);
+    (left.width - right.width).abs() <= width_tolerance
+        && (left.height - right.height).abs() <= height_tolerance
+}
+
+fn near_zero(value: f64) -> bool {
+    value.abs() <= 0.5
+}
+
 pub(super) fn linux_fallback_snapshot(
     snapshot_id: String,
     environment: EnvironmentInfo,
@@ -24,7 +129,9 @@ pub(super) fn linux_fallback_snapshot(
     }
 }
 
-fn fallback_window_elements(window: &linux_windowing::LinuxWindowInfo) -> Vec<ElementNode> {
+pub(super) fn fallback_window_elements(
+    window: &linux_windowing::LinuxWindowInfo,
+) -> Vec<ElementNode> {
     let x11_window = refreshed_x11_window_for_linux_window(window);
     fallback_window_elements_with_x11_detail(window, x11_window.as_ref())
 }
@@ -235,5 +342,94 @@ pub(super) fn selector_or_window_summary(selector: Option<&AppSelector>, app: &A
             window_summary(app)
         ),
         None => window_summary(app),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sky_cua_platform::model::CoordinateSpace;
+
+    fn element(index: usize, parent_index: Option<usize>, bounds: RectF) -> ElementNode {
+        ElementNode {
+            element_index: index,
+            parent_index,
+            role: "fixture".to_string(),
+            name: None,
+            description: None,
+            value: None,
+            text: None,
+            numeric_value: None,
+            supports_editable_text: false,
+            state_flags: Vec::new(),
+            semantic_actions: Vec::new(),
+            bounds: Some(bounds),
+            backend_ref: None,
+        }
+    }
+
+    fn bounds(x: f64, y: f64, width: f64, height: f64) -> RectF {
+        RectF {
+            x,
+            y,
+            width,
+            height,
+            space: CoordinateSpace::DesktopLogical,
+        }
+    }
+
+    #[test]
+    fn zero_origin_gtk_tree_keeps_window_root_and_omits_unsafe_children() {
+        let window = bounds(670.0, 409.0, 366.0, 248.0);
+        let mut elements = vec![
+            element(0, None, bounds(0.0, 0.0, 366.0, 248.0)),
+            element(1, Some(0), bounds(0.0, 0.0, 294.0, 57.0)),
+            element(2, Some(1), bounds(0.0, 0.0, 153.0, 44.0)),
+        ];
+
+        assert_eq!(
+            normalize_correlated_atspi_bounds(&mut elements, Some(&window)),
+            (2, false)
+        );
+        assert_eq!(elements[0].bounds.as_ref(), Some(&window));
+        assert_eq!(elements[1].bounds, None);
+        assert_eq!(elements[2].bounds, None);
+    }
+
+    #[test]
+    fn valid_screen_coordinates_are_preserved() {
+        let window = bounds(670.0, 409.0, 366.0, 248.0);
+        let original = vec![
+            element(0, None, window.clone()),
+            element(1, Some(0), bounds(700.0, 450.0, 294.0, 57.0)),
+            element(2, Some(1), bounds(850.0, 590.0, 153.0, 44.0)),
+        ];
+        let mut elements = original.clone();
+
+        assert_eq!(
+            normalize_correlated_atspi_bounds(&mut elements, Some(&window)),
+            (0, false)
+        );
+        assert_eq!(elements, original);
+    }
+
+    #[test]
+    fn xwayland_physical_tree_is_scaled_to_compositor_logical_bounds() {
+        let window = bounds(0.0, 0.0, 1706.6666666667, 1066.6666666667);
+        let mut elements = vec![
+            element(0, None, bounds(0.0, 0.0, 2560.0, 1600.0)),
+            element(1, Some(0), bounds(678.0, 162.0, 590.0, 314.0)),
+        ];
+
+        assert_eq!(
+            normalize_correlated_atspi_bounds(&mut elements, Some(&window)),
+            (0, true)
+        );
+        assert_eq!(elements[0].bounds.as_ref(), Some(&window));
+        let button = elements[1].bounds.as_ref().expect("button bounds");
+        assert!((button.x - 452.0).abs() < 0.01);
+        assert!((button.y - 108.0).abs() < 0.01);
+        assert!((button.width - 393.3333333333).abs() < 0.01);
+        assert!((button.height - 209.3333333333).abs() < 0.01);
     }
 }

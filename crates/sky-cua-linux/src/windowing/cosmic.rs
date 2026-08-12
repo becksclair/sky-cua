@@ -94,6 +94,7 @@ impl From<HelperWindowInfo> for LinuxWindowInfo {
             client_type: window.client_type,
             backend: COSMIC_WAYLAND_BACKEND.to_string(),
             terminal: None,
+            terminal_target_sessions: Vec::new(),
         }
     }
 }

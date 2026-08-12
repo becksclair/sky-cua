@@ -1,4 +1,4 @@
-use atspi::AccessibilityConnection;
+use atspi_connection::AccessibilityConnection;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 use sky_cua_platform::model::{
@@ -23,7 +23,7 @@ use crate::app_policy::{AppActionPolicies, ResolvedSetValueFallbackPolicy};
 use crate::apps::discovery::{DiscoveredApp, discover_apps};
 use crate::apps::window_correlation::{WindowAccessibilityMatch, match_window_accessibility};
 use crate::atspi::{
-    actions as atspi_actions, connect,
+    RepairCoordinator, actions as atspi_actions, connect_attempt, connect_with_repair,
     snapshot::{snapshot_for_app, snapshot_for_top_level},
 };
 use crate::env_probe::{probe_environment, require_supported_environment};
@@ -63,6 +63,7 @@ struct SessionEnvCache {
 pub struct LinuxDesktopBackend {
     portal: RemoteDesktopSessionManager,
     atspi: Arc<Mutex<Option<AccessibilityConnection>>>,
+    atspi_repair: RepairCoordinator,
     app_policies: AppActionPolicies,
     session_env: Arc<StdMutex<SessionEnvCache>>,
     session_presence: SessionPresenceManager,
@@ -98,6 +99,7 @@ impl LinuxDesktopBackend {
         Self {
             portal: RemoteDesktopSessionManager::new(),
             atspi: Arc::new(Mutex::new(None)),
+            atspi_repair: RepairCoordinator::new(),
             app_policies: AppActionPolicies::load_from_repo().unwrap_or_else(|error| {
                 warn!(
                     message = %error,
@@ -230,7 +232,8 @@ impl LinuxDesktopBackend {
             return Ok(connection.clone());
         }
 
-        let connection = connect().await?;
+        let connection =
+            connect_with_repair(&self.atspi_repair, connect_attempt, connect_attempt).await?;
         *guard = Some(connection.clone());
         Ok(connection)
     }
@@ -402,7 +405,12 @@ impl LinuxDesktopBackend {
                 reason: (!physical_ready)
                     .then(|| "No physical input backend is available".to_string()),
             },
-            supported_scroll_directions: vec![ScrollDirection::Up, ScrollDirection::Down],
+            supported_scroll_directions: vec![
+                ScrollDirection::Up,
+                ScrollDirection::Down,
+                ScrollDirection::Left,
+                ScrollDirection::Right,
+            ],
             drag: ToolAvailability {
                 available: physical_ready,
                 reason: (!physical_ready)

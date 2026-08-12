@@ -305,6 +305,7 @@ impl TryFrom<HyprlandClient> for LinuxWindowInfo {
             client_type,
             backend: HYPRLAND_BACKEND.to_string(),
             terminal: None,
+            terminal_target_sessions: Vec::new(),
         })
     }
 }

@@ -290,6 +290,7 @@ impl I3Node {
             client_type: Some("x11".to_string()),
             backend: I3_BACKEND.to_string(),
             terminal: None,
+            terminal_target_sessions: Vec::new(),
         })
     }
 }

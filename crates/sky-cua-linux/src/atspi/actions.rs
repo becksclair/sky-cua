@@ -1,6 +1,6 @@
-use atspi::AccessibilityConnection;
 use atspi::proxy::accessible::ObjectRefExt;
 use atspi::proxy::proxy_ext::ProxyExt;
+use atspi_connection::AccessibilityConnection;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use zbus::names::UniqueName;
 use zbus::zvariant::ObjectPath;

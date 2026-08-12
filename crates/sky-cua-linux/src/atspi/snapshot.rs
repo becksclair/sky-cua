@@ -1,4 +1,4 @@
-use atspi::AccessibilityConnection;
+use atspi_connection::AccessibilityConnection;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::DiagnosticEntry;
 

@@ -132,6 +132,7 @@ impl From<ExtensionWindowInfo> for LinuxWindowInfo {
             client_type: window.client_type,
             backend: GNOME_SHELL_EXTENSION_BACKEND.to_string(),
             terminal: None,
+            terminal_target_sessions: Vec::new(),
         }
     }
 }

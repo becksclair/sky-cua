@@ -1,7 +1,7 @@
-use atspi::AccessibilityConnection;
 use atspi::CoordType;
 use atspi::proxy::accessible::ObjectRefExt;
 use atspi::proxy::proxy_ext::ProxyExt;
+use atspi_connection::AccessibilityConnection;
 use sky_cua_platform::model::{
     CoordinateSpace, ElementNode, ElementNumericValueReadback, ElementTextReadback,
     ElementTextSelection, RectF,

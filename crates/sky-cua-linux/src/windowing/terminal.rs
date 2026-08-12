@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::{fs, path::PathBuf};
 
-use super::types::{LinuxWindowInfo, TerminalProcess, TerminalWindowContext};
+use super::types::{
+    LinuxWindowInfo, TerminalProcess, TerminalTargetSession, TerminalWindowContext,
+};
 
 #[derive(Debug, Clone)]
 struct ProcessInfo {
@@ -42,15 +44,30 @@ fn enrich_terminal_windows_with_processes(
         .iter()
         .map(|process| (process.pid, process))
         .collect::<HashMap<_, _>>();
+    let terminal_pids = windows_by_terminal_pid
+        .keys()
+        .copied()
+        .collect::<HashSet<_>>();
+    let session_index = terminal_session_index(processes, &by_pid, &terminal_pids);
 
     for (terminal_pid, mut window_indexes) in windows_by_terminal_pid {
-        let mut sessions = terminal_sessions_for_pid(terminal_pid, processes, &by_pid);
+        let mut sessions = terminal_sessions_for_pid(terminal_pid, &session_index);
         if sessions.is_empty() {
             continue;
         }
 
         window_indexes.sort_by_key(|index| windows[*index].window_id.clone());
         sessions.sort_by_key(|session| session.root_start_ticks);
+
+        if window_indexes.len() == 1 {
+            windows[window_indexes[0]].terminal_target_sessions =
+                sessions.iter().map(terminal_target_session).collect();
+        } else if window_indexes.len() == sessions.len() {
+            for (window_index, session) in window_indexes.iter().copied().zip(&sessions) {
+                windows[window_index].terminal_target_sessions =
+                    vec![terminal_target_session(session)];
+            }
+        }
 
         let confidence = if window_indexes.len() == 1 && sessions.len() == 1 {
             Some((
@@ -88,64 +105,93 @@ struct TerminalSession {
     tty: String,
     root_process: ProcessInfo,
     active_process: Option<ProcessInfo>,
+    processes: Vec<ProcessInfo>,
     process_count: usize,
     root_start_ticks: u64,
 }
 
-fn terminal_sessions_for_pid(
-    terminal_pid: u32,
-    processes: &[ProcessInfo],
-    by_pid: &HashMap<u32, &ProcessInfo>,
-) -> Vec<TerminalSession> {
-    let mut grouped: BTreeMap<String, Vec<ProcessInfo>> = BTreeMap::new();
+type IndexedTerminalProcess<'a> = (&'a ProcessInfo, usize);
+type TerminalSessionIndex<'a> = HashMap<u32, BTreeMap<String, Vec<IndexedTerminalProcess<'a>>>>;
+
+fn terminal_session_index<'a>(
+    processes: &'a [ProcessInfo],
+    by_pid: &HashMap<u32, &'a ProcessInfo>,
+    terminal_pids: &HashSet<u32>,
+) -> TerminalSessionIndex<'a> {
+    let mut index: TerminalSessionIndex<'a> = HashMap::new();
     for process in processes {
-        if process.pid == terminal_pid || !is_descendant_of(process.pid, terminal_pid, by_pid) {
-            continue;
-        }
-        for tty in &process.tty_paths {
-            grouped
-                .entry(tty.clone())
-                .or_default()
-                .push(process.clone());
+        let mut current = process.pid;
+        let mut visited = HashSet::new();
+        let mut depth = 0usize;
+        while visited.insert(current) {
+            let Some(current_process) = by_pid.get(&current) else {
+                break;
+            };
+            let parent = current_process.ppid;
+            if terminal_pids.contains(&parent) {
+                for tty in &process.tty_paths {
+                    index
+                        .entry(parent)
+                        .or_default()
+                        .entry(tty.clone())
+                        .or_default()
+                        .push((process, depth));
+                }
+            }
+            if parent == 0 || parent == current {
+                break;
+            }
+            current = parent;
+            depth += 1;
         }
     }
+    index
+}
 
-    grouped
+fn terminal_sessions_for_pid(
+    terminal_pid: u32,
+    session_index: &TerminalSessionIndex<'_>,
+) -> Vec<TerminalSession> {
+    session_index
+        .get(&terminal_pid)
         .into_iter()
-        .filter_map(|(tty, mut processes)| {
-            processes.sort_by_key(|process| {
-                (
-                    process_depth(process.pid, terminal_pid, by_pid),
-                    process.start_ticks,
-                    process.pid,
-                )
-            });
-            let root_process = processes.first()?.clone();
+        .flat_map(|grouped| grouped.iter())
+        .filter_map(|(tty, indexed_processes)| {
+            let mut processes = indexed_processes.clone();
+            processes.sort_by_key(|(process, depth)| (*depth, process.start_ticks, process.pid));
+            let root_process = processes.first()?.0.clone();
             let active_process = active_terminal_process(&processes);
+            let session_processes = processes
+                .iter()
+                .map(|(process, _)| (*process).clone())
+                .collect::<Vec<_>>();
             Some(TerminalSession {
-                tty,
+                tty: tty.clone(),
                 root_start_ticks: root_process.start_ticks,
-                process_count: processes.len(),
+                process_count: session_processes.len(),
                 root_process,
                 active_process,
+                processes: session_processes,
             })
         })
         .collect()
 }
 
-fn active_terminal_process(processes: &[ProcessInfo]) -> Option<ProcessInfo> {
+fn active_terminal_process(processes: &[IndexedTerminalProcess<'_>]) -> Option<ProcessInfo> {
     let same_tty_parents = processes
         .iter()
-        .map(|process| process.ppid)
+        .map(|(process, _)| process.ppid)
         .collect::<HashSet<_>>();
     processes
         .iter()
+        .map(|(process, _)| *process)
         .filter(|process| !same_tty_parents.contains(&process.pid))
         .max_by_key(|process| (process.start_ticks, process.pid))
         .cloned()
         .or_else(|| {
             processes
                 .iter()
+                .map(|(process, _)| *process)
                 .max_by_key(|process| (process.start_ticks, process.pid))
                 .cloned()
         })
@@ -160,42 +206,11 @@ fn process_summary(process: &ProcessInfo) -> TerminalProcess {
     }
 }
 
-fn is_descendant_of(pid: u32, ancestor_pid: u32, by_pid: &HashMap<u32, &ProcessInfo>) -> bool {
-    let mut current = pid;
-    let mut visited = HashSet::new();
-    while visited.insert(current) {
-        let Some(process) = by_pid.get(&current) else {
-            return false;
-        };
-        if process.ppid == ancestor_pid {
-            return true;
-        }
-        if process.ppid == 0 || process.ppid == current {
-            return false;
-        }
-        current = process.ppid;
+fn terminal_target_session(session: &TerminalSession) -> TerminalTargetSession {
+    TerminalTargetSession {
+        tty: session.tty.clone(),
+        processes: session.processes.iter().map(process_summary).collect(),
     }
-    false
-}
-
-fn process_depth(pid: u32, ancestor_pid: u32, by_pid: &HashMap<u32, &ProcessInfo>) -> usize {
-    let mut current = pid;
-    let mut visited = HashSet::new();
-    let mut depth = 0usize;
-    while visited.insert(current) {
-        let Some(process) = by_pid.get(&current) else {
-            return usize::MAX;
-        };
-        if process.ppid == ancestor_pid {
-            return depth;
-        }
-        if process.ppid == 0 || process.ppid == current {
-            return usize::MAX;
-        }
-        current = process.ppid;
-        depth += 1;
-    }
-    usize::MAX
 }
 
 fn looks_like_terminal_window(window: &LinuxWindowInfo) -> bool {
@@ -342,6 +357,7 @@ mod tests {
             client_type: Some("wayland".to_string()),
             backend: "test".to_string(),
             terminal: None,
+            terminal_target_sessions: Vec::new(),
         }
     }
 
@@ -414,6 +430,60 @@ mod tests {
     }
 
     #[test]
+    fn indexes_multiple_terminal_process_trees_in_one_ancestry_pass() {
+        let processes = vec![
+            process(100, 1, 1, "ghostty", None),
+            process(200, 100, 10, "sh", Some("/dev/pts/0")),
+            process(201, 200, 11, "codex", Some("/dev/pts/0")),
+            process(300, 1, 20, "konsole", None),
+            process(400, 300, 30, "zsh", Some("/dev/pts/1")),
+            process(401, 400, 31, "claude", Some("/dev/pts/1")),
+        ];
+        let by_pid = processes
+            .iter()
+            .map(|process| (process.pid, process))
+            .collect::<HashMap<_, _>>();
+        let terminal_pids = HashSet::from([100, 300]);
+
+        let index = terminal_session_index(&processes, &by_pid, &terminal_pids);
+
+        let first = terminal_sessions_for_pid(100, &index);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].root_process.pid, 200);
+        assert_eq!(first[0].active_process.as_ref().unwrap().pid, 201);
+
+        let second = terminal_sessions_for_pid(300, &index);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].root_process.pid, 400);
+        assert_eq!(second[0].active_process.as_ref().unwrap().pid, 401);
+    }
+
+    #[test]
+    fn terminal_session_index_preserves_nested_terminal_ancestor_semantics() {
+        let processes = vec![
+            process(100, 1, 1, "ghostty", None),
+            process(200, 100, 10, "nested-terminal", None),
+            process(300, 200, 20, "zsh", Some("/dev/pts/0")),
+        ];
+        let by_pid = processes
+            .iter()
+            .map(|process| (process.pid, process))
+            .collect::<HashMap<_, _>>();
+        let terminal_pids = HashSet::from([100, 200]);
+
+        let index = terminal_session_index(&processes, &by_pid, &terminal_pids);
+
+        assert_eq!(
+            terminal_sessions_for_pid(100, &index)[0].root_process.pid,
+            300
+        );
+        assert_eq!(
+            terminal_sessions_for_pid(200, &index)[0].root_process.pid,
+            300
+        );
+    }
+
+    #[test]
     fn leaves_terminal_context_empty_when_window_session_counts_do_not_match() {
         let mut windows = vec![terminal_window("11", 100), terminal_window("12", 100)];
         let processes = vec![
@@ -425,6 +495,40 @@ mod tests {
         enrich_terminal_windows_with_processes(&mut windows, &processes);
 
         assert!(windows.iter().all(|window| window.terminal.is_none()));
+        assert!(
+            windows
+                .iter()
+                .all(|window| window.terminal_target_sessions.is_empty())
+        );
+    }
+
+    #[test]
+    fn indexes_all_sessions_for_a_single_owning_terminal_window() {
+        let mut windows = vec![terminal_window("11", 100)];
+        let processes = vec![
+            process(100, 1, 1, "ghostty", None),
+            process(200, 100, 10, "zsh", Some("/dev/pts/0")),
+            process(201, 200, 11, "simyo-renew", Some("/dev/pts/0")),
+            process(300, 100, 20, "zsh", Some("/dev/pts/1")),
+            process(301, 300, 21, "codex", Some("/dev/pts/1")),
+        ];
+
+        enrich_terminal_windows_with_processes(&mut windows, &processes);
+
+        assert!(windows[0].terminal.is_none());
+        assert_eq!(windows[0].terminal_target_sessions.len(), 2);
+        assert!(windows[0].terminal_target_sessions.iter().any(|session| {
+            session
+                .processes
+                .iter()
+                .any(|process| process.command_name == "simyo-renew")
+        }));
+        assert!(windows[0].terminal_target_sessions.iter().any(|session| {
+            session
+                .processes
+                .iter()
+                .any(|process| process.command_name == "codex")
+        }));
     }
 
     #[test]

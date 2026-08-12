@@ -1,6 +1,6 @@
-use atspi::AccessibilityConnection;
 use atspi::State;
 use atspi::proxy::accessible::ObjectRefExt;
+use atspi_connection::AccessibilityConnection;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 
 use crate::app_match::{apps_matching_window_or_all, preferred_linux_window};
