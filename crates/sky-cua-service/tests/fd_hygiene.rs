@@ -7,13 +7,17 @@
 
 #![cfg(target_os = "linux")]
 
+use std::io::Read;
 use std::net::TcpListener;
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use sky_cua_platform::SERVICE_SOCKET_PATH_ENV;
+use sky_cua_platform::{
+    SERVICE_SOCKET_PATH_ENV,
+    config::{CODEX_BROWSER_SOCKET_PATH_ENV, PHONE_DIRECT_ENABLED_ENV},
+};
 
 fn clear_cloexec(fd: i32) {
     // SAFETY: plain fcntl flag manipulation on a descriptor we own.
@@ -98,14 +102,25 @@ fn daemon_does_not_retain_inherited_listener() {
         std::process::id(),
         inode
     ));
+    let codex_socket_path = socket_path.with_extension("codex.sock");
     let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_file(&codex_socket_path);
 
     let child = Command::new(env!("CARGO_BIN_EXE_sky-cua-service"))
         .arg("daemon")
         .env(SERVICE_SOCKET_PATH_ENV, &socket_path)
+        // Keep every listener owned by this child inside the test namespace.
+        // Otherwise a machine-configured compatibility ingress can collide
+        // with the installed daemon even though the ordinary service socket
+        // is isolated above.
+        .env(CODEX_BROWSER_SOCKET_PATH_ENV, &codex_socket_path)
+        // This test validates process-start FD closure, not phone ingress.
+        // Disable the machine-configured Direct listener so a concurrently
+        // running installed daemon cannot own its fixed TCP address first.
+        .env(PHONE_DIRECT_ENABLED_ENV, "0")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("spawn service daemon");
     let mut child = KillOnDrop(child);
@@ -117,7 +132,13 @@ fn daemon_does_not_retain_inherited_listener() {
     let mut released = false;
     while Instant::now() < deadline {
         if let Some(status) = child.0.try_wait().expect("try_wait") {
-            panic!("service daemon exited early during fd hygiene test: {status}");
+            let mut stderr = String::new();
+            if let Some(mut pipe) = child.0.stderr.take() {
+                let _ = pipe.read_to_string(&mut stderr);
+            }
+            panic!(
+                "service daemon exited early during fd hygiene test: {status}; stderr={stderr:?}"
+            );
         }
         if !child_holds_socket(pid, inode) {
             released = true;
@@ -127,6 +148,7 @@ fn daemon_does_not_retain_inherited_listener() {
     }
 
     let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_file(&codex_socket_path);
     assert!(
         released,
         "service daemon still holds the launcher's listening socket (inode {inode})"
