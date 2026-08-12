@@ -937,7 +937,7 @@ def physical_pointer_smoke(
                 )
             print(f"{backend_label} physical scroll smoke passed.")
 
-            if scroll_region is not None and xwayland:
+            if scroll_region is not None:
                 horizontal_observe_result = client.tools_call(
                     45,
                     "observe",

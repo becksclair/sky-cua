@@ -85,10 +85,10 @@ pub(crate) enum EisAction {
         step_delay: Duration,
         cancellation: Option<CuaCancellation>,
     },
-    ScrollVertical {
-        x: f64,
-        y: f64,
-        delta_y: Option<f64>,
+    Scroll {
+        target: Option<(f64, f64)>,
+        axis: EisScrollAxis,
+        delta: Option<f64>,
         steps: i32,
     },
     SendText {
@@ -97,6 +97,12 @@ pub(crate) enum EisAction {
     PressKeySequence {
         keys: std::sync::Arc<[String]>,
     },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum EisScrollAxis {
+    Horizontal,
+    Vertical,
 }
 
 pub(crate) enum EisCommand {
@@ -339,12 +345,12 @@ impl EisWorker {
                 step_delay,
                 cancellation,
             } => self.drag(waypoints.as_ref(), step_delay, cancellation.as_ref()),
-            EisAction::ScrollVertical {
-                x,
-                y,
-                delta_y,
+            EisAction::Scroll {
+                target,
+                axis,
+                delta,
                 steps,
-            } => self.scroll_vertical_at(x, y, delta_y, steps),
+            } => self.scroll(target, axis, delta, steps),
             EisAction::SendText { text } => self.send_text(&text),
             EisAction::PressKeySequence { keys } => self.press_key_sequence(&keys),
         }
@@ -562,15 +568,14 @@ impl EisWorker {
         Ok(format_action_result(&details, &emulation.detail, None))
     }
 
-    fn scroll_vertical_at(
+    fn scroll(
         &mut self,
-        x: f64,
-        y: f64,
-        delta_y: Option<f64>,
+        target: Option<(f64, f64)>,
+        axis: EisScrollAxis,
+        delta: Option<f64>,
         steps: i32,
     ) -> Result<String, BackendError> {
         let device = self.pointer_device()?;
-        validate_eis_absolute_point(&device.device, x, y)?;
         let details = device.description.clone();
         let scroll = device.scroll.as_ref().ok_or_else(|| {
             BackendError::new(
@@ -580,20 +585,39 @@ impl EisWorker {
         })?;
         let emulation = self.ensure_emulating(&device.device)?;
         let serial = self.input.last_serial();
-        device.pointer_absolute.motion_absolute(x as f32, y as f32);
-        device.device.device().frame(serial, monotonic_micros());
+        if let Some((x, y)) = target {
+            validate_eis_absolute_point(&device.device, x, y)?;
+            device.pointer_absolute.motion_absolute(x as f32, y as f32);
+            device.device.device().frame(serial, monotonic_micros());
+        }
         let mut scroll_details = String::with_capacity(32);
-        if let Some(delta_y) = delta_y {
-            let eis_delta_y = eis_scroll_delta_from_action(delta_y);
-            scroll.scroll(0.0, eis_delta_y);
-            let _ = write!(&mut scroll_details, "scroll_delta_y={eis_delta_y}");
+        let axis_name = match axis {
+            EisScrollAxis::Horizontal => "x",
+            EisScrollAxis::Vertical => "y",
+        };
+        if let Some(delta) = delta {
+            let eis_delta = eis_scroll_delta_from_action(axis, delta);
+            match axis {
+                EisScrollAxis::Horizontal => scroll.scroll(eis_delta, 0.0),
+                EisScrollAxis::Vertical => scroll.scroll(0.0, eis_delta),
+            }
+            let _ = write!(&mut scroll_details, "scroll_delta_{axis_name}={eis_delta}");
         } else {
-            let eis_steps = eis_scroll_steps_from_action(steps);
-            scroll.scroll_discrete(0, eis_steps);
-            let _ = write!(&mut scroll_details, "scroll_discrete_y={eis_steps}");
+            let eis_steps = eis_scroll_steps_from_action(axis, steps);
+            match axis {
+                EisScrollAxis::Horizontal => scroll.scroll_discrete(eis_steps, 0),
+                EisScrollAxis::Vertical => scroll.scroll_discrete(0, eis_steps),
+            }
+            let _ = write!(
+                &mut scroll_details,
+                "scroll_discrete_{axis_name}={eis_steps}"
+            );
         }
         device.device.device().frame(serial, monotonic_micros());
-        scroll.scroll_stop(0, 1, 0);
+        match axis {
+            EisScrollAxis::Horizontal => scroll.scroll_stop(1, 0, 0),
+            EisScrollAxis::Vertical => scroll.scroll_stop(0, 1, 0),
+        }
         device.device.device().frame(serial, monotonic_micros());
         self.input.flush()?;
         thread::sleep(EIS_FINAL_FLUSH_DELAY);
@@ -955,12 +979,18 @@ fn eis_device_capabilities() -> BitFlags<DeviceCapability> {
         | DeviceCapability::Scroll
 }
 
-pub(crate) fn eis_scroll_delta_from_action(delta_y: f64) -> f32 {
-    (-delta_y) as f32
+pub(crate) fn eis_scroll_delta_from_action(axis: EisScrollAxis, delta: f64) -> f32 {
+    match axis {
+        EisScrollAxis::Horizontal => delta as f32,
+        EisScrollAxis::Vertical => (-delta) as f32,
+    }
 }
 
-pub(crate) fn eis_scroll_steps_from_action(steps: i32) -> i32 {
-    -steps
+pub(crate) fn eis_scroll_steps_from_action(axis: EisScrollAxis, steps: i32) -> i32 {
+    match axis {
+        EisScrollAxis::Horizontal => steps,
+        EisScrollAxis::Vertical => -steps,
+    }
 }
 
 const EIS_DEVICE_READY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -1041,17 +1071,39 @@ mod tests {
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 
     use super::{
-        EIS_POINT_OUTSIDE_REGION_PREFIX, EisOperationError, eis_fallback_details,
+        EIS_POINT_OUTSIDE_REGION_PREFIX, EisOperationError, EisScrollAxis, eis_fallback_details,
         eis_scroll_delta_from_action, eis_scroll_steps_from_action, should_fallback_to_legacy,
         should_reset_session_before_legacy_fallback,
     };
 
     #[test]
     fn maps_action_scroll_direction_to_eis_direction() {
-        assert_eq!(eis_scroll_delta_from_action(-180.0), 180.0);
-        assert_eq!(eis_scroll_delta_from_action(120.0), -120.0);
-        assert_eq!(eis_scroll_steps_from_action(-2), 2);
-        assert_eq!(eis_scroll_steps_from_action(3), -3);
+        assert_eq!(
+            eis_scroll_delta_from_action(EisScrollAxis::Vertical, -180.0),
+            180.0
+        );
+        assert_eq!(
+            eis_scroll_delta_from_action(EisScrollAxis::Vertical, 120.0),
+            -120.0
+        );
+        assert_eq!(eis_scroll_steps_from_action(EisScrollAxis::Vertical, -2), 2);
+        assert_eq!(eis_scroll_steps_from_action(EisScrollAxis::Vertical, 3), -3);
+        assert_eq!(
+            eis_scroll_delta_from_action(EisScrollAxis::Horizontal, -180.0),
+            -180.0
+        );
+        assert_eq!(
+            eis_scroll_delta_from_action(EisScrollAxis::Horizontal, 120.0),
+            120.0
+        );
+        assert_eq!(
+            eis_scroll_steps_from_action(EisScrollAxis::Horizontal, -2),
+            -2
+        );
+        assert_eq!(
+            eis_scroll_steps_from_action(EisScrollAxis::Horizontal, 3),
+            3
+        );
     }
 
     #[test]

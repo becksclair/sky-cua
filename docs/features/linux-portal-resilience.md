@@ -3,7 +3,7 @@
 ## Status
 
 Shipped. Live-proven across Plasma, GNOME, Hyprland, COSMIC, and i3/X11 on
-2026-05-23; source validation re-verified in the current tree on 2026-08-11.
+2026-05-23; source validation re-verified in the current tree on 2026-08-12.
 
 ## Summary
 
@@ -21,6 +21,9 @@ keyboard modifiers and compositor targeting across supported desktops.
 - `desktop_scroll` accepts all four directions. Exact XWayland targets keep
   pointer movement and vertical or horizontal wheel injection in one XTest
   state; the action fails closed if XTest is unavailable.
+- Native Wayland horizontal scrolling stays on EIS for both targeted and
+  originless actions. It does not mix EIS pointer motion with legacy
+  `NotifyPointerAxis` calls from a session that may forbid that legacy lane.
 - Explicit portal denial remains distinct from an unavailable portal and is
   not silently bypassed.
 
@@ -64,8 +67,9 @@ must still produce exactly one observed vertical or horizontal movement.
   COSMIC, and i3/X11 on 2026-05-23.
 - Plasma re-passed with reduced EIS delays and cached virtual-input devices.
 - On 2026-08-12 the installed Plasma runtime passed native Wayland vertical
-  scrolling through EIS and exact XWayland vertical and horizontal scrolling
-  through XTest, with one observed fixture adjustment per request.
+  and horizontal scrolling through EIS and exact XWayland vertical and
+  horizontal scrolling through XTest, with one observed fixture adjustment
+  per request.
 
 ## Known limitations
 

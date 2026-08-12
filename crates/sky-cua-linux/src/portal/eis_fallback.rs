@@ -7,8 +7,8 @@ use sky_cua_platform::model::CuaCancellation;
 use tracing::{debug, warn};
 
 use crate::portal::eis_input::{
-    EisAction, EisOperationError, EisWorkerHandle, eis_fallback_details, should_fallback_to_legacy,
-    should_reset_session_before_legacy_fallback, spawn_eis_worker,
+    EisAction, EisOperationError, EisScrollAxis, EisWorkerHandle, eis_fallback_details,
+    should_fallback_to_legacy, should_reset_session_before_legacy_fallback, spawn_eis_worker,
 };
 use crate::portal::eis_keymap::{keysym_for_char, keysym_for_key_name};
 use crate::portal::remote_desktop::{
@@ -231,10 +231,10 @@ impl RemoteDesktopSessionManager {
                 self.scroll_vertical_discrete(steps).await
             };
         }
-        let action = EisAction::ScrollVertical {
-            x,
-            y,
-            delta_y,
+        let action = EisAction::Scroll {
+            target: Some((x, y)),
+            axis: EisScrollAxis::Vertical,
+            delta: delta_y,
             steps,
         };
         match self.run_eis_action_with_retry(action).await {
@@ -273,6 +273,132 @@ impl RemoteDesktopSessionManager {
                     self.scroll_vertical_discrete(steps).await
                 }
             }
+        }
+    }
+
+    pub async fn scroll_horizontal_at(
+        &self,
+        x: f64,
+        y: f64,
+        delta_x: Option<f64>,
+        steps: i32,
+    ) -> Result<(), BackendError> {
+        if !eis_pointer_input_enabled() {
+            self.push_eis_pointer_disabled_event("horizontal scroll")
+                .await;
+            self.legacy_pointer_move_absolute(x, y).await?;
+            return self.legacy_scroll_horizontal(delta_x, steps).await;
+        }
+        let action = EisAction::Scroll {
+            target: Some((x, y)),
+            axis: EisScrollAxis::Horizontal,
+            delta: delta_x,
+            steps,
+        };
+        match self.run_eis_action_with_retry(action).await {
+            Ok(details) => {
+                self.push_lifecycle_event(PortalLifecycleEvent {
+                    code: PORTAL_EIS_INPUT_USED,
+                    message: "Injected the horizontal pointer scroll through RemoteDesktop EIS."
+                        .to_string(),
+                    details: Some(details),
+                })
+                .await;
+                Ok(())
+            }
+            Err(failure) => {
+                if !should_fallback_to_legacy(&failure) {
+                    return Err(failure.error);
+                }
+                debug!(
+                    message = %failure.error.message,
+                    "EIS horizontal pointer scroll failed; falling back to legacy RemoteDesktop NotifyPointer calls"
+                );
+                if should_reset_session_before_legacy_fallback(&failure) {
+                    self.reset_session().await;
+                }
+                self.push_lifecycle_event(PortalLifecycleEvent {
+                    code: PORTAL_EIS_INPUT_FALLBACK,
+                    message: "RemoteDesktop EIS horizontal pointer scroll failed; fell back to legacy portal input."
+                        .to_string(),
+                    details: Some(eis_fallback_details(&failure)),
+                })
+                .await;
+                self.legacy_pointer_move_absolute(x, y).await?;
+                self.legacy_scroll_horizontal(delta_x, steps).await
+            }
+        }
+    }
+
+    pub async fn scroll_horizontal_smooth(&self, delta_x: f64) -> Result<(), BackendError> {
+        if !eis_pointer_input_enabled() {
+            self.push_eis_pointer_disabled_event("horizontal scroll")
+                .await;
+            return self.legacy_scroll_horizontal(Some(delta_x), 0).await;
+        }
+        let action = EisAction::Scroll {
+            target: None,
+            axis: EisScrollAxis::Horizontal,
+            delta: Some(delta_x),
+            steps: 0,
+        };
+        match self.run_eis_action_with_retry(action).await {
+            Ok(details) => {
+                self.push_lifecycle_event(PortalLifecycleEvent {
+                    code: PORTAL_EIS_INPUT_USED,
+                    message: "Injected the horizontal pointer scroll through RemoteDesktop EIS."
+                        .to_string(),
+                    details: Some(details),
+                })
+                .await;
+                Ok(())
+            }
+            Err(failure) => {
+                if !should_fallback_to_legacy(&failure) {
+                    return Err(failure.error);
+                }
+                if should_reset_session_before_legacy_fallback(&failure) {
+                    self.reset_session().await;
+                }
+                self.push_lifecycle_event(PortalLifecycleEvent {
+                    code: PORTAL_EIS_INPUT_FALLBACK,
+                    message: "RemoteDesktop EIS horizontal pointer scroll failed; fell back to legacy portal input."
+                        .to_string(),
+                    details: Some(eis_fallback_details(&failure)),
+                })
+                .await;
+                self.legacy_scroll_horizontal(Some(delta_x), 0).await
+            }
+        }
+    }
+
+    async fn legacy_scroll_horizontal(
+        &self,
+        delta_x: Option<f64>,
+        steps: i32,
+    ) -> Result<(), BackendError> {
+        self.ensure_session_started().await?;
+        let state = self.inner.read().await;
+        let session = state.session.as_ref().ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                "portal session was reset concurrently",
+            )
+        })?;
+        if let Some(delta_x) = delta_x {
+            crate::portal::legacy_input::scroll_horizontal_smooth(
+                &session.remote_desktop,
+                &session.session,
+                delta_x,
+            )
+            .await
+        } else {
+            crate::portal::legacy_input::scroll_horizontal_discrete(
+                &session.remote_desktop,
+                &session.session,
+                steps,
+            )
+            .await
         }
     }
 

@@ -396,51 +396,6 @@ impl RemoteDesktopSessionManager {
             .await
     }
 
-    pub async fn scroll_horizontal_at(
-        &self,
-        x: f64,
-        y: f64,
-        delta_x: Option<f64>,
-        steps: i32,
-    ) -> Result<(), BackendError> {
-        self.move_pointer_absolute(x, y).await?;
-        let state = self.inner.read().await;
-        let session = state.session.as_ref().ok_or_else(|| {
-            BackendError::new(
-                BackendErrorCode::Internal,
-                "portal session was reset concurrently",
-            )
-        })?;
-        if let Some(delta_x) = delta_x {
-            legacy_input::scroll_horizontal_smooth(
-                &session.remote_desktop,
-                &session.session,
-                delta_x,
-            )
-            .await
-        } else {
-            legacy_input::scroll_horizontal_discrete(
-                &session.remote_desktop,
-                &session.session,
-                steps,
-            )
-            .await
-        }
-    }
-
-    pub async fn scroll_horizontal_smooth(&self, delta_x: f64) -> Result<(), BackendError> {
-        self.ensure_session_started().await?;
-        let state = self.inner.read().await;
-        let session = state.session.as_ref().ok_or_else(|| {
-            BackendError::new(
-                BackendErrorCode::Internal,
-                "portal session was reset concurrently",
-            )
-        })?;
-        legacy_input::scroll_horizontal_smooth(&session.remote_desktop, &session.session, delta_x)
-            .await
-    }
-
     pub(crate) async fn send_keysym_raw(&self, keysym: i32) -> Result<(), BackendError> {
         self.ensure_session_started().await?;
         let state = self.inner.read().await;
