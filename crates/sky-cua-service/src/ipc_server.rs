@@ -40,21 +40,12 @@ impl ConnectionTracker {
         *active_connections += 1;
     }
 
-    async fn unregister_and_cleanup_if_idle(&self, daemon: &ServiceDaemon) {
-        self.unregister_and_cleanup_with(|| daemon.hide_agent_cursor_after_last_client())
-            .await;
-    }
-
-    async fn unregister_and_cleanup_with<F, Fut>(&self, cleanup: F)
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = ()>,
-    {
+    async fn unregister(&self) {
+        // Overlay expiry belongs to the daemon's bounded idle watchdog. Never
+        // perform overlay host I/O from connection teardown: doing so either
+        // races a replacement client or makes registration depend on cleanup.
         let mut active_connections = self.active_connections.lock().await;
         *active_connections = active_connections.saturating_sub(1);
-        if *active_connections == 0 {
-            cleanup().await;
-        }
     }
 
     async fn is_idle(&self) -> bool {
@@ -100,6 +91,7 @@ pub async fn run_service() -> Result<()> {
     // tightening above.
     set_socket_owner_only_permissions(&socket_path)?;
     let daemon = Arc::new(ServiceDaemon::new(socket_path.clone()).await?);
+    let _health_capability_refresher = daemon.spawn_health_capability_refresher();
     let _overlay_watchdog = daemon.spawn_overlay_idle_watchdog();
     let _session_presence_watchdog = daemon.spawn_session_presence_watchdog();
     let _scrcpy_liveness_watchdog = daemon.spawn_scrcpy_liveness_watchdog();
@@ -167,7 +159,6 @@ pub async fn run_service() -> Result<()> {
                     Ok(stream) => {
                         spawn_codex_browser_handler(
                             stream,
-                            &daemon,
                             &connections,
                             &codex_backend,
                         ).await;
@@ -266,11 +257,9 @@ fn codex_ingress_bind_failure_is_fatal(mode: crate::browser::BrowserControlMode)
 #[cfg(unix)]
 async fn spawn_codex_browser_handler(
     stream: UnixStream,
-    daemon: &Arc<ServiceDaemon>,
     connections: &Arc<ConnectionTracker>,
     backend: &Arc<dyn CodexBrowserBackend>,
 ) {
-    let daemon = daemon.clone();
     let connections = connections.clone();
     let backend = backend.clone();
     connections.register().await;
@@ -278,7 +267,7 @@ async fn spawn_codex_browser_handler(
         if let Err(error) = crate::codex_browser_compat::serve_connection(stream, backend).await {
             warn!("Codex browser compatibility connection error: {error:#}");
         }
-        connections.unregister_and_cleanup_if_idle(&daemon).await;
+        connections.unregister().await;
     });
 }
 
@@ -295,7 +284,7 @@ async fn spawn_connection_handler(
         if let Err(error) = handle_connection(stream, daemon.clone()).await {
             warn!("sky-cua IPC connection error: {error}");
         }
-        connections.unregister_and_cleanup_if_idle(&daemon).await;
+        connections.unregister().await;
     });
 }
 
@@ -410,6 +399,7 @@ pub async fn run_service() -> Result<()> {
     let listener = TcpListener::bind(&bind_addr).await?;
     let local_addr = listener.local_addr()?.to_string();
     let daemon = Arc::new(ServiceDaemon::new(local_addr.clone().into()).await?);
+    let _health_capability_refresher = daemon.spawn_health_capability_refresher();
     let _overlay_watchdog = daemon.spawn_overlay_idle_watchdog();
     let _session_presence_watchdog = daemon.spawn_session_presence_watchdog();
     let _scrcpy_liveness_watchdog = daemon.spawn_scrcpy_liveness_watchdog();
@@ -429,7 +419,7 @@ pub async fn run_service() -> Result<()> {
                             if let Err(error) = handle_connection(stream, daemon.clone()).await {
                                 warn!("sky-cua IPC connection error: {error}");
                             }
-                            connections.unregister_and_cleanup_if_idle(&daemon).await;
+                            connections.unregister().await;
                         });
                     }
                     Err(error) => {
@@ -685,89 +675,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cursor_cleanup_keeps_cursor_visible_while_another_connection_is_active() {
-        let daemon = ServiceDaemon::new_for_tests().expect("daemon");
+    async fn connection_tracking_returns_to_idle_without_cleanup_io() {
         let connections = ConnectionTracker::default();
-        let state = sky_cua_platform::model::AgentCursorState {
-            visible: true,
-            sequence: 0,
-            model_point: None,
-            native_point: Some(sky_cua_platform::model::AgentCursorPoint {
-                x: 10.0,
-                y: 20.0,
-                coordinate_space: sky_cua_platform::model::CoordinateSpace::DesktopLogical,
-                mapping_id: None,
-            }),
-            snapshot_id: None,
-            source_action: Some(sky_cua_platform::model::ActionName::Click),
-            updated_at_ms: 0,
-        };
-        let _ = daemon
-            .handle(ServiceRequest::SetAgentCursor { state })
-            .await;
         connections.register().await;
         connections.register().await;
-        connections.unregister_and_cleanup_if_idle(&daemon).await;
-
-        match daemon.handle(ServiceRequest::AgentCursorStatus).await {
-            sky_cua_platform::model::ServiceResponse::AgentCursorStatus {
-                state: Some(state),
-                ..
-            } => assert!(state.visible),
-            other => panic!("unexpected response: {other:?}"),
-        }
-
-        connections.unregister_and_cleanup_if_idle(&daemon).await;
-        match daemon.handle(ServiceRequest::AgentCursorStatus).await {
-            sky_cua_platform::model::ServiceResponse::AgentCursorStatus {
-                state: Some(state),
-                ..
-            } => assert!(!state.visible),
-            other => panic!("unexpected response: {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn connection_registration_waits_for_final_cleanup() {
-        let connections = Arc::new(ConnectionTracker::default());
-        connections.register().await;
-        let cleanup_started = Arc::new(tokio::sync::Notify::new());
-        let release_cleanup = Arc::new(tokio::sync::Notify::new());
-
-        let cleanup_connections = connections.clone();
-        let cleanup_started_signal = cleanup_started.clone();
-        let release_cleanup_signal = release_cleanup.clone();
-        let cleanup_task = tokio::spawn(async move {
-            cleanup_connections
-                .unregister_and_cleanup_with(|| async {
-                    cleanup_started_signal.notify_one();
-                    release_cleanup_signal.notified().await;
-                })
-                .await;
-        });
-        cleanup_started.notified().await;
-
-        let register_connections = connections.clone();
-        let register_completed = Arc::new(tokio::sync::Notify::new());
-        let register_completed_signal = register_completed.clone();
-        let register_task = tokio::spawn(async move {
-            register_connections.register().await;
-            register_completed_signal.notify_one();
-        });
-        assert!(
-            tokio::time::timeout(Duration::from_millis(25), register_completed.notified())
-                .await
-                .is_err(),
-            "register must wait while final cleanup holds the connection lock"
-        );
-
-        release_cleanup.notify_one();
-        cleanup_task.await.expect("cleanup task");
-        tokio::time::timeout(Duration::from_secs(1), register_completed.notified())
-            .await
-            .expect("register after cleanup");
-        register_task.await.expect("register task");
+        connections.unregister().await;
         assert!(!connections.is_idle().await);
+        connections.unregister().await;
+        assert!(connections.is_idle().await);
     }
 
     #[tokio::test]

@@ -7,14 +7,14 @@ use sky_cua_platform::DESKTOP_LAUNCH_ENV_KEYS;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
-    ActionName, ActionRequest, AppStateSnapshot, BROWSER_CONTROL_CAPABILITY_V1,
+    ActionName, ActionRequest, AppShotCapture, AppStateSnapshot, BROWSER_CONTROL_CAPABILITY_V1,
     BROWSER_SNAPSHOT_MAX_ELEMENT_LIMIT, BROWSER_SNAPSHOT_MAX_TEXT_LIMIT, BrowserRequest,
     BrowserResponse, BrowserSessionIdentity, CUA_SERVICE_DEFAULT_MOUSE_SIZE_PX, CaptureInfo,
     CaptureScreenMode, CoordinateSpace, CuaActionRequest, CuaBackendResponse, CuaCancelStatus,
     CuaCancellation, CuaRequestContext, CuaScreenshot, DiagnosticEntry, DisplayTarget,
-    EnvironmentInfo, PhoneBackendKind, PhoneRequest, PhoneRequestContext, RectF, ServiceRequest,
-    ServiceResponse, SessionPresenceAction, SessionPresenceIntent, WindowInfo, WindowTarget,
-    browser_control_mode_capability, browser_eval_enabled,
+    EnvironmentInfo, InputBackendKind, PhoneBackendKind, PhoneRequest, PhoneRequestContext, RectF,
+    ServiceRequest, ServiceResponse, SessionPresenceAction, SessionPresenceIntent, WindowInfo,
+    WindowTarget, browser_control_mode_capability, browser_eval_enabled,
 };
 
 use crate::action_router::route_action;
@@ -55,6 +55,44 @@ fn desktop_request_deadline() -> Duration {
 /// backend's own cleanup misbehaves.
 const DESKTOP_DEADLINE_RESET_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// A capability refresh may include the complete guarded AT-SPI repair path:
+/// initial connect (2s), unit inspection (2s), restart (10s), and one retry
+/// (2s). Keep modest headroom around those nested deadlines without allowing a
+/// future backend regression to wedge the sole refresher forever.
+#[cfg(not(test))]
+const HEALTH_CAPABILITY_REFRESH_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(test)]
+const HEALTH_CAPABILITY_REFRESH_TIMEOUT: Duration = Duration::from_millis(50);
+
+const HEALTH_CAPABILITY_HEALTHY_REFRESH: Duration = Duration::from_secs(30);
+const HEALTH_CAPABILITY_DEGRADED_REFRESH_MIN: Duration = Duration::from_secs(30);
+const HEALTH_CAPABILITY_DEGRADED_REFRESH_MAX: Duration = Duration::from_secs(5 * 60);
+
+#[derive(Debug, Clone)]
+struct HealthCapabilitySnapshot {
+    input_backend: InputBackendKind,
+}
+
+impl Default for HealthCapabilitySnapshot {
+    fn default() -> Self {
+        Self {
+            input_backend: InputBackendKind::None,
+        }
+    }
+}
+
+fn health_capability_refresh_delay(consecutive_degraded: u32) -> Duration {
+    if consecutive_degraded == 0 {
+        return HEALTH_CAPABILITY_HEALTHY_REFRESH;
+    }
+    let exponent = consecutive_degraded.saturating_sub(1).min(4);
+    let seconds = HEALTH_CAPABILITY_DEGRADED_REFRESH_MIN
+        .as_secs()
+        .saturating_mul(1_u64 << exponent)
+        .min(HEALTH_CAPABILITY_DEGRADED_REFRESH_MAX.as_secs());
+    Duration::from_secs(seconds)
+}
+
 pub struct ServiceDaemon {
     backend: Box<dyn DesktopBackend>,
     sessions: SessionStore,
@@ -73,6 +111,7 @@ pub struct ServiceDaemon {
     browser_control_mode: Result<crate::browser::BrowserControlMode, DiagnosticEntry>,
     browser_control_runtime: Option<std::sync::Arc<crate::browser::BrowserControlRuntime>>,
     browser_control_startup_diagnostics: std::sync::Mutex<Vec<DiagnosticEntry>>,
+    health_capability_snapshot: std::sync::RwLock<HealthCapabilitySnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -99,6 +138,29 @@ struct SessionPresenceConfig {
     relock: bool,
     inhibit_lock: bool,
     inhibit_suspend: bool,
+}
+
+fn desktop_capture_focus_window_ids(capture: &AppShotCapture) -> Vec<String> {
+    let AppShotCapture::Desktop {
+        window_id,
+        semantic_projection,
+        ..
+    } = capture
+    else {
+        return Vec::new();
+    };
+    let mut ids = vec![window_id.clone()];
+    for key in ["window_handle", "window_id"] {
+        if let Some(alias) = semantic_projection
+            .pointer(&format!("/focused_app/{key}"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|alias| !alias.is_empty())
+            && !ids.iter().any(|known| known == alias)
+        {
+            ids.push(alias.to_string());
+        }
+    }
+    ids
 }
 
 mod agent_cursor;
@@ -155,6 +217,7 @@ impl ServiceDaemon {
             browser_control_mode,
             browser_control_runtime,
             browser_control_startup_diagnostics: std::sync::Mutex::new(Vec::new()),
+            health_capability_snapshot: std::sync::RwLock::new(HealthCapabilitySnapshot::default()),
         })
     }
 
@@ -248,6 +311,72 @@ impl ServiceDaemon {
                 }
             }
         })
+    }
+
+    /// Refresh the dynamic desktop capability snapshot independently of Health
+    /// callers. Health is a launcher liveness RPC with a 250ms client budget;
+    /// it must never inherit portal or accessibility-bus latency. One daemon-
+    /// owned task runs this loop sequentially, so a retry storm cannot fan out
+    /// cold backend probes and caller cancellation cannot interrupt repair.
+    pub fn spawn_health_capability_refresher(
+        self: &std::sync::Arc<Self>,
+    ) -> tokio::task::JoinHandle<()> {
+        let daemon = std::sync::Arc::clone(self);
+        tokio::spawn(async move {
+            let mut consecutive_degraded = 0_u32;
+            loop {
+                let healthy = daemon.refresh_health_capability_snapshot().await;
+                consecutive_degraded = if healthy {
+                    0
+                } else {
+                    consecutive_degraded.saturating_add(1)
+                };
+                tokio::time::sleep(health_capability_refresh_delay(consecutive_degraded)).await;
+            }
+        })
+    }
+
+    async fn refresh_health_capability_snapshot(&self) -> bool {
+        let refreshed = tokio::time::timeout(
+            HEALTH_CAPABILITY_REFRESH_TIMEOUT,
+            self.backend.probe_environment(),
+        )
+        .await;
+        let (input_backend, healthy) = match refreshed {
+            Ok(Ok(environment)) => (
+                environment.input_backend,
+                environment.semantic_backend != sky_cua_platform::model::SemanticBackendKind::None,
+            ),
+            Ok(Err(error)) => {
+                debug!(
+                    code = error.code,
+                    message = error.message,
+                    "health capability refresh failed"
+                );
+                (InputBackendKind::None, false)
+            }
+            Err(_) => {
+                debug!(
+                    timeout_ms = HEALTH_CAPABILITY_REFRESH_TIMEOUT.as_millis(),
+                    "health capability refresh exceeded its deadline"
+                );
+                (InputBackendKind::None, false)
+            }
+        };
+        let mut snapshot = self
+            .health_capability_snapshot
+            .write()
+            .expect("health capability snapshot poisoned");
+        snapshot.input_backend = input_backend;
+        healthy
+    }
+
+    fn health_input_backend(&self) -> InputBackendKind {
+        self.health_capability_snapshot
+            .read()
+            .expect("health capability snapshot poisoned")
+            .input_backend
+            .clone()
     }
 
     /// Spawn a background task that releases session-presence inhibitors once
@@ -345,6 +474,7 @@ impl ServiceDaemon {
             browser_control_mode: Ok(crate::browser::BrowserControlMode::Legacy),
             browser_control_runtime: None,
             browser_control_startup_diagnostics: std::sync::Mutex::new(Vec::new()),
+            health_capability_snapshot: std::sync::RwLock::new(HealthCapabilitySnapshot::default()),
         })
     }
 
@@ -353,20 +483,10 @@ impl ServiceDaemon {
         self.ensure_session_presence_for_request(&request).await;
         match request {
             ServiceRequest::Health => {
-                let mut capabilities = self
-                    .backend
-                    .probe_environment()
-                    .await
-                    .map(|environment| {
-                        sky_cua_platform::model::cua_service_capabilities_for_input_backend(
-                            &environment.input_backend,
-                        )
-                    })
-                    .unwrap_or_else(|_| {
-                        sky_cua_platform::model::cua_service_capabilities_for_input_backend(
-                            &sky_cua_platform::model::InputBackendKind::None,
-                        )
-                    });
+                let mut capabilities =
+                    sky_cua_platform::model::cua_service_capabilities_for_input_backend(
+                        &self.health_input_backend(),
+                    );
                 if let Ok(mode) = self.browser_control_mode.as_ref().copied() {
                     capabilities.push(BROWSER_CONTROL_CAPABILITY_V1.to_owned());
                     capabilities.push(browser_control_mode_capability(match mode {
@@ -745,7 +865,7 @@ impl ServiceDaemon {
         &self,
         context: &CuaRequestContext,
     ) -> Option<ServiceResponse> {
-        let (reason, target) = {
+        let (reason, target, focus_window_ids) = {
             let snapshots = self.snapshots.lock().await;
             match context
                 .appshot_id
@@ -755,9 +875,15 @@ impl ServiceDaemon {
                 None if context.appshot_id.is_none() => (
                     sky_cua_platform::model::AppShotRejectionReason::Missing,
                     None,
+                    Vec::new(),
                 ),
-                None => (sky_cua_platform::model::AppShotRejectionReason::Stale, None),
+                None => (
+                    sky_cua_platform::model::AppShotRejectionReason::Stale,
+                    None,
+                    Vec::new(),
+                ),
                 Some(appshot) => {
+                    let focus_window_ids = desktop_capture_focus_window_ids(&appshot.capture);
                     let target = match &appshot.capture {
                         sky_cua_platform::model::AppShotCapture::Desktop { window_id, .. } => {
                             Some(WindowTarget {
@@ -776,27 +902,29 @@ impl ServiceDaemon {
                         (
                             sky_cua_platform::model::AppShotRejectionReason::WrongTarget,
                             target,
+                            focus_window_ids,
                         )
                     } else if !session_ok {
                         (
                             sky_cua_platform::model::AppShotRejectionReason::WrongSession,
                             target,
+                            focus_window_ids,
                         )
                     } else {
                         (
                             sky_cua_platform::model::AppShotRejectionReason::Stale,
                             target,
+                            focus_window_ids,
                         )
                     }
                 }
             }
         };
         if reason == sky_cua_platform::model::AppShotRejectionReason::WrongTarget
-            && let Some(target_id) = target
-                .as_ref()
-                .and_then(|target| target.window_id.as_deref())
             && let Ok(Some(focused)) = self.backend.focused_window().await
-            && focused.window_id == target_id
+            && focus_window_ids
+                .iter()
+                .any(|window_id| window_id == &focused.window_id)
         {
             return None;
         }
@@ -1115,11 +1243,6 @@ impl ServiceDaemon {
         }
     }
 
-    pub async fn hide_agent_cursor_after_last_client(&self) {
-        let mut overlay = self.overlay.lock().await;
-        let _ = overlay.hide(Some("last IPC client disconnected".to_string()));
-    }
-
     pub async fn idle_for(&self) -> std::time::Duration {
         self.sessions.idle_for().await
     }
@@ -1433,5 +1556,39 @@ mod screenshot_conversion_tests {
         assert_eq!(output, original);
         assert_eq!((width, height), (2, 1));
         std::fs::remove_file(&path).expect("test WebP should be removed");
+    }
+}
+
+#[cfg(test)]
+mod desktop_capture_focus_tests {
+    use super::{AppShotCapture, CoordinateSpace, RectF, desktop_capture_focus_window_ids};
+
+    #[test]
+    fn retains_native_and_compositor_window_aliases_from_one_appshot() {
+        let capture = AppShotCapture::Desktop {
+            app_id: "python.desktop".to_string(),
+            window_id: "0x3400007".to_string(),
+            title: Some("sky-cua pointer smoke".to_string()),
+            bounds: RectF {
+                x: 0.0,
+                y: 0.0,
+                width: 2560.0,
+                height: 1600.0,
+                space: CoordinateSpace::DesktopLogical,
+            },
+            semantic_projection: serde_json::json!({
+                "focused_app": {
+                    "window_handle": "kwin:{same-xwayland-window}"
+                }
+            }),
+        };
+
+        assert_eq!(
+            desktop_capture_focus_window_ids(&capture),
+            vec![
+                "0x3400007".to_string(),
+                "kwin:{same-xwayland-window}".to_string()
+            ]
+        );
     }
 }

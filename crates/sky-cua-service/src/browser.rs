@@ -32,5 +32,8 @@ pub(crate) use bridge::{
     type_text_element_with_identity, type_text_with_identity,
 };
 pub(crate) use control_plane::{BrowserControlRuntime, execute_high_level};
-pub(crate) use status::{browser_status_from_deferred_doctor, browser_status_from_doctor};
+pub(crate) use status::{
+    browser_status_deadline_exceeded, browser_status_from_deferred_doctor,
+    browser_status_from_doctor,
+};
 pub(crate) use transport::{BrowserControlMode, browser_control_mode};

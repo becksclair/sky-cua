@@ -556,10 +556,10 @@ pub(crate) fn desktop_appshot_envelope(
                 .map(|app| app.app_id.clone())
         })
         .unwrap_or_else(|| "unknown".to_string());
-    let bounds = window
-        .bounds
+    let bounds = capture
+        .logical_rect
         .clone()
-        .or_else(|| capture.logical_rect.clone())
+        .or_else(|| window.bounds.clone())
         .ok_or_else(|| {
             BackendError::new(
                 BackendErrorCode::Internal,

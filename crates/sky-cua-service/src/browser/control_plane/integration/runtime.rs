@@ -324,7 +324,7 @@ impl BrowserControlRuntime {
     pub(crate) async fn status_report(
         &self,
         integration: Option<BrowserIntegrationReport>,
-        deferred: bool,
+        deferred_reason: Option<&str>,
     ) -> BrowserStatusReport {
         let mut diagnostics = Vec::new();
         let bridge_ready = match self.ready_actors().await {
@@ -334,11 +334,8 @@ impl BrowserControlRuntime {
                 false
             }
         };
-        if deferred {
-            diagnostics.push(runtime_diagnostic(
-                "BrowserIntegrationDeferred",
-                "Browser integration checks were deferred because another desktop request is active.",
-            ));
+        if let Some(reason) = deferred_reason {
+            diagnostics.push(runtime_diagnostic("BrowserIntegrationDeferred", reason));
         } else if integration.is_none() {
             diagnostics.push(runtime_diagnostic(
                 "BrowserIntegrationUnavailable",

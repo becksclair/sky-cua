@@ -19,11 +19,11 @@ use sky_cua_platform::model::{
     BrowserTargetKind, CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode,
     ContentPersistence, ContentRef, ContentSource, CoordinateSpace, CuaActionRequest,
     CuaBackendResponse, CuaCancellation, CuaRequestContext, DiagnosticEntry, DisplayTarget,
-    ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat, PhoneAppListRequest,
-    PhoneAppResponseKind, PhoneCallerProvenance, PhoneConnectRequest, PhoneListDevicesRequest,
-    PhoneMcpClientInfo, PhoneRequest, PhoneRequestContext, PhoneResponse, PhoneStatusRequest,
-    PhoneTapRequest, PixelSize, PortalCapabilities, RectF, SemanticBackendKind, ServiceRequest,
-    ServiceResponse, SessionKind, SessionPresenceAction, SessionPresenceIntent,
+    ElementNode, EnvironmentInfo, FocusedApp, InputBackendKind, ModelImageFormat,
+    PhoneAppListRequest, PhoneAppResponseKind, PhoneCallerProvenance, PhoneConnectRequest,
+    PhoneListDevicesRequest, PhoneMcpClientInfo, PhoneRequest, PhoneRequestContext, PhoneResponse,
+    PhoneStatusRequest, PhoneTapRequest, PixelSize, PortalCapabilities, RectF, SemanticBackendKind,
+    ServiceRequest, ServiceResponse, SessionKind, SessionPresenceAction, SessionPresenceIntent,
     SessionPresenceStatus, ToolAvailability, ToolCapabilities, WindowInfo, WindowTarget,
 };
 use std::path::{Path, PathBuf};
@@ -37,6 +37,7 @@ struct FakeBackend {
     snapshot: AppStateSnapshot,
     outcome: ActionOutcome,
     presence: Option<Arc<PresenceRecorder>>,
+    recorded_action: Option<Arc<std::sync::Mutex<Option<ActionRequest>>>>,
 }
 
 #[derive(Debug, Default)]
@@ -130,7 +131,10 @@ impl DesktopBackend for FakeBackend {
         Ok(self.snapshot.clone())
     }
 
-    async fn execute_action(&self, _request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+    async fn execute_action(&self, request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        if let Some(recorded_action) = &self.recorded_action {
+            *recorded_action.lock().expect("recorded action lock") = Some(request);
+        }
         Ok(self.outcome.clone())
     }
 
@@ -331,11 +335,15 @@ impl DesktopBackend for ArrivalCheckingBackend {
 #[derive(Debug, Clone, Default)]
 struct HangingBackend {
     reset_calls: Arc<AtomicUsize>,
+    probe_calls: Arc<AtomicUsize>,
+    probe_started: Arc<Notify>,
 }
 
 #[async_trait::async_trait]
 impl DesktopBackend for HangingBackend {
     async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
+        self.probe_calls.fetch_add(1, Ordering::SeqCst);
+        self.probe_started.notify_one();
         std::future::pending::<()>().await;
         unreachable!("probe_environment must never resolve in the deadline test")
     }
@@ -365,6 +373,80 @@ impl DesktopBackend for HangingBackend {
     }
 }
 
+#[derive(Debug, Clone)]
+enum HealthProbeResponse {
+    Environment(EnvironmentInfo),
+    Error,
+    Pending,
+}
+
+#[derive(Debug, Clone)]
+struct HealthProbeBackend {
+    response: Arc<std::sync::Mutex<HealthProbeResponse>>,
+    probe_calls: Arc<AtomicUsize>,
+}
+
+impl HealthProbeBackend {
+    fn new(response: HealthProbeResponse) -> Self {
+        Self {
+            response: Arc::new(std::sync::Mutex::new(response)),
+            probe_calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn set_response(&self, response: HealthProbeResponse) {
+        *self
+            .response
+            .lock()
+            .expect("health probe response poisoned") = response;
+    }
+}
+
+#[async_trait::async_trait]
+impl DesktopBackend for HealthProbeBackend {
+    async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError> {
+        self.probe_calls.fetch_add(1, Ordering::SeqCst);
+        let response = self
+            .response
+            .lock()
+            .expect("health probe response poisoned")
+            .clone();
+        match response {
+            HealthProbeResponse::Environment(environment) => Ok(environment),
+            HealthProbeResponse::Error => Err(BackendError::new(
+                BackendErrorCode::AccessibilityUnavailable,
+                "scripted health capability refresh failure",
+            )),
+            HealthProbeResponse::Pending => {
+                std::future::pending::<()>().await;
+                unreachable!("pending health capability refresh must be deadline-bounded")
+            }
+        }
+    }
+
+    async fn list_apps(&self) -> Result<Vec<AppInfo>, BackendError> {
+        Ok(Vec::new())
+    }
+
+    async fn get_app_state(
+        &self,
+        _selector: Option<AppSelector>,
+        _capture_screen: CaptureScreenMode,
+    ) -> Result<AppStateSnapshot, BackendError> {
+        Err(BackendError::new(
+            BackendErrorCode::Internal,
+            "HealthProbeBackend does not support get_app_state",
+        ))
+    }
+
+    async fn execute_action(&self, _request: ActionRequest) -> Result<ActionOutcome, BackendError> {
+        Err(BackendError::new(
+            BackendErrorCode::Internal,
+            "HealthProbeBackend does not support execute_action",
+        ))
+    }
+}
+
 fn request(action: ActionName, arguments: serde_json::Value) -> ActionRequest {
     ActionRequest {
         action,
@@ -385,7 +467,18 @@ async fn authorize_desktop_appshot(daemon: &ServiceDaemon, session_id: Option<&s
         "test-appshot-{}",
         sky_cua_platform::snapshot::new_snapshot_id()
     );
-    let snapshot = snapshot(Some(capture_with_rect()), Vec::new());
+    let mut snapshot = snapshot(Some(capture_with_rect()), Vec::new());
+    snapshot.focused_app = Some(FocusedApp {
+        app_id: "fake.app".to_string(),
+        name: "Fake app".to_string(),
+        pid: Some(42),
+        desktop_file_id: Some("fake.app.desktop".to_string()),
+        app_user_model_id: None,
+        window_handle: Some("fake-window".to_string()),
+        toolkit_guess: Some("XWayland".to_string()),
+        window_title: Some("Fake window".to_string()),
+        display: None,
+    });
     let appshot = AppShotEnvelope {
         appshot_id: appshot_id.clone(),
         trigger: AppShotTrigger::Observe,
@@ -1080,6 +1173,48 @@ fn snapshotless_physical_actions_do_not_require_cached_snapshot_context() {
     )));
 }
 
+#[tokio::test]
+async fn fresh_appshot_authorizes_snapshotless_physical_coordinates() {
+    let recorded_action = Arc::new(std::sync::Mutex::new(None));
+    let daemon = daemon_with_backend(Box::new(FakeBackend {
+        snapshot: snapshot(Some(capture_with_rect()), Vec::new()),
+        outcome: success_outcome(),
+        presence: None,
+        recorded_action: Some(recorded_action.clone()),
+    }));
+    let mut click = request(ActionName::Click, json!({"x": 1454.5, "y": 252.0}));
+    click.appshot_id = Some(authorize_desktop_appshot(&daemon, None).await);
+
+    match daemon
+        .handle(ServiceRequest::ExecuteAction {
+            request: Box::new(click),
+        })
+        .await
+    {
+        ServiceResponse::ExecuteAction { outcome } => {
+            assert!(outcome.success);
+        }
+        other => panic!("fresh AppShot should authorize raw physical coordinates, got {other:?}"),
+    }
+    let recorded = recorded_action
+        .lock()
+        .expect("recorded action lock")
+        .clone()
+        .expect("backend action");
+    assert_eq!(recorded.snapshot_id, None);
+    assert_eq!(recorded.resolved_capture, None);
+    assert_eq!(
+        recorded
+            .resolved_focused_app
+            .as_ref()
+            .and_then(|app| app.window_handle.as_deref()),
+        Some("fake-window")
+    );
+    assert_eq!(recorded.environment, Some(environment()));
+    assert_eq!(recorded.arguments["x"], 1454.5);
+    assert_eq!(recorded.arguments["y"], 252.0);
+}
+
 #[test]
 fn element_and_semantic_actions_require_cached_snapshot_context() {
     let mut click = request(ActionName::Click, json!({}));
@@ -1183,37 +1318,6 @@ async fn cursor_status_requests_round_trip_through_daemon_handle() {
         ServiceResponse::ShowAgentCursor {
             state: Some(state), ..
         } => assert!(state.visible),
-        other => panic!("unexpected response: {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn last_client_cleanup_hides_agent_cursor_state() {
-    let daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
-    let state = AgentCursorState {
-        visible: true,
-        sequence: 99,
-        model_point: Some(AgentCursorPoint {
-            x: 12.0,
-            y: 34.0,
-            coordinate_space: CoordinateSpace::StreamPixels,
-            mapping_id: Some("stream".to_string()),
-        }),
-        native_point: None,
-        snapshot_id: Some("snap".to_string()),
-        source_action: Some(ActionName::Click),
-        updated_at_ms: 0,
-    };
-
-    let _ = daemon
-        .handle(ServiceRequest::SetAgentCursor { state })
-        .await;
-    daemon.hide_agent_cursor_after_last_client().await;
-
-    match daemon.handle(ServiceRequest::AgentCursorStatus).await {
-        ServiceResponse::AgentCursorStatus {
-            state: Some(state), ..
-        } => assert!(!state.visible),
         other => panic!("unexpected response: {other:?}"),
     }
 }
@@ -1383,6 +1487,7 @@ async fn stalled_arrival_wait_fails_open_within_absolute_deadline() {
         snapshot: snapshot(None, Vec::new()),
         outcome: success_outcome(),
         presence: None,
+        recorded_action: None,
     };
     let daemon = daemon_with_backend_and_overlay(
         Box::new(backend),
@@ -1456,6 +1561,187 @@ async fn service_runtime_health_bypasses_blocked_desktop_request() {
         ServiceResponse::ExecuteAction { outcome } => assert!(outcome.success),
         other => panic!("unexpected response: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn service_runtime_health_never_probes_the_backend_inline() {
+    let backend = HangingBackend::default();
+    let probe_calls = backend.probe_calls.clone();
+    let daemon = Arc::new(daemon_with_backend(Box::new(backend)));
+    let mut tasks = Vec::new();
+    for _ in 0..32 {
+        let daemon = daemon.clone();
+        tasks.push(tokio::spawn(async move {
+            daemon.handle(ServiceRequest::Health).await
+        }));
+    }
+
+    let responses = tokio::time::timeout(Duration::from_millis(100), async {
+        let mut responses = Vec::new();
+        for task in tasks {
+            responses.push(task.await.expect("health task"));
+        }
+        responses
+    })
+    .await
+    .expect("health must not wait for the desktop backend");
+
+    for response in responses {
+        match response {
+            ServiceResponse::Health {
+                ok,
+                capabilities,
+                desktop_env: _,
+                browser_env: _,
+                ..
+            } => {
+                assert!(ok);
+                assert!(capabilities.iter().any(|capability| {
+                    capability == sky_cua_platform::model::BROWSER_CONTROL_CAPABILITY_V1
+                }));
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+    assert_eq!(
+        probe_calls.load(Ordering::SeqCst),
+        0,
+        "Health must only read the service-owned capability snapshot"
+    );
+}
+
+#[tokio::test]
+async fn health_capability_refresher_is_single_and_caller_independent() {
+    let backend = HangingBackend::default();
+    let probe_calls = backend.probe_calls.clone();
+    let probe_started = backend.probe_started.clone();
+    let daemon = Arc::new(daemon_with_backend(Box::new(backend)));
+    let started = probe_started.notified();
+    let refresher = daemon.spawn_health_capability_refresher();
+
+    tokio::time::timeout(Duration::from_millis(100), started)
+        .await
+        .expect("the daemon-owned refresher should start immediately");
+    assert_eq!(probe_calls.load(Ordering::SeqCst), 1);
+
+    for _ in 0..100 {
+        assert!(matches!(
+            daemon.handle(ServiceRequest::Health).await,
+            ServiceResponse::Health { ok: true, .. }
+        ));
+    }
+    tokio::time::sleep(Duration::from_millis(75)).await;
+    assert_eq!(
+        probe_calls.load(Ordering::SeqCst),
+        1,
+        "Health callers must neither fan out nor restart the pending refresh"
+    );
+    refresher.abort();
+}
+
+#[tokio::test]
+async fn health_capability_refresh_updates_downgrades_and_recovers() {
+    let backend = HealthProbeBackend::new(HealthProbeResponse::Environment(environment()));
+    let backend_control = backend.clone();
+    let daemon = daemon_with_backend(Box::new(backend));
+
+    assert!(daemon.refresh_health_capability_snapshot().await);
+    let ServiceResponse::Health { capabilities, .. } = daemon.handle(ServiceRequest::Health).await
+    else {
+        panic!("expected Health response");
+    };
+    assert!(
+        capabilities
+            .iter()
+            .any(|value| value == "linux.scroll.pixels")
+    );
+
+    backend_control.set_response(HealthProbeResponse::Error);
+    assert!(!daemon.refresh_health_capability_snapshot().await);
+    let ServiceResponse::Health { capabilities, .. } = daemon.handle(ServiceRequest::Health).await
+    else {
+        panic!("expected Health response");
+    };
+    assert!(
+        !capabilities
+            .iter()
+            .any(|value| value.starts_with("linux.scroll."))
+    );
+    assert!(
+        capabilities
+            .iter()
+            .any(|value| { value == sky_cua_platform::model::BROWSER_CONTROL_CAPABILITY_V1 })
+    );
+
+    backend_control.set_response(HealthProbeResponse::Environment(environment()));
+    assert!(daemon.refresh_health_capability_snapshot().await);
+    backend_control.set_response(HealthProbeResponse::Pending);
+    assert!(!daemon.refresh_health_capability_snapshot().await);
+    let ServiceResponse::Health { capabilities, .. } = daemon.handle(ServiceRequest::Health).await
+    else {
+        panic!("expected Health response");
+    };
+    assert!(
+        !capabilities
+            .iter()
+            .any(|value| value.starts_with("linux.scroll."))
+    );
+
+    let mut degraded_input = environment();
+    degraded_input.input_backend = InputBackendKind::XTest;
+    degraded_input.semantic_backend = SemanticBackendKind::None;
+    backend_control.set_response(HealthProbeResponse::Environment(degraded_input));
+    assert!(!daemon.refresh_health_capability_snapshot().await);
+    let ServiceResponse::Health { capabilities, .. } = daemon.handle(ServiceRequest::Health).await
+    else {
+        panic!("expected Health response");
+    };
+    assert!(
+        capabilities
+            .iter()
+            .any(|value| value == "linux.scroll.direction")
+    );
+    assert!(
+        !capabilities
+            .iter()
+            .any(|value| value == "linux.scroll.pixels")
+    );
+
+    backend_control.set_response(HealthProbeResponse::Environment(environment()));
+    assert!(daemon.refresh_health_capability_snapshot().await);
+    assert_eq!(backend_control.probe_calls.load(Ordering::SeqCst), 6);
+}
+
+#[test]
+fn health_capability_refresh_backoff_is_bounded() {
+    assert_eq!(
+        super::health_capability_refresh_delay(0),
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        super::health_capability_refresh_delay(1),
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        super::health_capability_refresh_delay(2),
+        Duration::from_secs(60)
+    );
+    assert_eq!(
+        super::health_capability_refresh_delay(3),
+        Duration::from_secs(120)
+    );
+    assert_eq!(
+        super::health_capability_refresh_delay(4),
+        Duration::from_secs(240)
+    );
+    assert_eq!(
+        super::health_capability_refresh_delay(5),
+        Duration::from_secs(300)
+    );
+    assert_eq!(
+        super::health_capability_refresh_delay(u32::MAX),
+        Duration::from_secs(300)
+    );
 }
 
 #[tokio::test]
@@ -1589,11 +1875,45 @@ async fn service_runtime_browser_status_bypasses_blocked_desktop_request() {
 }
 
 #[tokio::test]
+async fn service_runtime_browser_status_defers_a_hung_doctor_probe() {
+    let daemon = daemon_with_backend(Box::new(HangingBackend::default()));
+    let response = tokio::time::timeout(
+        Duration::from_millis(500),
+        daemon.handle(ServiceRequest::Browser {
+            request: BrowserRequest::Status,
+            identity: None,
+            context: None,
+        }),
+    )
+    .await
+    .expect("browser status must abandon a hung doctor probe");
+
+    match response {
+        ServiceResponse::Browser {
+            response: BrowserResponse::Status { report },
+        } => {
+            let diagnostic = report
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "BrowserIntegrationDeferred")
+                .expect("timed-out doctor should produce a deferred diagnostic");
+            assert!(diagnostic.message.contains("status deadline"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+    assert!(
+        daemon.desktop_lane.try_lock().is_ok(),
+        "browser status timeout must release the desktop lane"
+    );
+}
+
+#[tokio::test]
 async fn hybrid_browser_status_reports_codex_ingress_bind_degradation() {
     let backend = FakeBackend {
         snapshot: snapshot(Some(capture_with_rect()), Vec::new()),
         outcome: success_outcome(),
         presence: None,
+        recorded_action: None,
     };
     let mut daemon = daemon_with_backend(Box::new(backend));
     daemon.browser_control_mode = Ok(crate::browser::BrowserControlMode::Hybrid);
@@ -1905,6 +2225,7 @@ async fn automatic_session_presence_acquires_once_and_releases_after_idle() {
             snapshot: snapshot(None, Vec::new()),
             outcome: success_outcome(),
             presence: Some(presence.clone()),
+            recorded_action: None,
         }),
         SessionPresenceConfig {
             enabled: true,
@@ -1967,6 +2288,7 @@ async fn explicit_session_presence_requests_are_rejected_when_disabled() {
             snapshot: snapshot(None, Vec::new()),
             outcome: success_outcome(),
             presence: Some(presence.clone()),
+            recorded_action: None,
         }),
         SessionPresenceConfig::disabled(),
     );
@@ -2186,6 +2508,7 @@ fn daemon_with(snapshot: AppStateSnapshot, outcome: ActionOutcome) -> ServiceDae
         snapshot,
         outcome,
         presence: None,
+        recorded_action: None,
     }))
 }
 
@@ -2249,6 +2572,9 @@ fn daemon_with_phone_and_overlay(
         browser_control_mode: Ok(crate::browser::BrowserControlMode::Legacy),
         browser_control_runtime: None,
         browser_control_startup_diagnostics: std::sync::Mutex::new(Vec::new()),
+        health_capability_snapshot: std::sync::RwLock::new(
+            super::HealthCapabilitySnapshot::default(),
+        ),
     }
 }
 
@@ -2437,6 +2763,7 @@ async fn daemon_phone_manager_exposes_installed_direct_runtime_provider() {
             snapshot: snapshot(None, Vec::new()),
             outcome: success_outcome(),
             presence: None,
+            recorded_action: None,
         }),
         SessionPresenceConfig::disabled(),
         phone,

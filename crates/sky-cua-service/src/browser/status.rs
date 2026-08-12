@@ -18,17 +18,37 @@ pub(crate) async fn browser_status_from_doctor(
     .await
 }
 
-pub(crate) async fn browser_status_from_deferred_doctor() -> BrowserStatusReport {
+pub(crate) async fn browser_status_from_deferred_doctor(
+    reason: impl Into<String>,
+) -> BrowserStatusReport {
     browser_status_from_integration(
         None,
         DiagnosticEntry {
             code: "BrowserIntegrationDeferred".to_string(),
-            message: "Browser integration checks were deferred because another desktop request is active."
-                .to_string(),
+            message: reason.into(),
             details: None,
         },
     )
     .await
+}
+
+pub(crate) fn browser_status_deadline_exceeded(reason: impl Into<String>) -> BrowserStatusReport {
+    BrowserStatusReport {
+        enabled: true,
+        available_targets: vec![BrowserTargetAvailability {
+            target: BrowserTargetKind::UserChrome,
+            available: false,
+            detail: "Browser status could not be completed within its deadline.".to_string(),
+        }],
+        tabs_known: None,
+        browser_integration: None,
+        control_plane: None,
+        diagnostics: vec![DiagnosticEntry {
+            code: "BrowserStatusTimedOut".to_string(),
+            message: reason.into(),
+            details: None,
+        }],
+    }
 }
 
 async fn browser_status_from_integration(

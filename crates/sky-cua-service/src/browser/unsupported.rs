@@ -53,7 +53,7 @@ impl BrowserControlRuntime {
     pub(crate) async fn status_report(
         &self,
         integration: Option<BrowserIntegrationReport>,
-        _deferred: bool,
+        _deferred_reason: Option<&str>,
     ) -> BrowserStatusReport {
         unsupported_browser_status(integration, browser_bridge_diagnostics().await)
     }
@@ -361,7 +361,9 @@ pub(crate) async fn browser_bridge_diagnostics() -> Vec<DiagnosticEntry> {
     vec![browser_bridge_unsupported_diagnostic()]
 }
 
-pub(crate) async fn browser_status_from_deferred_doctor() -> BrowserStatusReport {
+pub(crate) async fn browser_status_from_deferred_doctor(
+    _reason: impl Into<String>,
+) -> BrowserStatusReport {
     unsupported_browser_status(None, browser_bridge_diagnostics().await)
 }
 

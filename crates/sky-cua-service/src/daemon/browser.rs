@@ -1,5 +1,27 @@
 use super::*;
 
+const BROWSER_STATUS_DOCTOR_TIMEOUT: Duration = Duration::from_millis(100);
+const BROWSER_STATUS_REQUEST_TIMEOUT: Duration = Duration::from_millis(250);
+const BROWSER_STATUS_BUSY: &str =
+    "Browser integration checks were deferred because another desktop request is active.";
+const BROWSER_STATUS_TIMED_OUT: &str = "Browser integration checks were deferred because the desktop backend did not answer within the status deadline.";
+const BROWSER_STATUS_REQUEST_TIMED_OUT: &str = "Browser status was deferred because the complete runtime status path did not answer within the request deadline.";
+
+async fn deadline_bounded_browser_status(
+    future: impl std::future::Future<Output = ServiceResponse>,
+) -> ServiceResponse {
+    match tokio::time::timeout(BROWSER_STATUS_REQUEST_TIMEOUT, future).await {
+        Ok(response) => response,
+        Err(_) => ServiceResponse::Browser {
+            response: BrowserResponse::Status {
+                report: crate::browser::browser_status_deadline_exceeded(
+                    BROWSER_STATUS_REQUEST_TIMED_OUT,
+                ),
+            },
+        },
+    }
+}
+
 impl ServiceDaemon {
     pub(super) async fn handle_browser_request(
         &self,
@@ -396,11 +418,15 @@ impl ServiceDaemon {
 
     async fn handle_browser_status_request(&self) -> ServiceResponse {
         debug!("handling browser_status request");
+        deadline_bounded_browser_status(self.build_browser_status_response()).await
+    }
+
+    async fn build_browser_status_response(&self) -> ServiceResponse {
         let persistent_runtime = self.browser_control_runtime.as_ref();
         let integration = {
             let Ok(_desktop_lane) = self.desktop_lane.try_lock() else {
                 if let Some(runtime) = persistent_runtime {
-                    let mut report = runtime.status_report(None, true).await;
+                    let mut report = runtime.status_report(None, Some(BROWSER_STATUS_BUSY)).await;
                     self.append_browser_control_startup_diagnostics(&mut report);
                     return ServiceResponse::Browser {
                         response: BrowserResponse::Status { report },
@@ -408,18 +434,40 @@ impl ServiceDaemon {
                 }
                 return ServiceResponse::Browser {
                     response: BrowserResponse::Status {
-                        report: crate::browser::browser_status_from_deferred_doctor().await,
+                        report: crate::browser::browser_status_from_deferred_doctor(
+                            BROWSER_STATUS_BUSY,
+                        )
+                        .await,
                     },
                 };
             };
-            match self.backend.doctor().await {
-                Ok(report) => report.browser_integration,
-                Err(error) => return error_response(error.code, error.message),
+            match tokio::time::timeout(BROWSER_STATUS_DOCTOR_TIMEOUT, self.backend.doctor()).await {
+                Ok(Ok(report)) => report.browser_integration,
+                Ok(Err(error)) => return error_response(error.code, error.message),
+                Err(_) => {
+                    if let Some(runtime) = persistent_runtime {
+                        let mut report = runtime
+                            .status_report(None, Some(BROWSER_STATUS_TIMED_OUT))
+                            .await;
+                        self.append_browser_control_startup_diagnostics(&mut report);
+                        return ServiceResponse::Browser {
+                            response: BrowserResponse::Status { report },
+                        };
+                    }
+                    return ServiceResponse::Browser {
+                        response: BrowserResponse::Status {
+                            report: crate::browser::browser_status_from_deferred_doctor(
+                                BROWSER_STATUS_TIMED_OUT,
+                            )
+                            .await,
+                        },
+                    };
+                }
             }
         };
 
         if let Some(runtime) = persistent_runtime {
-            let mut report = runtime.status_report(integration, false).await;
+            let mut report = runtime.status_report(integration, None).await;
             self.append_browser_control_startup_diagnostics(&mut report);
             return ServiceResponse::Browser {
                 response: BrowserResponse::Status { report },
@@ -430,6 +478,33 @@ impl ServiceDaemon {
             response: BrowserResponse::Status {
                 report: crate::browser::browser_status_from_doctor(integration).await,
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod status_deadline_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn complete_browser_status_path_is_deadline_bounded() {
+        let response = tokio::time::timeout(
+            BROWSER_STATUS_REQUEST_TIMEOUT + Duration::from_millis(100),
+            deadline_bounded_browser_status(std::future::pending::<ServiceResponse>()),
+        )
+        .await
+        .expect("outer test deadline");
+
+        match response {
+            ServiceResponse::Browser {
+                response: BrowserResponse::Status { report },
+            } => assert!(
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|entry| entry.code == "BrowserStatusTimedOut")
+            ),
+            other => panic!("unexpected response: {other:?}"),
         }
     }
 }
