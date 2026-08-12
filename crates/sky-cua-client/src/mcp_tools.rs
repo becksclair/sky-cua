@@ -2507,6 +2507,41 @@ mod tests {
             other => panic!("expected default desktop observe request: {other:?}"),
         }
 
+        let exact_window_service = FakeService::with_response(ServiceResponse::Error {
+            ok: false,
+            code: "ObserveProbe".to_string(),
+            message: "captured".to_string(),
+            session_id: None,
+            turn_id: None,
+            retry: None,
+        });
+        let result = handle_session_tool_call(
+            &exact_window_service,
+            &heuristics,
+            &image_model,
+            &image_registry,
+            "observe",
+            json!({
+                "surface": "desktop",
+                "window_id": "kwin:exact-window"
+            }),
+        )
+        .expect("desktop observe should accept an exact window_id selector");
+        let mut requests = exact_window_service.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "exact desktop observe did not dispatch: {result}"
+        );
+        match requests.remove(0) {
+            ServiceRequest::AppShotCapture {
+                target: Some(target),
+                frontmost: false,
+                ..
+            } => assert_eq!(target.window_id.as_deref(), Some("kwin:exact-window")),
+            other => panic!("expected exact-window desktop observe request: {other:?}"),
+        }
+
         let pointer_service = FakeService::with_response(ServiceResponse::ExecuteAction {
             outcome: ActionOutcome {
                 success: true,
@@ -4552,6 +4587,14 @@ mod tests {
             assert_eq!(content.len(), expected_content_len);
             assert_eq!(content[0]["type"], "text");
             assert_eq!(result["structuredContent"]["appshot_id"], "appshot-1");
+            assert_eq!(
+                result["structuredContent"]["capture_backend"],
+                "portal_pipe_wire"
+            );
+            assert_eq!(
+                result["structuredContent"]["image_backend"],
+                "portal_pipe_wire"
+            );
             if supports_images == Some(true) {
                 assert_eq!(content[1]["type"], "image");
             } else {
@@ -4561,6 +4604,40 @@ mod tests {
             }
         }
 
+        std::fs::remove_file(image_file).unwrap();
+    }
+
+    #[test]
+    fn grouped_desktop_observe_preserves_capture_provenance() {
+        let image_file = std::env::temp_dir().join(format!(
+            "sky-cua-grouped-desktop-appshot-provenance-{}.png",
+            std::process::id()
+        ));
+        std::fs::write(&image_file, b"png").unwrap();
+        let service = FakeService::with_response(desktop_appshot_response(&image_file));
+        let model = ModelSessionInfo {
+            supports_images: Some(false),
+        };
+        let registry = build_tool_registry(&process_config(false), &model);
+
+        let result = handle_session_tool_call(
+            &service,
+            &HeuristicsRegistry::load_from_repo().expect("heuristics load"),
+            &model,
+            &registry,
+            "observe",
+            json!({"surface": "desktop"}),
+        )
+        .unwrap();
+
+        assert_eq!(
+            result["structuredContent"]["result"]["capture_backend"],
+            "portal_pipe_wire"
+        );
+        assert_eq!(
+            result["structuredContent"]["result"]["image_backend"],
+            "portal_pipe_wire"
+        );
         std::fs::remove_file(image_file).unwrap();
     }
 

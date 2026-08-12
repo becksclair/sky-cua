@@ -186,7 +186,8 @@ fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> 
         ),
         "desktop_pointer" => Some(
             "`desktop_pointer` expects one flat JSON object. For click, provide \
-             top-level `operation` plus one target: `snapshot_id` with `x`/`y` \
+             top-level `operation`, the `appshot_id` returned by `observe`, plus \
+             one target: `snapshot_id` with `x`/`y` \
              read off that capture's screenshot (pixels are translated to the \
              screen for you — the most reliable option, and the one to use when \
              no semantic elements are exposed), or `snapshot_id` with \
@@ -659,7 +660,7 @@ fn build_grouped_tool_definitions(
             "Scroll a snapshot-resolved desktop element. Pass direction and snapshot_id plus element_index, name, or text. Re-observe before reusing an element index.",
             LOCAL_STATEFUL_ACTION,
             desktop_semantic_properties(json!({
-                "direction": {"type": "string", "enum": ["up", "down"]},
+                "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
                 "pages": {"type": "integer", "minimum": 1, "description": "Page-sized scroll steps. Defaults to 1."}
             })),
             json!(["direction", "appshot_id"]),

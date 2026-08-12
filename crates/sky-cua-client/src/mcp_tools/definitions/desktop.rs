@@ -28,6 +28,11 @@ pub(super) fn observe_properties(can_receive_images: bool, surfaces: AgentSurfac
                 }
             }
         }
+        if let Some(window_target) = window_target_schema().as_object() {
+            for (key, value) in window_target {
+                properties.insert(key.clone(), value.clone());
+            }
+        }
     }
     if surfaces.browser {
         surface_values.push("browser");
@@ -98,7 +103,15 @@ pub(super) fn observe_constraints(can_receive_images: bool, surfaces: AgentSurfa
             &[],
             &[
                 "surface",
+                "window_id",
+                "pid",
+                "tty",
+                "terminal_pid",
+                "terminal_command",
+                "terminal_cwd",
                 "app_id",
+                "wm_class",
+                "title",
                 "window_title",
                 "name",
                 "detail",

@@ -657,6 +657,11 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
         tool("desktop_scroll")["inputSchema"]["properties"]["pages"].is_object(),
         "desktop_scroll should expose the pages field"
     );
+    assert_eq!(
+        tool("desktop_scroll")["inputSchema"]["properties"]["direction"]["enum"],
+        json!(["up", "down", "left", "right"]),
+        "desktop_scroll should expose every implemented scroll direction"
+    );
     let desktop_scroll_any_of = tool("desktop_scroll")["inputSchema"]["allOf"]
         .as_array()
         .and_then(|all_of| {

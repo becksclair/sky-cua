@@ -5,8 +5,8 @@
       "browser_eval_enabled": false,
       "can_receive_images": false,
       "description_bytes": 5200,
-      "largest_schema_bytes": 3604,
-      "serialized_bytes": 63599,
+      "largest_schema_bytes": 3613,
+      "serialized_bytes": 64826,
       "surface": "grouped",
       "tool_count": 40,
       "tools_list": {
@@ -192,9 +192,18 @@
               "additionalProperties": false,
               "properties": {
                 "app_id": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "backend": {
@@ -327,6 +336,22 @@
                     "null"
                   ]
                 },
+                "pid": {
+                  "anyOf": [
+                    {
+                      "description": "Process ID from list_resources(surface=\"desktop\", resource=\"windows\"). 0 is ignored.",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "const": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "session_id": {
                   "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
                   "minLength": 1,
@@ -364,6 +389,52 @@
                     }
                   ]
                 },
+                "terminal_command": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "terminal_cwd": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "terminal_pid": {
+                  "anyOf": [
+                    {
+                      "description": "Terminal process ID from desktop window terminal metadata. 0 is ignored.",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "const": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "text_limit": {
                   "anyOf": [
                     {
@@ -377,10 +448,72 @@
                     }
                   ]
                 },
+                "title": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "tty": {
+                  "anyOf": [
+                    {
+                      "description": "Terminal tty such as /dev/pts/7 or pts/7.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "window_id": {
+                  "anyOf": [
+                    {
+                      "description": "Exact window_id from list_resources(surface=\"desktop\", resource=\"windows\").",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "window_title": {
                   "type": [
                     "string",
                     "null"
+                  ]
+                },
+                "wm_class": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },
@@ -1673,7 +1806,9 @@
                 "direction": {
                   "enum": [
                     "up",
-                    "down"
+                    "down",
+                    "left",
+                    "right"
                   ],
                   "type": "string"
                 },
@@ -5064,8 +5199,8 @@
       "browser_eval_enabled": true,
       "can_receive_images": false,
       "description_bytes": 5303,
-      "largest_schema_bytes": 3604,
-      "serialized_bytes": 64470,
+      "largest_schema_bytes": 3613,
+      "serialized_bytes": 65697,
       "surface": "grouped",
       "tool_count": 41,
       "tools_list": {
@@ -5251,9 +5386,18 @@
               "additionalProperties": false,
               "properties": {
                 "app_id": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "backend": {
@@ -5386,6 +5530,22 @@
                     "null"
                   ]
                 },
+                "pid": {
+                  "anyOf": [
+                    {
+                      "description": "Process ID from list_resources(surface=\"desktop\", resource=\"windows\"). 0 is ignored.",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "const": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "session_id": {
                   "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
                   "minLength": 1,
@@ -5423,6 +5583,52 @@
                     }
                   ]
                 },
+                "terminal_command": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "terminal_cwd": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "terminal_pid": {
+                  "anyOf": [
+                    {
+                      "description": "Terminal process ID from desktop window terminal metadata. 0 is ignored.",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "const": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "text_limit": {
                   "anyOf": [
                     {
@@ -5436,10 +5642,72 @@
                     }
                   ]
                 },
+                "title": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "tty": {
+                  "anyOf": [
+                    {
+                      "description": "Terminal tty such as /dev/pts/7 or pts/7.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "window_id": {
+                  "anyOf": [
+                    {
+                      "description": "Exact window_id from list_resources(surface=\"desktop\", resource=\"windows\").",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "window_title": {
                   "type": [
                     "string",
                     "null"
+                  ]
+                },
+                "wm_class": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },
@@ -6732,7 +7000,9 @@
                 "direction": {
                   "enum": [
                     "up",
-                    "down"
+                    "down",
+                    "left",
+                    "right"
                   ],
                   "type": "string"
                 },
@@ -10177,8 +10447,8 @@
       "browser_eval_enabled": false,
       "can_receive_images": true,
       "description_bytes": 5200,
-      "largest_schema_bytes": 3604,
-      "serialized_bytes": 63810,
+      "largest_schema_bytes": 3613,
+      "serialized_bytes": 65037,
       "surface": "grouped",
       "tool_count": 40,
       "tools_list": {
@@ -10364,9 +10634,18 @@
               "additionalProperties": false,
               "properties": {
                 "app_id": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "backend": {
@@ -10499,6 +10778,22 @@
                     "null"
                   ]
                 },
+                "pid": {
+                  "anyOf": [
+                    {
+                      "description": "Process ID from list_resources(surface=\"desktop\", resource=\"windows\"). 0 is ignored.",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "const": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "session_id": {
                   "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
                   "minLength": 1,
@@ -10536,6 +10831,52 @@
                     }
                   ]
                 },
+                "terminal_command": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "terminal_cwd": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "terminal_pid": {
+                  "anyOf": [
+                    {
+                      "description": "Terminal process ID from desktop window terminal metadata. 0 is ignored.",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "const": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "text_limit": {
                   "anyOf": [
                     {
@@ -10549,10 +10890,72 @@
                     }
                   ]
                 },
+                "title": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "tty": {
+                  "anyOf": [
+                    {
+                      "description": "Terminal tty such as /dev/pts/7 or pts/7.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "window_id": {
+                  "anyOf": [
+                    {
+                      "description": "Exact window_id from list_resources(surface=\"desktop\", resource=\"windows\").",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "window_title": {
                   "type": [
                     "string",
                     "null"
+                  ]
+                },
+                "wm_class": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },
@@ -11860,7 +12263,9 @@
                 "direction": {
                   "enum": [
                     "up",
-                    "down"
+                    "down",
+                    "left",
+                    "right"
                   ],
                   "type": "string"
                 },
@@ -15251,8 +15656,8 @@
       "browser_eval_enabled": true,
       "can_receive_images": true,
       "description_bytes": 5303,
-      "largest_schema_bytes": 3604,
-      "serialized_bytes": 64681,
+      "largest_schema_bytes": 3613,
+      "serialized_bytes": 65908,
       "surface": "grouped",
       "tool_count": 41,
       "tools_list": {
@@ -15438,9 +15843,18 @@
               "additionalProperties": false,
               "properties": {
                 "app_id": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "backend": {
@@ -15573,6 +15987,22 @@
                     "null"
                   ]
                 },
+                "pid": {
+                  "anyOf": [
+                    {
+                      "description": "Process ID from list_resources(surface=\"desktop\", resource=\"windows\"). 0 is ignored.",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "const": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "session_id": {
                   "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
                   "minLength": 1,
@@ -15610,6 +16040,52 @@
                     }
                   ]
                 },
+                "terminal_command": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "terminal_cwd": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "terminal_pid": {
+                  "anyOf": [
+                    {
+                      "description": "Terminal process ID from desktop window terminal metadata. 0 is ignored.",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    {
+                      "const": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "text_limit": {
                   "anyOf": [
                     {
@@ -15623,10 +16099,72 @@
                     }
                   ]
                 },
+                "title": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "tty": {
+                  "anyOf": [
+                    {
+                      "description": "Terminal tty such as /dev/pts/7 or pts/7.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "window_id": {
+                  "anyOf": [
+                    {
+                      "description": "Exact window_id from list_resources(surface=\"desktop\", resource=\"windows\").",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "window_title": {
                   "type": [
                     "string",
                     "null"
+                  ]
+                },
+                "wm_class": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },
@@ -16934,7 +17472,9 @@
                 "direction": {
                   "enum": [
                     "up",
-                    "down"
+                    "down",
+                    "left",
+                    "right"
                   ],
                   "type": "string"
                 },

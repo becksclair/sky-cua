@@ -321,8 +321,16 @@
             "element_offset",
             "element_query",
             "name",
+            "pid",
             "surface",
-            "window_title"
+            "terminal_command",
+            "terminal_cwd",
+            "terminal_pid",
+            "title",
+            "tty",
+            "window_id",
+            "window_title",
+            "wm_class"
           ],
           "resource_enum": null,
           "surface_enum": [
@@ -412,9 +420,17 @@
             "include_accessibility",
             "include_notifications",
             "name",
+            "pid",
             "session_id",
             "surface",
-            "window_title"
+            "terminal_command",
+            "terminal_cwd",
+            "terminal_pid",
+            "title",
+            "tty",
+            "window_id",
+            "window_title",
+            "wm_class"
           ],
           "resource_enum": null,
           "surface_enum": [
@@ -522,11 +538,19 @@
             "element_offset",
             "element_query",
             "name",
+            "pid",
             "surface",
             "tab_id",
             "target",
+            "terminal_command",
+            "terminal_cwd",
+            "terminal_pid",
             "text_limit",
-            "window_title"
+            "title",
+            "tty",
+            "window_id",
+            "window_title",
+            "wm_class"
           ],
           "resource_enum": null,
           "surface_enum": [
@@ -634,12 +658,20 @@
             "include_accessibility",
             "include_notifications",
             "name",
+            "pid",
             "session_id",
             "surface",
             "tab_id",
             "target",
+            "terminal_command",
+            "terminal_cwd",
+            "terminal_pid",
             "text_limit",
-            "window_title"
+            "title",
+            "tty",
+            "window_id",
+            "window_title",
+            "wm_class"
           ],
           "resource_enum": null,
           "surface_enum": [

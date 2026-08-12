@@ -135,21 +135,26 @@ pub(super) fn handle_desktop_observe_appshot(
         Ok(options) => options,
         Err(error) => return invalid_request_tool_error(error.to_string()),
     };
-    let target = WindowTarget {
-        app_id: arguments
-            .get("app_id")
-            .and_then(Value::as_str)
-            .and_then(super::optional_non_empty_string),
-        title: arguments
+    let mut target = match WindowTarget::from_argument_fields(&arguments) {
+        Ok(target) => target.unwrap_or_default(),
+        Err(error) => {
+            return invalid_request_tool_error(format!(
+                "invalid desktop observe window target arguments: {error}"
+            ));
+        }
+    };
+    if target.title.is_none() {
+        target.title = arguments
             .get("window_title")
             .and_then(Value::as_str)
-            .and_then(super::optional_non_empty_string),
-        wm_class: arguments
+            .and_then(super::optional_non_empty_string);
+    }
+    if target.wm_class.is_none() {
+        target.wm_class = arguments
             .get("name")
             .and_then(Value::as_str)
-            .and_then(super::optional_non_empty_string),
-        ..Default::default()
-    };
+            .and_then(super::optional_non_empty_string);
+    }
     let target = (target != WindowTarget::default()).then_some(target);
     let request_id = format!("observe-{}", uuid::Uuid::new_v4());
     match service.call(&ServiceRequest::AppShotCapture {
@@ -197,7 +202,27 @@ pub(super) fn handle_desktop_observe_appshot(
                     }
                 }
             }
-            let structured_content = serde_json::to_value(&appshot)?;
+            let mut structured_content = serde_json::to_value(&appshot)?;
+            let structured_object = structured_content.as_object_mut().ok_or_else(|| {
+                anyhow!("desktop AppShot envelope did not serialize as an object")
+            })?;
+            structured_object.insert(
+                "capture_scope".to_string(),
+                serde_json::to_value(&result.capture_scope)?,
+            );
+            structured_object.insert(
+                "capture_backend".to_string(),
+                serde_json::to_value(&result.capture_backend)?,
+            );
+            if let Some(image_backend) = &result.image_backend {
+                structured_object.insert(
+                    "image_backend".to_string(),
+                    serde_json::to_value(image_backend)?,
+                );
+            }
+            if let Some(display) = &result.display {
+                structured_object.insert("display".to_string(), serde_json::to_value(display)?);
+            }
             let mut content = vec![json!({
                 "type": "text",
                 "text": text
