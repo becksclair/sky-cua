@@ -13,7 +13,7 @@ import java.io.File
 import java.util.Base64
 
 fun interface DirectRequestHandler {
-    fun dispatch(frame: String, deviceId: String, linkEpoch: String, nowMs: Long): String
+    fun dispatch(frame: String, deviceId: String, linkEpoch: LinkEpoch, nowMs: Long): String
 }
 
 /** Dispatches authenticated phone-control.v2 frames; direct-only methods bypass the v1 handler. */
@@ -23,26 +23,26 @@ class DirectRequestDispatcher(
     private val contentResolver: DirectContentResolver? = null,
     private val directSmsQuery: ((JsonValue.Obj) -> JsonValue.Obj)? = null,
 ) : DirectRequestHandler {
-    override fun dispatch(frame: String, deviceId: String, linkEpoch: String, nowMs: Long): String {
+    override fun dispatch(frame: String, deviceId: String, linkEpoch: LinkEpoch, nowMs: Long): String {
         var requestId: String? = null
         var incomingDevice: String? = null
-        var incomingEpoch: Long? = null
+        var incomingEpoch: LinkEpoch? = null
         return try {
             val obj = JsonParser.parseObject(frame)
             requestId = obj.string("request_id")
             incomingDevice = obj.string("device_id")
-            incomingEpoch = (obj["link_epoch"] as? JsonValue.Num)?.takeIf { it.isIntegral }?.toLong()
+            incomingEpoch = obj.linkEpoch("link_epoch")
             require(obj.string("type") == "request") { "expected request frame" }
             require(!requestId.isNullOrEmpty()) { "missing request_id" }
             require(incomingDevice != null) { "missing device_id" }
             require(incomingEpoch != null) { "missing link_epoch" }
             require(obj["idempotent"] is JsonValue.Bool) { "missing idempotent" }
-            val expires = (obj["expires_at_ms"] as? JsonValue.Num)?.takeIf { it.isIntegral }?.toLong() ?: error("missing expires_at_ms")
+            val expires = obj.long("expires_at_ms") ?: error("missing expires_at_ms")
             val method = obj.string("method") ?: error("missing method")
             val params = obj.obj("params") ?: error("missing params")
             if (incomingDevice != deviceId) {
                 errorFrame(requestId, incomingDevice, incomingEpoch, "device_mismatch", "request device does not match authenticated device")
-            } else if (incomingEpoch.toString() != linkEpoch) {
+            } else if (incomingEpoch != linkEpoch) {
                 errorFrame(requestId, incomingDevice, incomingEpoch, "epoch_mismatch", "request epoch does not match authenticated epoch")
             } else if (nowMs >= expires) {
                 errorFrame(requestId, incomingDevice, incomingEpoch, "expired", "request has expired")
@@ -80,12 +80,12 @@ class DirectRequestDispatcher(
         }
     }
 
-    private fun successFrame(requestId: String?, deviceId: String, epoch: Long, result: JsonValue.Obj): String =
+    private fun successFrame(requestId: String?, deviceId: String, epoch: LinkEpoch, result: JsonValue.Obj): String =
         JsonWriter.write(jsonObject {
             put("type", "response"); put("request_id", requestId!!); put("device_id", deviceId); put("link_epoch", epoch); put("result", result)
         })
 
-    private fun handleDirectContent(method: String, params: JsonValue.Obj, epoch: Long): JsonValue.Obj? {
+    private fun handleDirectContent(method: String, params: JsonValue.Obj, epoch: LinkEpoch): JsonValue.Obj? {
         val resolver = contentResolver ?: return null
         val contentId = params.string("content_id")
         return when (method) {
@@ -128,7 +128,7 @@ class DirectRequestDispatcher(
     private fun externalizeContent(
         result: JsonValue.Obj,
         deviceId: String,
-        epoch: Long,
+        epoch: LinkEpoch,
     ): JsonValue.Obj {
         val sender = contentSender?.invoke()
         val entries = LinkedHashMap(result.entries)
@@ -214,7 +214,7 @@ class DirectRequestDispatcher(
         else -> method to params
     }
 
-    private fun errorFrame(requestId: String?, deviceId: String?, epoch: Long?, code: String, message: String): String =
+    private fun errorFrame(requestId: String?, deviceId: String?, epoch: LinkEpoch?, code: String, message: String): String =
         JsonWriter.write(jsonObject {
             put("type", "error"); putOpt("request_id", requestId); putOpt("device_id", deviceId); if (epoch != null) put("link_epoch", epoch); put("code", code); put("message", message)
         })

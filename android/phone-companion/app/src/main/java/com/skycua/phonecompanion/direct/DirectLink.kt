@@ -5,7 +5,6 @@ import com.skycua.phonecompanion.json.JsonValue
 import com.skycua.phonecompanion.json.JsonWriter
 import com.skycua.phonecompanion.json.jsonArray
 import com.skycua.phonecompanion.json.jsonObject
-import java.math.BigInteger
 import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
@@ -58,9 +57,9 @@ class DirectLinkController(
         val frame: String,
         val dispatcher: DirectRequestHandler,
         val deviceId: String,
-        val epoch: String,
+        val epoch: LinkEpoch,
         val requestId: String,
-        val wireEpoch: Long,
+        val wireEpoch: LinkEpoch,
     )
 
     private data class PreviewKey(val generation: Long, val sessionId: String)
@@ -70,7 +69,7 @@ class DirectLinkController(
     private var state = LinkState.DISCONNECTED
     private var retryAttempt = 0
     private var nextRetryAtMs: Long? = null
-    private var epoch = credentials.lastAcceptedEpoch()
+    private var epoch = LinkEpoch.parseCanonical(credentials.lastAcceptedEpoch())
     private var connectionGeneration = 0L
     private var challenge: AuthChallenge? = null
     private var clientNonce: String? = null
@@ -82,7 +81,7 @@ class DirectLinkController(
     private val activePreviews = HashSet<PreviewKey>()
     private val pendingPreviews = HashMap<PreviewKey, RequestWork>()
 
-    @Synchronized fun snapshot(): LinkSnapshot = LinkSnapshot(state, credentials.load()?.deviceId, epoch, retryAttempt, nextRetryAtMs)
+    @Synchronized fun snapshot(): LinkSnapshot = LinkSnapshot(state, credentials.load()?.deviceId, epoch.toString(), retryAttempt, nextRetryAtMs)
 
     @Synchronized fun configure(endpoint: String) {
         EndpointValidator.requireAllowed(endpoint)
@@ -100,7 +99,7 @@ class DirectLinkController(
         val generation = ++connectionGeneration
         val socket = socketFactory.create()
         this.socket = socket
-        contentSender = ContentTransferSender(socket, { credentials.load()?.deviceId ?: "" }, { java.math.BigInteger(epoch).toLong() }, onTransportFailure = { invalidateAuth() })
+        contentSender = ContentTransferSender(socket, { credentials.load()?.deviceId ?: "" }, { epoch }, onTransportFailure = { invalidateAuth() })
         socket.connect(target, object : DirectSocket.Listener {
             override fun onOpen() = opened(generation)
             override fun onText(frame: String) = receiveText(generation, frame)
@@ -141,9 +140,8 @@ class DirectLinkController(
     @Synchronized private fun receiveBinary(generation: Long, bytes: ByteArray) {
         if (generation != connectionGeneration || state == LinkState.DISABLED || state == LinkState.REENROLL_REQUIRED) return
         if (state != LinkState.CONNECTED) return invalidateAuth()
-        val currentEpoch = runCatching { BigInteger(epoch).toLong() }.getOrElse { return invalidateAuth() }
         try {
-            contentReceiver?.receiveChunk(bytes, currentEpoch) ?: error("binary content receiver is unavailable")
+            contentReceiver?.receiveChunk(bytes, epoch) ?: error("binary content receiver is unavailable")
         } catch (_: Throwable) {
             invalidateAuth()
         }
@@ -172,9 +170,8 @@ class DirectLinkController(
             synchronized(this) {
                 if (generation != connectionGeneration || state != LinkState.CONNECTED) return
                 val device = authenticatedDeviceId ?: return invalidateAuth()
-                val currentEpoch = runCatching { BigInteger(epoch).toLong() }.getOrElse { return invalidateAuth() }
                 try {
-                    contentReceiver?.receiveControl(parsed, device, currentEpoch) ?: error("content receiver is unavailable")
+                    contentReceiver?.receiveControl(parsed, device, epoch) ?: error("content receiver is unavailable")
                 } catch (_: Throwable) {
                     invalidateAuth()
                 }
@@ -193,7 +190,7 @@ class DirectLinkController(
         val dispatcher = snapshot.first ?: return
         val device = snapshot.second ?: return
         val requestId = parsed.string("request_id") ?: return
-        val wireEpoch = parsed.long("link_epoch") ?: return
+        val wireEpoch = parsed.linkEpoch("link_epoch") ?: return
         val work = RequestWork(generation, frame, dispatcher, device, snapshot.third, requestId, wireEpoch)
         val previewKey = parsed.takeIf { it.string("method") == "camera" }
             ?.obj("params")
@@ -271,9 +268,9 @@ class DirectLinkController(
             is ControlFrame.Challenge -> {
                 val credential = credentials.load()
                 if (state != LinkState.AUTHENTICATING || challenge != null || credential == null || clientNonce == null || decoded.value.protocol != PHONE_CONTROL_PROTOCOL) return failAuth()
-                val proposed = try { AuthCodec.requireCanonicalEpoch(decoded.value.linkEpoch); BigInteger(decoded.value.linkEpoch) } catch (_: IllegalArgumentException) { return failAuth() }
+                val proposed = try { LinkEpoch.parseCanonical(decoded.value.linkEpoch) } catch (_: IllegalArgumentException) { return failAuth() }
                 try { AuthCodec.requireCanonicalNonce(decoded.value.serverNonce) } catch (_: IllegalArgumentException) { return failAuth() }
-                if (proposed <= BigInteger(epoch) || !AuthCodec.verifyServerProof(credential.deviceSecret, credential.deviceId, decoded.value, clientNonce!!)) return failAuth()
+                if (proposed <= epoch || !AuthCodec.verifyServerProof(credential.deviceSecret, credential.deviceId, decoded.value, clientNonce!!)) return failAuth()
                 challenge = decoded.value
                 val proof = AuthCodec.prove(credential.deviceSecret, PHONE_CONTROL_PROTOCOL, credential.deviceId, decoded.value.serverNonce, clientNonce!!, decoded.value.linkEpoch, "companion")
                 sendControlFrame(AuthCodec.encodeProof(AuthProof(decoded.value.linkEpoch, proof)))
@@ -282,13 +279,13 @@ class DirectLinkController(
                 val currentChallenge = challenge ?: return failAuth()
                 val credential = credentials.load() ?: return failAuth()
                 if (state != LinkState.AUTHENTICATING || !AuthCodec.verifyAuthOk(credential.deviceId, currentChallenge, decoded.value)) return failAuth()
-                val acceptedEpoch = try { AuthCodec.requireCanonicalEpoch(decoded.value.linkEpoch); BigInteger(decoded.value.linkEpoch) } catch (_: IllegalArgumentException) { return failAuth() }
-                if (acceptedEpoch <= BigInteger(epoch)) return failAuth()
+                val acceptedEpoch = try { LinkEpoch.parseCanonical(decoded.value.linkEpoch) } catch (_: IllegalArgumentException) { return failAuth() }
+                if (acceptedEpoch <= epoch) return failAuth()
                 try { credentials.saveAcceptedEpoch(decoded.value.linkEpoch) } catch (_: Exception) { return failAuth() }
                 state = LinkState.CONNECTED
                 retryAttempt = 0
                 nextRetryAtMs = null
-                epoch = decoded.value.linkEpoch
+                epoch = acceptedEpoch
                 authenticatedDeviceId = credential.deviceId
                 authDeadlineMs = null
                 challenge = null
@@ -304,7 +301,7 @@ class DirectLinkController(
                 if (decoded.value.protocol != PHONE_CONTROL_PROTOCOL || decoded.value.enrollmentId != pending.enrollmentId || decoded.value.deviceId != credential.deviceId) return failAuth()
                 credentials.clearPendingEnrollment(); pendingAck = false; sendAuthHello(credential)
             } else if (state != LinkState.CONNECTED) failAuth()
-            is ControlFrame.Other -> if (state != LinkState.CONNECTED) failAuth() else if (decoded.type == "capability_changed") capabilityEvents?.onCapabilitiesChanged(capabilities, epoch)
+            is ControlFrame.Other -> if (state != LinkState.CONNECTED) failAuth() else if (decoded.type == "capability_changed") capabilityEvents?.onCapabilitiesChanged(capabilities, epoch.toString())
         }
     }
 
@@ -312,17 +309,16 @@ class DirectLinkController(
         if (capabilities == values) return
         capabilities = values.toSortedSet()
         if (state == LinkState.CONNECTED) sendCapabilitiesChanged()
-        capabilityEvents?.onCapabilitiesChanged(capabilities, epoch)
+        capabilityEvents?.onCapabilitiesChanged(capabilities, epoch.toString())
     }
 
     private fun sendCapabilitiesChanged() {
         val device = authenticatedDeviceId ?: return
-        val linkEpoch = runCatching { BigInteger(epoch).toLong() }.getOrNull() ?: return
         sendControlFrame(JsonWriter.write(jsonObject {
             put("type", "event")
             put("event_id", UUID.randomUUID().toString())
             put("device_id", device)
-            put("link_epoch", linkEpoch)
+            put("link_epoch", epoch)
             put("event", "capability_changed")
             put("payload", jsonObject { put("capabilities", jsonArray(capabilities.sorted().map(JsonValue::Str))) })
         }))
@@ -352,7 +348,7 @@ class DirectLinkController(
         socket = null
         contentSender?.onDisconnected(); contentSender = null
         clearPreviewQueue()
-        runCatching { contentReceiver?.abortEpoch(BigInteger(epoch).toLong()) }
+        runCatching { contentReceiver?.abortEpoch(epoch) }
         authenticatedDeviceId = null
     }
 
@@ -362,7 +358,7 @@ class DirectLinkController(
         socket = null
         contentSender?.onDisconnected(); contentSender = null
         clearPreviewQueue()
-        runCatching { contentReceiver?.abortEpoch(BigInteger(epoch).toLong()) }
+        runCatching { contentReceiver?.abortEpoch(epoch) }
         authenticatedDeviceId = null
         old?.close()
         challenge = null
@@ -381,7 +377,7 @@ class DirectLinkController(
         socket = null
         contentSender?.onDisconnected(); contentSender = null
         clearPreviewQueue()
-        runCatching { contentReceiver?.abortEpoch(BigInteger(epoch).toLong()) }
+        runCatching { contentReceiver?.abortEpoch(epoch) }
         authenticatedDeviceId = null
         pendingAck = false
         challenge = null
@@ -399,14 +395,14 @@ class DirectLinkController(
         socket = null
         contentSender?.onDisconnected(); contentSender = null
         clearPreviewQueue()
-        runCatching { contentReceiver?.abortEpoch(BigInteger(epoch).toLong()) }
+        runCatching { contentReceiver?.abortEpoch(epoch) }
         old?.close()
         challenge = null
         clientNonce = null
         authDeadlineMs = null
         credentials.clear()
         state = LinkState.DISABLED
-        epoch = "0"
+        epoch = LinkEpoch.ZERO
         authenticatedDeviceId = null
     }
 
@@ -416,7 +412,7 @@ class DirectLinkController(
         socket = null
         contentSender?.onDisconnected(); contentSender = null
         clearPreviewQueue()
-        runCatching { contentReceiver?.abortEpoch(BigInteger(epoch).toLong()) }
+        runCatching { contentReceiver?.abortEpoch(epoch) }
         old?.close()
         challenge = null
         clientNonce = null
@@ -428,14 +424,14 @@ class DirectLinkController(
     /** Replaces the authenticated link after a durable credential/endpoint commit. */
     @Synchronized internal fun reconnectForCredentialReplacement(endpoint: String?) {
         close()
-        epoch = credentials.lastAcceptedEpoch()
+        epoch = LinkEpoch.parseCanonical(credentials.lastAcceptedEpoch())
         retryAttempt = 0
         nextRetryAtMs = null
         pendingAck = false
         endpoint?.let { configure(it); connect() }
     }
 
-    fun isCurrentEpoch(candidate: String): Boolean = candidate == epoch
+    fun isCurrentEpoch(candidate: String): Boolean = candidate == epoch.toString()
 
     private fun clearPreviewQueue() {
         activePreviews.clear()

@@ -11,7 +11,7 @@ import java.util.UUID
 data class ReceivedContent(
     val contentId: String,
     val deviceId: String,
-    val linkEpoch: Long,
+    val linkEpoch: LinkEpoch,
     val mimeType: String,
     val filename: String?,
     val sizeBytes: Long,
@@ -22,13 +22,13 @@ data class ReceivedContent(
 )
 
 interface DirectContentResolver {
-    fun resolve(reference: JsonValue.Obj, expectedEpoch: Long): ReceivedContent?
+    fun resolve(reference: JsonValue.Obj, expectedEpoch: LinkEpoch): ReceivedContent?
     fun describe(contentId: String): ReceivedContent?
-    fun release(contentId: String, expectedEpoch: Long): Boolean
+    fun release(contentId: String, expectedEpoch: LinkEpoch): Boolean
     fun registerLocal(
         file: File,
         deviceId: String,
-        linkEpoch: Long,
+        linkEpoch: LinkEpoch,
         mimeType: String,
         filename: String?,
         source: String,
@@ -67,7 +67,7 @@ class ContentTransferReceiver(
     override fun registerLocal(
         file: File,
         deviceId: String,
-        linkEpoch: Long,
+        linkEpoch: LinkEpoch,
         mimeType: String,
         filename: String?,
         source: String,
@@ -106,7 +106,7 @@ class ContentTransferReceiver(
     }
 
     @Synchronized
-    fun receiveControl(frame: JsonValue.Obj, authenticatedDeviceId: String, epoch: Long): Boolean {
+    fun receiveControl(frame: JsonValue.Obj, authenticatedDeviceId: String, epoch: LinkEpoch): Boolean {
         cleanupExpired()
         return when (frame.string("type")) {
             "content_declare" -> { declare(frame, authenticatedDeviceId, epoch); true }
@@ -117,14 +117,14 @@ class ContentTransferReceiver(
     }
 
     @Synchronized
-    fun receiveChunk(bytes: ByteArray, epoch: Long) {
+    fun receiveChunk(bytes: ByteArray, epoch: LinkEpoch) {
         require(bytes.isNotEmpty()) { "binary chunk is empty" }
         val idLength = bytes[0].toInt() and 0xff
         val headerLength = 1 + idLength + 8 + 8 + 8 + 4
         require(idLength > 0 && bytes.size >= headerLength) { "binary chunk header is invalid" }
         val transferId = bytes.copyOfRange(1, 1 + idLength).toString(Charsets.UTF_8)
         val buffer = ByteBuffer.wrap(bytes, 1 + idLength, bytes.size - 1 - idLength)
-        val chunkEpoch = buffer.long
+        val chunkEpoch = LinkEpoch.fromBinaryCarrier(buffer.long)
         val index = buffer.long
         val offset = buffer.long
         val length = buffer.int
@@ -140,11 +140,11 @@ class ContentTransferReceiver(
     }
 
     @Synchronized
-    override fun resolve(reference: JsonValue.Obj, expectedEpoch: Long): ReceivedContent? {
+    override fun resolve(reference: JsonValue.Obj, expectedEpoch: LinkEpoch): ReceivedContent? {
         cleanupExpired()
         val contentId = reference.string("content_id") ?: return null
         val item = committed[contentId] ?: return null
-        if (item.linkEpoch != expectedEpoch || reference.long("link_epoch") != expectedEpoch) return null
+        if (item.linkEpoch != expectedEpoch || reference.linkEpoch("link_epoch") != expectedEpoch) return null
         if (reference.long("size_bytes") != item.sizeBytes || reference.string("sha256") != item.sha256) return null
         return item.takeIf { it.file.isFile }
     }
@@ -156,7 +156,7 @@ class ContentTransferReceiver(
     }
 
     @Synchronized
-    override fun release(contentId: String, expectedEpoch: Long): Boolean {
+    override fun release(contentId: String, expectedEpoch: LinkEpoch): Boolean {
         cleanupExpired()
         val content = committed[contentId]?.takeIf { it.linkEpoch == expectedEpoch } ?: return false
         committed.remove(contentId)
@@ -165,19 +165,19 @@ class ContentTransferReceiver(
     }
 
     @Synchronized
-    fun abortEpoch(epoch: Long) {
+    fun abortEpoch(epoch: LinkEpoch) {
         active.values.filter { it.content.linkEpoch == epoch }.map { it.transferId }.forEach(::abort)
         committed.values.filter { it.linkEpoch == epoch }.forEach { DirectContentRegistry.remove(it.contentId); it.file.delete() }
         committed.entries.removeAll { it.value.linkEpoch == epoch }
     }
 
-    private fun declare(frame: JsonValue.Obj, authenticatedDeviceId: String, epoch: Long) {
+    private fun declare(frame: JsonValue.Obj, authenticatedDeviceId: String, epoch: LinkEpoch) {
         val transferId = frame.string("transfer_id") ?: error("missing transfer_id")
         require(transferId.toByteArray().size in 1..255 && transferId !in active) { "invalid or duplicate transfer_id" }
-        require(frame.string("device_id") == authenticatedDeviceId && frame.long("link_epoch") == epoch) { "content declaration identity mismatch" }
+        require(frame.string("device_id") == authenticatedDeviceId && frame.linkEpoch("link_epoch") == epoch) { "content declaration identity mismatch" }
         val content = frame.obj("content") ?: error("missing content")
         val contentId = content.string("content_id") ?: error("missing content_id")
-        require(content.string("device_id") == authenticatedDeviceId && content.long("link_epoch") == epoch) { "content identity mismatch" }
+        require(content.string("device_id") == authenticatedDeviceId && content.linkEpoch("link_epoch") == epoch) { "content identity mismatch" }
         val size = content.long("size_bytes") ?: error("missing size_bytes")
         require(size >= 0) { "invalid content size" }
         val sha = content.string("sha256") ?: error("missing sha256")
@@ -208,11 +208,11 @@ class ContentTransferReceiver(
         )
     }
 
-    private fun commit(frame: JsonValue.Obj, epoch: Long) {
+    private fun commit(frame: JsonValue.Obj, epoch: LinkEpoch) {
         val transferId = frame.string("transfer_id") ?: error("missing transfer_id")
         val transfer = active.remove(transferId) ?: error("commit has no declaration")
         try {
-            require(frame.long("link_epoch") == epoch && transfer.content.linkEpoch == epoch) { "commit epoch mismatch" }
+            require(frame.linkEpoch("link_epoch") == epoch && transfer.content.linkEpoch == epoch) { "commit epoch mismatch" }
             require(frame.long("size_bytes") == transfer.content.sizeBytes && frame.string("sha256") == transfer.content.sha256) { "commit metadata mismatch" }
             require(transfer.nextOffset == transfer.content.sizeBytes && transfer.nextIndex == transfer.chunkCount) { "content transfer is incomplete" }
             transfer.output.fd.sync()

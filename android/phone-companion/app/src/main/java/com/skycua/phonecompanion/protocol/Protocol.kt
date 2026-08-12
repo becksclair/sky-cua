@@ -153,16 +153,11 @@ object Envelope {
                 throw EnvelopeException(Protocol.ErrorCodes.BAD_REQUEST, "malformed JSON: ${e.message}")
             }
 
-        val idNum =
-            (obj["id"] as? JsonValue.Num)
-                ?: throw EnvelopeException(Protocol.ErrorCodes.BAD_REQUEST, "missing or non-numeric id")
-        if (!idNum.isIntegral) {
-            throw EnvelopeException(Protocol.ErrorCodes.BAD_REQUEST, "id must be an integer")
-        }
-        val id = idNum.toLong()
+        val id = obj.long("id")
+            ?: throw EnvelopeException(Protocol.ErrorCodes.BAD_REQUEST, "missing or non-integral id")
 
         val protocolVersion =
-            (obj["protocol_version"] as? JsonValue.Num)?.toLong()
+            obj.long("protocol_version")
                 ?: throw EnvelopeException(
                     Protocol.ErrorCodes.BAD_REQUEST,
                     "missing protocol_version",

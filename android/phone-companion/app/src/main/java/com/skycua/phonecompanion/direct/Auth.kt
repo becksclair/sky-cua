@@ -7,7 +7,6 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
-import java.math.BigInteger
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -86,8 +85,7 @@ object AuthCodec {
         require(UUID.fromString(value).toString() == value) { "non-canonical device id" }
     }
     fun requireCanonicalEpoch(value: String) {
-        require(value == "0" || value.matches(Regex("[1-9][0-9]*"))) { "non-canonical link epoch" }
-        require(BigInteger(value) <= BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)) { "link epoch overflow" }
+        LinkEpoch.parseCanonical(value)
     }
     fun requireCanonicalNonce(value: String) {
         require(Base64.getUrlDecoder().decode(value).size == 32) { "nonce must decode to 32 bytes" }

@@ -129,6 +129,12 @@ Requests include `request_id`, `device_id`, `link_epoch`, `idempotent`, absolute
 Non-idempotent requests are never replayed after an ambiguous disconnect.
 Responses and events must match the authenticated device and epoch.
 
+Authentication frames encode the epoch as a canonical decimal string because
+it is part of the HMAC input. Application JSON frames encode `link_epoch` as an
+unquoted integer over the full unsigned 64-bit range (`0` through
+`18446744073709551615`). Implementations must preserve that integer lexically;
+an IEEE-754 `Double` conversion is not valid for epoch parsing or serialization.
+
 ### Observation-only SMS query
 
 `sms.query` is a direct-only method carried inside the authenticated v2 request
@@ -253,6 +259,11 @@ complete frame hex is:
 ```text
 02743100000000000000010000000000000000000000000000000000000003010203
 ```
+
+The maximum epoch, `18446744073709551615`, is eight `ff` bytes in this binary
+field. APIs with only a signed 64-bit carrier may use `-1` internally for those
+bits, but must convert back to the exact unsigned value before comparison or
+JSON serialization.
 
 Chunks must arrive in declared index and contiguous-offset order. Every
 non-final chunk is the declared chunk size; the final chunk is exactly the

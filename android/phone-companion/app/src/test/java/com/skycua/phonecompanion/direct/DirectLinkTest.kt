@@ -92,6 +92,7 @@ class DirectLinkTest {
         socket.listener!!.onText("{\"type\":\"auth_ok\",\"protocol\":\"phone-control.v2\",\"device_id\":\"$deviceId\",\"link_epoch\":\"$epoch\"}")
         assertEquals(LinkState.CONNECTED, controller.snapshot().state)
         assertEquals(epoch, store.lastAcceptedEpoch())
+        assertTrue(socket.sentText.any { it.contains("\"link_epoch\":$epoch") })
     }
 
     @Test fun credentialReplacementResetsAcceptedEpoch() {

@@ -1,5 +1,8 @@
 package com.skycua.phonecompanion.json
 
+import java.math.BigDecimal
+import java.math.BigInteger
+
 /**
  * A small, dependency-free JSON value model plus parser and serializer.
  *
@@ -8,8 +11,7 @@ package com.skycua.phonecompanion.json
  * Android unit tests) and so the localhost RPC server has no heavy dependency.
  *
  * Only the subset of JSON the wire contract needs is supported: objects, arrays,
- * strings, numbers (parsed as Long when integral, otherwise Double), booleans,
- * and null.
+ * strings, exact integers, floating-point numbers, booleans, and null.
  */
 sealed class JsonValue {
     object Null : JsonValue()
@@ -25,6 +27,9 @@ sealed class JsonValue {
         fun toInt(): Int = value.toInt()
     }
 
+    /** Preserves an integer's lexical value without passing through IEEE-754. */
+    data class IntNum(val value: BigInteger) : JsonValue()
+
     data class Str(val value: String) : JsonValue()
 
     data class Arr(val items: List<JsonValue>) : JsonValue()
@@ -36,9 +41,9 @@ sealed class JsonValue {
 
         fun bool(key: String): Boolean? = (entries[key] as? Bool)?.value
 
-        fun long(key: String): Long? = (entries[key] as? Num)?.toLong()
+        fun long(key: String): Long? = entries[key]?.longValueExact()
 
-        fun int(key: String): Int? = (entries[key] as? Num)?.toInt()
+        fun int(key: String): Int? = entries[key]?.intValueExact()
 
         fun obj(key: String): Obj? = entries[key] as? Obj
 
@@ -50,10 +55,34 @@ sealed class JsonValue {
 
         fun of(value: Boolean): JsonValue = Bool(value)
 
-        fun of(value: Long): JsonValue = Num(value.toDouble())
+        fun of(value: Long): JsonValue = IntNum(BigInteger.valueOf(value))
 
-        fun of(value: Int): JsonValue = Num(value.toDouble())
+        fun of(value: Int): JsonValue = IntNum(BigInteger.valueOf(value.toLong()))
     }
+}
+
+fun JsonValue.longValueExact(): Long? = when (this) {
+    is JsonValue.IntNum -> runCatching { value.longValueExact() }.getOrNull()
+    is JsonValue.Num -> runCatching {
+        if (!isIntegral) return null
+        BigDecimal.valueOf(value).toBigIntegerExact().longValueExact()
+    }.getOrNull()
+    else -> null
+}
+
+fun JsonValue.intValueExact(): Int? = when (this) {
+    is JsonValue.IntNum -> runCatching { value.intValueExact() }.getOrNull()
+    is JsonValue.Num -> runCatching {
+        if (!isIntegral) return null
+        BigDecimal.valueOf(value).toBigIntegerExact().intValueExact()
+    }.getOrNull()
+    else -> null
+}
+
+fun JsonValue.doubleValue(): Double? = when (this) {
+    is JsonValue.IntNum -> value.toDouble()
+    is JsonValue.Num -> value
+    else -> null
 }
 
 /** Builds a [JsonValue.Obj] in declaration order. */
@@ -101,12 +130,13 @@ object JsonWriter {
             is JsonValue.Null -> sb.append("null")
             is JsonValue.Bool -> sb.append(if (value.value) "true" else "false")
             is JsonValue.Num -> {
-                if (value.isIntegral) {
-                    sb.append(value.toLong().toString())
-                } else {
-                    sb.append(value.value.toString())
-                }
+                require(value.value.isFinite()) { "JSON numbers must be finite" }
+                val integral = runCatching {
+                    BigDecimal.valueOf(value.value).toBigIntegerExact().longValueExact()
+                }.getOrNull()
+                sb.append(integral?.toString() ?: value.value.toString())
             }
+            is JsonValue.IntNum -> sb.append(value.value.toString())
             is JsonValue.Str -> writeString(sb, value.value)
             is JsonValue.Arr -> {
                 sb.append('[')
@@ -298,7 +328,7 @@ class JsonParser(private val text: String) {
         }
     }
 
-    private fun parseNumber(): JsonValue.Num {
+    private fun parseNumber(): JsonValue {
         val start = pos
         if (peek() == '-') pos++
         while (pos < text.length && (text[pos] in '0'..'9')) pos++
@@ -312,7 +342,13 @@ class JsonParser(private val text: String) {
             while (pos < text.length && (text[pos] in '0'..'9')) pos++
         }
         val raw = text.substring(start, pos)
-        val parsed = raw.toDoubleOrNull() ?: throw JsonParseException("invalid number '$raw'")
+        if ('.' !in raw && 'e' !in raw && 'E' !in raw) {
+            return runCatching { JsonValue.IntNum(BigInteger(raw)) }
+                .getOrElse { throw JsonParseException("invalid number '$raw'") }
+        }
+        val parsed = raw.toDoubleOrNull()
+            ?.takeIf { it.isFinite() }
+            ?: throw JsonParseException("invalid number '$raw'")
         return JsonValue.Num(parsed)
     }
 

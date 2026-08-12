@@ -11,6 +11,7 @@ import com.skycua.phonecompanion.json.JsonValue
 import com.skycua.phonecompanion.json.JsonParser
 import com.skycua.phonecompanion.json.jsonArray
 import com.skycua.phonecompanion.json.jsonObject
+import com.skycua.phonecompanion.json.longValueExact
 import com.skycua.phonecompanion.protocol.MethodApplicationException
 import java.util.Base64
 
@@ -22,10 +23,8 @@ class SmsController(private val context: Context) {
         val start = requiredLong(params, "start_ms")
         val end = requiredLong(params, "end_ms")
         val limit = params["limit"]?.let { value ->
-            val number = value as? JsonValue.Num
+            value.longValueExact()
                 ?: fail("INVALID_ARGUMENT", "limit must be an integer")
-            if (!number.isIntegral) fail("INVALID_ARGUMENT", "limit must be an integer")
-            number.toLong()
         } ?: DEFAULT_LIMIT
         if (start < 0 || end <= start || limit !in 1..MAX_LIMIT) {
             fail("INVALID_ARGUMENT", "start_ms/end_ms must form a non-empty window and limit must be 1..500")
@@ -107,10 +106,8 @@ class SmsController(private val context: Context) {
     }
 
     private fun requiredLong(params: JsonValue.Obj, key: String): Long {
-        val number = params[key] as? JsonValue.Num
+        return params.long(key)
             ?: fail("INVALID_ARGUMENT", "$key must be an integer")
-        if (!number.isIntegral) fail("INVALID_ARGUMENT", "$key must be an integer")
-        return number.toLong()
     }
 
     private fun decodeCursor(raw: String, start: Long, end: Long): CursorToken {
@@ -126,7 +123,7 @@ class SmsController(private val context: Context) {
             date = cursorLong(obj, "date_ms"),
             id = cursorLong(obj, "id"),
         )
-        val version = (obj["v"] as? JsonValue.Num)?.takeIf { it.isIntegral }?.toLong()
+        val version = obj.long("v")
             ?: fail("INVALID_CURSOR", "cursor is missing version")
         if (version != 1L) fail("INVALID_CURSOR", "cursor version is unsupported")
         if (token.start != start || token.end != end) fail("CURSOR_QUERY_MISMATCH", "cursor belongs to a different query window")
@@ -137,7 +134,7 @@ class SmsController(private val context: Context) {
     }
 
     private fun cursorLong(obj: JsonValue.Obj, key: String): Long =
-        (obj[key] as? JsonValue.Num)?.takeIf { it.isIntegral }?.toLong()
+        obj.long(key)
             ?: fail("INVALID_CURSOR", "cursor is missing or invalid $key")
 
     private fun encodeCursor(token: CursorToken): String {
@@ -152,7 +149,7 @@ class SmsController(private val context: Context) {
     }
 
     private fun RawRecord.longValue(column: String): Long? =
-        (json[column] as? JsonValue.Num)?.takeIf { it.isIntegral }?.toLong()
+        json.long(column)
 
     private data class RawRecord(val json: JsonValue.Obj)
     private data class CursorToken(val start: Long, val end: Long, val date: Long, val id: Long)

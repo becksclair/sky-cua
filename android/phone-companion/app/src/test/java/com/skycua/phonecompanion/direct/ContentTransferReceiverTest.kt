@@ -13,11 +13,12 @@ import org.robolectric.RuntimeEnvironment
 class ContentTransferReceiverTest {
     @Test
     fun declaredBytesCommitOnlyAfterLengthAndDigestVerification() {
+        val epoch = LinkEpoch.parseCanonical("18446744073709551615")
         val socket = RecordingSocket()
         val sender = ContentTransferSender(
             socket,
             { "device-1" },
-            { 7 },
+            { epoch },
             idFactory = sequenceOf("content-1", "transfer-1").iterator()::next,
         )
         val payload = "hello companion".toByteArray()
@@ -25,14 +26,14 @@ class ContentTransferReceiverTest {
 
         val receiver = ContentTransferReceiver(RuntimeEnvironment.getApplication())
         val declaration = JsonParser.parseObject(socket.text.first())
-        receiver.receiveControl(declaration, "device-1", 7)
-        socket.binary.forEach { receiver.receiveChunk(it, 7) }
-        receiver.receiveControl(JsonParser.parseObject(socket.text.last()), "device-1", 7)
+        receiver.receiveControl(declaration, "device-1", epoch)
+        socket.binary.forEach { receiver.receiveChunk(it, epoch) }
+        receiver.receiveControl(JsonParser.parseObject(socket.text.last()), "device-1", epoch)
 
-        val received = receiver.resolve(declaration.obj("content")!!, 7)
+        val received = receiver.resolve(declaration.obj("content")!!, epoch)
         assertNotNull(received)
         assertArrayEquals(payload, received!!.file.readBytes())
-        receiver.abortEpoch(7)
+        receiver.abortEpoch(epoch)
         assertFalse(received.file.exists())
     }
 

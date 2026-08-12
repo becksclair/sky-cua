@@ -29,6 +29,7 @@ import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.skycua.phonecompanion.CaptureActivity
 import com.skycua.phonecompanion.json.JsonValue
+import com.skycua.phonecompanion.json.doubleValue
 import com.skycua.phonecompanion.json.jsonArray
 import com.skycua.phonecompanion.json.jsonObject
 import com.skycua.phonecompanion.protocol.MethodApplicationException
@@ -323,7 +324,7 @@ object CameraRuntime {
         if (controls.string("stabilization_mode") != null) {
             throw MethodApplicationException("unsupported_api", "runtime stabilization changes are not exposed by this CameraX session")
         }
-        (controls["zoom"] as? JsonValue.Num)?.value?.toFloat()?.let(session.camera.cameraControl::setZoomRatio)
+        controls["zoom"]?.doubleValue()?.toFloat()?.let(session.camera.cameraControl::setZoomRatio)
         val torch = controls.bool("torch_enabled")
         val strength = controls.int("torch_strength")
         if (strength != null) {
@@ -334,8 +335,8 @@ object CameraRuntime {
             torch?.let(session.camera.cameraControl::enableTorch)
         }
         controls.int("exposure_compensation")?.let(session.camera.cameraControl::setExposureCompensationIndex)
-        val x = (controls["focus_x"] as? JsonValue.Num)?.value?.toFloat()
-        val y = (controls["focus_y"] as? JsonValue.Num)?.value?.toFloat()
+        val x = controls["focus_x"]?.doubleValue()?.toFloat()
+        val y = controls["focus_y"]?.doubleValue()?.toFloat()
         if ((x == null) != (y == null)) {
             throw MethodApplicationException("bad_request", "focus_x and focus_y must be provided together")
         }

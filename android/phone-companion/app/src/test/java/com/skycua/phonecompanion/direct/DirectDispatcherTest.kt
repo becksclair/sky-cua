@@ -10,70 +10,84 @@ import java.io.File
 
 class DirectDispatcherTest {
     private val device = "00000000-0000-4000-8000-000000000001"
-    private fun request(method: String, deviceId: String = device, epoch: Long = 7, expiry: Long = 10_000, params: String = "{}") =
+    private val linkEpoch = LinkEpoch.of(7)
+    private fun request(method: String, deviceId: String = device, epoch: String = "7", expiry: Long = 10_000, params: String = "{}") =
         "{\"type\":\"request\",\"request_id\":\"r1\",\"device_id\":\"$deviceId\",\"link_epoch\":$epoch,\"idempotent\":true,\"expires_at_ms\":$expiry,\"method\":\"$method\",\"params\":$params}"
     private fun dispatcher(handler: FakeHandler = FakeHandler()) = DirectRequestDispatcher.forHandler(handler) to handler
 
     @Test fun validDispatchAndCompanionStatusAliasReturnResponse() {
         val (d, h) = dispatcher()
-        val response = d.dispatch(request("companion.status"), device, "7", 100)
+        val response = d.dispatch(request("companion.status"), device, linkEpoch, 100)
         assertTrue(response.contains("\"type\":\"response\"")); assertTrue(response.contains("\"request_id\":\"r1\"")); assertEquals(1, h.healthCalls)
     }
 
     @Test fun smsQueryIsDirectOnlyAndReturnsStructuredResult() {
         val (d, _) = dispatcher(FakeHandler(sms = true))
-        val response = d.dispatch(request("sms.query", params = "{\"start_ms\":1,\"end_ms\":2}"), device, "7", 100)
+        val response = d.dispatch(request("sms.query", params = "{\"start_ms\":1,\"end_ms\":2}"), device, linkEpoch, 100)
         assertTrue(response.contains("\"type\":\"response\""))
         assertTrue(response.contains("\"messages\":[ ]") || response.contains("\"messages\":[]"))
     }
 
     @Test fun wrongDeviceEpochAndExpiredRequestsDoNotCallHandler() {
         val (d, h) = dispatcher()
-        assertTrue(d.dispatch(request("companion.status", deviceId = "00000000-0000-4000-8000-000000000002"), device, "7", 100).contains("device_mismatch"))
-        assertTrue(d.dispatch(request("companion.status", epoch = 8), device, "7", 100).contains("epoch_mismatch"))
-        assertTrue(d.dispatch(request("companion.status", expiry = 100), device, "7", 100).contains("expired"))
+        assertTrue(d.dispatch(request("companion.status", deviceId = "00000000-0000-4000-8000-000000000002"), device, linkEpoch, 100).contains("device_mismatch"))
+        assertTrue(d.dispatch(request("companion.status", epoch = "8"), device, linkEpoch, 100).contains("epoch_mismatch"))
+        assertTrue(d.dispatch(request("companion.status", expiry = 100), device, linkEpoch, 100).contains("expired"))
         assertEquals(0, h.healthCalls)
     }
 
     @Test fun applicationErrorIsStructured() {
         val (d, _) = dispatcher(FakeHandler(appError = true))
-        val response = d.dispatch(request("appshot"), device, "7", 100)
+        val response = d.dispatch(request("appshot"), device, linkEpoch, 100)
         assertTrue(response.contains("\"type\":\"error\"")); assertTrue(response.contains("disabled_service")); assertTrue(response.contains("\"request_id\":\"r1\""))
     }
 
     @Test fun unknownMethodIsTruthful() {
         val (d, _) = dispatcher()
-        assertTrue(d.dispatch(request("not.a.method"), device, "7", 100).contains("unknown_method"))
+        assertTrue(d.dispatch(request("not.a.method"), device, linkEpoch, 100).contains("unknown_method"))
     }
 
     @Test fun malformedRequestIsRejectedBeforeHandler() {
         val (d, h) = dispatcher()
-        val response = d.dispatch("{\"type\":\"request\",\"request_id\":\"r1\",\"device_id\":\"$device\"", device, "7", 100)
+        val response = d.dispatch("{\"type\":\"request\",\"request_id\":\"r1\",\"device_id\":\"$device\"", device, linkEpoch, 100)
         assertTrue(response.contains("bad_request")); assertEquals(0, h.healthCalls)
+    }
+
+    @Test fun unsignedMaxEpochDispatchesAndSerializesExactly() {
+        val epoch = "18446744073709551615"
+        val (dispatcher, handler) = dispatcher()
+        val response = dispatcher.dispatch(
+            request("companion.status", epoch = epoch),
+            device,
+            LinkEpoch.parseCanonical(epoch),
+            100,
+        )
+        assertTrue(response.contains("\"link_epoch\":$epoch"))
+        assertEquals(1, handler.healthCalls)
     }
 
     @Test fun appshotResponseUsesContentRefWithoutBase64() {
         val socket = CaptureSocket()
-        val sender = ContentTransferSender(socket, { device }, { 7 }, idFactory = { "transfer" })
+        val sender = ContentTransferSender(socket, { device }, { linkEpoch }, idFactory = { "transfer" })
         val response = DirectRequestDispatcher.forHandler(FakeHandler(appShotBytes = byteArrayOf(1, 2, 3)), { sender })
-            .dispatch(request("appshot"), device, "7", 100)
+            .dispatch(request("appshot"), device, linkEpoch, 100)
         assertFalse(response.contains("data_base64")); assertTrue(response.contains("content_ref")); assertTrue(socket.text.any { it.contains("content_declare") }); assertTrue(socket.text.any { it.contains("content_commit") })
     }
 
     @Test fun directContentDescribeAndReleaseStayBoundToCurrentEpoch() {
         val file = File.createTempFile("direct-content", "test").apply { writeText("hello") }
-        val received = ReceivedContent("c1", device, 7, "text/plain", "hello.txt", 5, "00".repeat(32), 20_000, file)
+        val received = ReceivedContent("c1", device, linkEpoch, "text/plain", "hello.txt", 5, "00".repeat(32), 20_000, file)
         var released = false
         val resolver = object : DirectContentResolver {
-            override fun resolve(reference: JsonValue.Obj, expectedEpoch: Long) = received
+            override fun resolve(reference: JsonValue.Obj, expectedEpoch: LinkEpoch) = received
             override fun describe(contentId: String) = received.takeIf { contentId == "c1" }
-            override fun release(contentId: String, expectedEpoch: Long): Boolean =
-                (contentId == "c1" && expectedEpoch == 7L).also { released = it }
+            override fun release(contentId: String, expectedEpoch: LinkEpoch): Boolean =
+                (contentId == "c1" && expectedEpoch == linkEpoch).also { released = it }
         }
         val dispatcher = DirectRequestDispatcher.forHandler(FakeHandler(), contentResolver = resolver)
-        val described = dispatcher.dispatch(request("content.describe", params = "{\"content_id\":\"c1\"}"), device, "7", 100)
+        val described = dispatcher.dispatch(request("content.describe", params = "{\"content_id\":\"c1\"}"), device, linkEpoch, 100)
         assertTrue(described.contains("\"content_id\":\"c1\"")); assertTrue(described.contains("\"size_bytes\":5"))
-        val release = dispatcher.dispatch(request("content.release", params = "{\"content_id\":\"c1\"}"), device, "7", 100)
+        val release = dispatcher.dispatch(request("content.release", params = "{\"content_id\":\"c1\"}"), device, linkEpoch, 100)
         assertTrue(release.contains("\"released\":true")); assertTrue(released)
         file.delete()
     }
@@ -81,16 +95,16 @@ class DirectDispatcherTest {
     @Test fun cameraCaptureReturnsLocalReferenceAndTransfersOnlyOnExplicitExport() {
         val file = File.createTempFile("camera-local", ".jpg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
         val socket = CaptureSocket()
-        val sender = ContentTransferSender(socket, { device }, { 7 }, idFactory = { "transfer" })
+        val sender = ContentTransferSender(socket, { device }, { linkEpoch }, idFactory = { "transfer" })
         var local: ReceivedContent? = null
         val resolver = object : DirectContentResolver {
-            override fun resolve(reference: JsonValue.Obj, expectedEpoch: Long) = local
+            override fun resolve(reference: JsonValue.Obj, expectedEpoch: LinkEpoch) = local
             override fun describe(contentId: String) = local?.takeIf { it.contentId == contentId }
-            override fun release(contentId: String, expectedEpoch: Long) = false
+            override fun release(contentId: String, expectedEpoch: LinkEpoch) = false
             override fun registerLocal(
                 file: File,
                 deviceId: String,
-                linkEpoch: Long,
+                linkEpoch: LinkEpoch,
                 mimeType: String,
                 filename: String?,
                 source: String,
@@ -107,7 +121,7 @@ class DirectDispatcherTest {
         val captured = dispatcher.dispatch(
             request("camera", params = "{\"operation\":\"photo\",\"camera_id\":\"0\",\"options\":{}}"),
             device,
-            "7",
+            linkEpoch,
             100,
         )
         assertTrue(captured.contains("camera-content"))
@@ -118,7 +132,7 @@ class DirectDispatcherTest {
         val exported = dispatcher.dispatch(
             request("content.export", params = "{\"content_id\":\"camera-content\"}"),
             device,
-            "7",
+            linkEpoch,
             100,
         )
         assertTrue(exported.contains("camera-content"))

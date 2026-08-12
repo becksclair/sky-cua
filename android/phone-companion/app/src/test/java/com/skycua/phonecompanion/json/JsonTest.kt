@@ -1,5 +1,6 @@
 package com.skycua.phonecompanion.json
 
+import java.math.BigInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -56,6 +57,31 @@ class JsonTest {
     fun integralNumbersWriteWithoutDecimal() {
         val json = JsonWriter.write(jsonObject { put("n", 42L) })
         assertEquals("""{"n":42}""", json)
+    }
+
+    @Test
+    fun exactIntegersRoundTripAcrossUnsigned64Boundaries() {
+        val values = listOf(
+            "0",
+            "1",
+            "9007199254740991",
+            "9007199254740992",
+            "9007199254740993",
+            "9223372036854775807",
+            "9223372036854775808",
+            "18446744073709551615",
+        )
+        values.forEach { raw ->
+            val parsed = JsonParser.parseObject("{\"n\":$raw}")
+            assertEquals(BigInteger(raw), (parsed["n"] as JsonValue.IntNum).value)
+            assertEquals("{\"n\":$raw}", JsonWriter.write(parsed))
+        }
+    }
+
+    @Test
+    fun exactLongAccessorsRejectOverflow() {
+        assertEquals(Long.MAX_VALUE, JsonParser.parseObject("{\"n\":9223372036854775807}").long("n"))
+        assertNull(JsonParser.parseObject("{\"n\":9223372036854775808}").long("n"))
     }
 
     @Test(expected = JsonParseException::class)

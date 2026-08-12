@@ -15,6 +15,8 @@ import com.skycua.phonecompanion.protocol.MethodParamException
 import java.util.concurrent.atomic.AtomicLong
 import com.skycua.phonecompanion.direct.CompanionContentProvider
 import com.skycua.phonecompanion.direct.DirectContentResolver
+import com.skycua.phonecompanion.direct.linkEpoch
+import com.skycua.phonecompanion.direct.put
 
 /** Android-native clipboard operations. Binary items remain URI-backed. */
 class ClipboardController(
@@ -98,7 +100,7 @@ class ClipboardController(
             val html = item.string("html")
             val uri = item.string("uri")?.let(Uri::parse)
                 ?: item.obj("content")?.let { reference ->
-                    val epoch = reference.long("link_epoch") ?: bad("content link_epoch is required")
+                    val epoch = reference.linkEpoch("link_epoch") ?: bad("content link_epoch is required")
                     val content = contentResolver?.resolve(reference, epoch)
                         ?: throw MethodApplicationException("content_not_found", "clipboard content is unavailable or expired")
                     CompanionContentProvider.uri(content.contentId)

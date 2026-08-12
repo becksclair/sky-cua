@@ -20,6 +20,7 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.UUID
 import com.skycua.phonecompanion.direct.DirectContentResolver
+import com.skycua.phonecompanion.direct.linkEpoch
 import com.skycua.phonecompanion.SafGrantActivity
 
 /** Virtual storage roots backed by the Companion sandbox, shared storage, and content URIs. */
@@ -112,7 +113,7 @@ class StorageController(
     private fun write(params: JsonValue.Obj): JsonValue.Obj {
         val uri = requireUri(params)
         val reference = params.obj("content") ?: bad("content is required")
-        val epoch = reference.long("link_epoch") ?: bad("content link_epoch is required")
+        val epoch = reference.linkEpoch("link_epoch") ?: bad("content link_epoch is required")
         val received = contentResolver?.resolve(reference, epoch)
             ?: throw MethodApplicationException("content_not_found", "content is unavailable, expired, or belongs to another link epoch")
         if (uri.startsWith("content://") || uri.startsWith("media://")) {

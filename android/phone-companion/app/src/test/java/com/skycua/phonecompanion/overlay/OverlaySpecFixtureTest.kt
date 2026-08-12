@@ -2,6 +2,8 @@ package com.skycua.phonecompanion.overlay
 
 import com.skycua.phonecompanion.json.JsonParser
 import com.skycua.phonecompanion.json.JsonValue
+import com.skycua.phonecompanion.json.doubleValue
+import com.skycua.phonecompanion.json.intValueExact
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -29,9 +31,7 @@ class OverlaySpecFixtureTest {
     }
 
     private fun JsonValue.Obj.num(key: String): Double {
-        val value = this[key]
-        require(value is JsonValue.Num) { "expected number for $key" }
-        return value.value
+        return requireNotNull(this[key]?.doubleValue()) { "expected number for $key" }
     }
 
     private fun JsonValue.Obj.point(key: String): OverlayMath.Point {
@@ -267,7 +267,7 @@ class OverlaySpecFixtureTest {
                     val sample = it as? JsonValue.Obj ?: error("expected sample object in $name")
                     sample.num("step").toInt() to sample
                 }
-            val settledStep = (case["settled_step"] as? JsonValue.Num)?.toInt()
+            val settledStep = case["settled_step"]?.intValueExact()
             val finalTarget = segments.last().point("target")
             var step = 0
             for (segment in segments) {

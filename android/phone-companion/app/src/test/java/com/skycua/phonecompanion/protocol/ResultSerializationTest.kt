@@ -2,6 +2,7 @@ package com.skycua.phonecompanion.protocol
 
 import com.skycua.phonecompanion.json.JsonParser
 import com.skycua.phonecompanion.json.JsonWriter
+import com.skycua.phonecompanion.json.intValueExact
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -81,7 +82,7 @@ class ResultSerializationTest {
         assertEquals("com.example", obj.string("package"))
         val nodes = obj.arr("nodes")!!
         val first = nodes.items[0] as com.skycua.phonecompanion.json.JsonValue.Obj
-        val bounds = first.arr("bounds")!!.items.map { (it as com.skycua.phonecompanion.json.JsonValue.Num).toInt() }
+        val bounds = first.arr("bounds")!!.items.map { requireNotNull(it.intValueExact()) }
         assertEquals(listOf(10, 20, 110, 70), bounds)
         assertEquals(true, first.bool("clickable"))
         assertEquals(false, obj.bool("truncated"))

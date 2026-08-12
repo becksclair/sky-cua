@@ -11,7 +11,7 @@ const val PHONE_CONTENT_MAX_CHUNK_BYTES = 256 * 1024
 data class DirectContentRef(
     val contentId: String,
     val deviceId: String,
-    val linkEpoch: Long,
+    val linkEpoch: LinkEpoch,
     val mimeType: String,
     val sizeBytes: Long,
     val sha256: String,
@@ -26,7 +26,7 @@ data class DirectContentRef(
 }
 
 object DirectContentChunkCodec {
-    fun encode(transferId: String, epoch: Long, index: Long, offset: Long, payload: ByteArray): ByteArray {
+    fun encode(transferId: String, epoch: LinkEpoch, index: Long, offset: Long, payload: ByteArray): ByteArray {
         val id = transferId.toByteArray(Charsets.UTF_8)
         require(id.isNotEmpty() && id.size <= 255) { "transfer id must be 1..255 UTF-8 bytes" }
         require(payload.size <= PHONE_CONTENT_MAX_CHUNK_BYTES) { "payload exceeds 256KiB" }
@@ -34,7 +34,7 @@ object DirectContentChunkCodec {
         var p = 0
         out[p++] = id.size.toByte(); id.copyInto(out, p); p += id.size
         fun putLong(value: Long) { java.nio.ByteBuffer.wrap(out, p, 8).putLong(value); p += 8 }
-        putLong(epoch); putLong(index); putLong(offset)
+        putLong(epoch.toBinaryCarrier()); putLong(index); putLong(offset)
         java.nio.ByteBuffer.wrap(out, p, 4).putInt(payload.size); p += 4
         payload.copyInto(out, p)
         return out
@@ -44,7 +44,7 @@ object DirectContentChunkCodec {
 class ContentTransferSender(
     private val socket: DirectSocket,
     private val deviceId: () -> String,
-    private val epoch: () -> Long,
+    private val epoch: () -> LinkEpoch,
     private val nowMs: () -> Long = { System.currentTimeMillis() },
     private val idFactory: () -> String = { UUID.randomUUID().toString() },
     private val onTransportFailure: () -> Unit = {},

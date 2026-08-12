@@ -14,6 +14,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.skycua.phonecompanion.direct.CompanionContentProvider
 import com.skycua.phonecompanion.direct.DirectContentResolver
+import com.skycua.phonecompanion.direct.linkEpoch
 import com.skycua.phonecompanion.json.JsonValue
 import com.skycua.phonecompanion.json.jsonArray
 import com.skycua.phonecompanion.json.jsonObject
@@ -73,7 +74,7 @@ class SkyImeService : InputMethodService() {
         resolver: DirectContentResolver?,
     ): JsonValue.Obj {
         val reference = params.obj("content") ?: throw MethodApplicationException("bad_request", "content is required")
-        val epoch = reference.long("link_epoch") ?: throw MethodApplicationException("bad_request", "content link_epoch is required")
+        val epoch = reference.linkEpoch("link_epoch") ?: throw MethodApplicationException("bad_request", "content link_epoch is required")
         val content = resolver?.resolve(reference, epoch)
             ?: throw MethodApplicationException("content_not_found", "editor content is unavailable or expired")
         val accepted = currentInputEditorInfo?.contentMimeTypes?.toList().orEmpty()
