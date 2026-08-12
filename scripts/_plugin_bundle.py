@@ -692,8 +692,8 @@ def apply_shared_agent_skill_deduplication(
     the active plugin, however, which otherwise exposes every sky-cua skill
     twice. Codex canonicalizes path selectors before applying ``skills.config``
     rules, so selectors written against the stable symlink paths continue to
-    follow whichever checkout ``sync_agent_skills.py`` currently targets while
-    leaving the plugin-namespaced copies enabled.
+    follow the public sky-cua install root while leaving the plugin-namespaced
+    copies enabled.
     """
     managed_block_re = re.compile(
         rf"(?ms)^{re.escape(SHARED_AGENT_SKILL_OVERRIDES_BEGIN)}\r?\n"

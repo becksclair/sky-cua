@@ -20,9 +20,17 @@ import _hermes_config
 import _opencode_config
 import _plugin_bundle
 import _standalone_release_command
+from _skill_projection import apply_skill_link_plan, plan_skill_links
 from _standalone_release_command import (
     ReleaseError,
     parse_stable_version,
+)
+from _standalone_topology import (
+    converge_public_root,
+    prepare_install_roots,
+)
+from _standalone_topology import (
+    public_root as stable_public_root,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -186,6 +194,12 @@ def assemble_payload(payload_root: Path, *, core_root: Path, cua_node_root: Path
     _copy_file(REPO_ROOT / "scripts/_opencode_config.py", artifact_scripts / "_opencode_config.py")
     _copy_file(REPO_ROOT / "scripts/_hermes_config.py", artifact_scripts / "_hermes_config.py")
     _copy_file(REPO_ROOT / "scripts/_plugin_bundle.py", artifact_scripts / "_plugin_bundle.py")
+    _copy_file(
+        REPO_ROOT / "scripts/_skill_projection.py", artifact_scripts / "_skill_projection.py"
+    )
+    _copy_file(
+        REPO_ROOT / "scripts/_standalone_topology.py", artifact_scripts / "_standalone_topology.py"
+    )
     _write_release_manifest(payload_root)
     validate_payload(payload_root)
 
@@ -230,6 +244,8 @@ def validate_payload(payload_root: Path) -> None:
         "scripts/_opencode_config.py",
         "scripts/_hermes_config.py",
         "scripts/_plugin_bundle.py",
+        "scripts/_skill_projection.py",
+        "scripts/_standalone_topology.py",
     )
     missing = [relative for relative in required if not (payload_root / relative).is_file()]
     if missing:
@@ -391,15 +407,26 @@ def _replace_symlink(source: Path, destination: Path) -> None:
     os.replace(temporary, destination)
 
 
-def _install_launchers(install_root: Path, home: Path) -> tuple[Path, ...]:
+def _install_launchers(
+    install_root: Path,
+    home: Path,
+    *,
+    managed_install_roots: Sequence[Path] = (),
+) -> tuple[Path, ...]:
     bin_root = home / ".local/bin"
     legacy_node = bin_root / "node"
     if legacy_node.is_symlink():
         try:
             legacy_target = legacy_node.resolve(strict=False)
+            managed_roots = tuple(
+                root.resolve(strict=False) for root in (install_root, *managed_install_roots)
+            )
         except RuntimeError:
             legacy_target = None
-        if legacy_target is not None and legacy_target.is_relative_to(install_root.resolve()):
+            managed_roots = ()
+        if legacy_target is not None and any(
+            legacy_target.is_relative_to(root) for root in managed_roots
+        ):
             legacy_node.unlink()
     targets = {
         "sky-cua-client": install_root / "bin/sky-cua-client",
@@ -479,38 +506,21 @@ def _durable_skill_names(home: Path, env: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(skill for surface, skill in SURFACE_SKILL_MAP.items() if surface in enabled)
 
 
-def _project_skill_roots(
-    install_root: Path,
-    roots: Sequence[Path],
-    enabled_names: tuple[str, ...],
-) -> tuple[Path, ...]:
-    projected: list[Path] = []
-    enabled = set(enabled_names)
-    for root in roots:
-        for name in SKILL_NAMES:
-            destination = root / name
-            source = install_root / "skills" / name
-            if name in enabled:
-                _replace_symlink(source, destination)
-                projected.append(destination)
-            elif destination.is_symlink() and destination.resolve(strict=False) == source.resolve(
-                strict=False
-            ):
-                destination.unlink()
-    return tuple(projected)
-
-
-def _project_skills(
-    install_root: Path,
+def _skill_projection_roots(
     home: Path,
-    enabled_names: tuple[str, ...],
+    *,
+    env: Mapping[str, str],
+    configure_hosts: bool,
 ) -> tuple[Path, ...]:
     roots = [home / ".agents/skills"]
     if (home / ".codex").exists():
         roots.append(home / ".codex/skills")
     if (home / ".openclaw").exists():
         roots.append(home / ".openclaw/skills")
-    return _project_skill_roots(install_root, roots, enabled_names)
+    hermes_config = _hermes_config.hermes_home(home=home, env=env) / "config.yaml"
+    if configure_hosts and hermes_config.exists():
+        roots.append(hermes_config.parent / "skills")
+    return tuple(roots)
 
 
 def _install_codex_plugins(
@@ -667,10 +677,9 @@ def _install_pi_mcp(
     extension_dir.mkdir(parents=True, exist_ok=True)
     extension_path = extension_dir / "sky-cua-image-capability.ts"
     if extension_path.exists() or extension_path.is_symlink():
-        if (
-            not extension_path.is_symlink()
-            or extension_path.resolve(strict=False) != extension_source
-        ):
+        if not extension_path.is_symlink() or extension_path.resolve(
+            strict=False
+        ) != extension_source.resolve(strict=False):
             raise ValueError(f"refusing to replace an unmanaged Pi extension: {extension_path}")
         extension_path.unlink()
     extension_path.symlink_to(extension_source)
@@ -770,24 +779,55 @@ def install_payload(
     validate_payload(payload_root)
     active_env = dict(os.environ if env is None else env)
     install_home = (home or Path(active_env.get("HOME", str(Path.home())))).expanduser().resolve()
-    install_root = _data_root(active_env, install_home).absolute() / "sky-cua"
+    install_root = (_data_root(active_env, install_home).absolute() / "sky-cua").absolute()
+    public_root = stable_public_root(install_home).absolute()
+    topology = prepare_install_roots(
+        install_root,
+        public_root,
+        target=TARGET,
+        skill_names=SKILL_NAMES,
+    )
+    durable_skill_names = _durable_skill_names(install_home, active_env)
+    managed_skill_roots = (
+        *(root / "skills" for root in topology.stop_roots),
+        REPO_ROOT / "skills",
+    )
+    skill_plan = plan_skill_links(
+        public_root / "skills",
+        _skill_projection_roots(
+            install_home,
+            env=active_env,
+            configure_hosts=configure_hosts,
+        ),
+        SKILL_NAMES,
+        durable_skill_names,
+        managed_source_roots=managed_skill_roots,
+        validation_source_root=payload_root / "skills",
+    )
     install_root.parent.mkdir(parents=True, exist_ok=True)
     # Retire processes executing from the fixed root before replacing it. MCP
     # hosts respawn their stdio clients lazily, and the next client starts the
     # shared daemon with the newly projected desktop environment.
-    _plugin_bundle.stop_unix_runtime_processes([install_root])
+    _plugin_bundle.stop_unix_runtime_processes(list(topology.stop_roots))
     _remove_path(install_root)
     shutil.copytree(payload_root, install_root, symlinks=False)
+    validate_payload(install_root)
+    for obsolete_root in topology.obsolete_payload_roots:
+        _remove_path(obsolete_root)
+    converge_public_root(install_root, public_root)
+    skills = apply_skill_link_plan(skill_plan)
 
-    launchers = _install_launchers(install_root, install_home)
+    launchers = _install_launchers(
+        public_root,
+        install_home,
+        managed_install_roots=topology.stop_roots,
+    )
     manifests = _install_native_manifests(
         install_home, install_home / ".local/bin/sky-cua-chrome-host"
     )
-    durable_skill_names = _durable_skill_names(install_home, active_env)
-    skills = _project_skills(install_root, install_home, durable_skill_names)
-    pi_config = _install_pi_mcp(install_root, home=install_home, env=active_env)
+    pi_config = _install_pi_mcp(public_root, home=install_home, env=active_env)
     opencode_report = _opencode_config.install_opencode_config(
-        install_root, home=install_home, env=active_env
+        public_root, home=install_home, env=active_env
     )
     hermes_report: dict[str, object] = {
         "status": "skipped",
@@ -800,7 +840,7 @@ def install_payload(
     openclaw_permission_configs: tuple[Path, ...] = ()
     if configure_hosts:
         hermes_config = _hermes_config.install_hermes_config(
-            install_root,
+            public_root,
             home=install_home,
             env=active_env,
         )
@@ -810,15 +850,7 @@ def install_payload(
                 home=install_home,
                 env=active_env,
             ).report()
-            skills = (
-                *skills,
-                *_project_skill_roots(
-                    install_root,
-                    [hermes_config.config_path.parent / "skills"],
-                    durable_skill_names,
-                ),
-            )
-        plugins = _install_codex_plugins(install_root, env=active_env, which=which)
+        plugins = _install_codex_plugins(public_root, env=active_env, which=which)
         openclaw_bin = which("openclaw")
         if openclaw_bin is not None:
             openclaw_permission_configs = _configure_openclaw_no_prompt_permissions(
@@ -828,7 +860,7 @@ def install_payload(
                 runner=runner,
             )
             openclaw = _install_openclaw_node_repl(
-                install_root,
+                public_root,
                 home=install_home,
                 env=active_env,
                 which=lambda name: openclaw_bin if name == "openclaw" else which(name),
@@ -836,6 +868,7 @@ def install_payload(
             )
     return {
         "install_root": str(install_root),
+        "public_root": str(public_root),
         "launchers": [str(path) for path in launchers],
         "native_manifests": [str(path) for path in manifests],
         "skills": [str(path) for path in skills],

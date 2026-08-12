@@ -61,7 +61,12 @@ def check_projections() -> None:
         fail(f"native host path is not stable: {manifest}")
     for skill in ("computer-use", "browser-use", "phone-use"):
         projection = Path("/root/.agents/skills") / skill
-        if not projection.is_symlink() or not projection.resolve().is_relative_to(TARGET_DIR):
+        expected_link = Path(f"../../.local/share/sky-cua/skills/{skill}")
+        if (
+            not projection.is_symlink()
+            or projection.readlink() != expected_link
+            or not projection.resolve().is_relative_to(TARGET_DIR.resolve())
+        ):
             fail(f"skill projection is incorrect: {projection}")
     print("ok: stable launchers, native host, and skills")
 

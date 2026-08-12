@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -12,6 +13,7 @@ import pytest
 
 import _opencode_config
 import standalone_release
+from _skill_projection import PUBLIC_SKILLS_ROOT_MARKER, PUBLIC_SKILLS_ROOT_MARKER_CONTENT
 from standalone_release import (
     ARCHIVE_NAME,
     PAYLOAD_DIR_NAME,
@@ -98,6 +100,8 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
         "scripts/_hermes_config.py",
         "scripts/_opencode_config.py",
         "scripts/_plugin_bundle.py",
+        "scripts/_skill_projection.py",
+        "scripts/_standalone_topology.py",
         "scripts/_standalone_release_command.py",
         "install.py",
     ):
@@ -346,9 +350,17 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
     env = {"HOME": str(home), "XDG_DATA_HOME": str(tmp_path / "xdg-data")}
     first_report = install_payload(first, home=home, env=env, configure_hosts=False)
     install_root = Path(str(first_report["install_root"]))
+    public_root = home / ".local/share/sky-cua"
+    assert first_report["public_root"] == str(public_root)
+    assert public_root.is_symlink()
+    assert public_root.resolve() == install_root
     assert (install_root / "old-only-marker").is_file()
     legacy_node = home / ".local/bin/node"
     legacy_node.symlink_to(install_root / "bin/node")
+    legacy_browser = home / ".agents/skills/browser-use"
+    legacy_browser.unlink()
+    legacy_browser.symlink_to(install_root / "skills/browser-use")
+    assert legacy_browser.readlink().is_absolute()
 
     second = tmp_path / "second"
     assemble_payload(second, core_root=core, cua_node_root=cua_node)
@@ -356,12 +368,14 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
     install_payload(second, home=home, env=env, configure_hosts=False)
     assert not legacy_node.exists()
     assert not legacy_node.is_symlink()
+    assert legacy_browser.readlink() == Path("../../.local/share/sky-cua/skills/browser-use")
 
     host_node = legacy_node
     _write(host_node, "#!/bin/sh\nprintf 'host node\\n'\n", executable=True)
     second_report = install_payload(second, home=home, env=env, configure_hosts=False)
 
     assert second_report["install_root"] == str(install_root)
+    assert second_report["public_root"] == str(public_root)
     assert (install_root / "new-marker").is_file()
     assert not (install_root / "old-only-marker").exists()
     assert not (install_root / "current").exists()
@@ -373,7 +387,9 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
             install_root / "bin/runtimes/linux-x64" / name
         )
     for name in standalone_release.SKILL_NAMES:
-        assert (home / ".agents/skills" / name).resolve() == install_root / "skills" / name
+        link = home / ".agents/skills" / name
+        assert link.readlink() == Path(f"../../.local/share/sky-cua/skills/{name}")
+        assert link.resolve() == install_root / "skills" / name
     native_manifest = json.loads(
         (
             home / ".config/google-chrome/NativeMessagingHosts/com.openai.codexextension.json"
@@ -381,8 +397,14 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
     )
     assert native_manifest["path"] == str(home / ".local/bin/sky-cua-chrome-host")
 
+    raw_links = {
+        name: (home / ".agents/skills" / name).readlink() for name in standalone_release.SKILL_NAMES
+    }
     install_payload(second, home=home, env=env, configure_hosts=False)
     assert (install_root / "new-marker").is_file()
+    assert raw_links == {
+        name: (home / ".agents/skills" / name).readlink() for name in standalone_release.SKILL_NAMES
+    }
 
 
 def test_install_projects_pi_wrapper_and_preserves_other_servers(
@@ -411,17 +433,19 @@ def test_install_projects_pi_wrapper_and_preserves_other_servers(
     report = install_payload(payload, home=home, env=env, configure_hosts=False)
 
     install_root = Path(str(report["install_root"]))
-    wrapper = install_root / "pi_mcp_wrapper.sh"
+    public_root = Path(str(report["public_root"]))
+    wrapper = public_root / "pi_mcp_wrapper.sh"
     wrapper_text = wrapper.read_text(encoding="utf-8")
     assert wrapper_text.startswith("#!/bin/bash\n")
     assert "export PATH=/usr/local/bin:/usr/bin:/bin\n" in wrapper_text
     assert "export DISPLAY=:7\n" in wrapper_text
     assert "export SKY_CUA_PRESENCE_ENABLED=1\n" in wrapper_text
     assert "export SKY_CUA_MCP_CALLER_PROVENANCE=pi\n" in wrapper_text
-    assert wrapper_text.endswith(f'exec {install_root / "bin/sky-cua-client"} mcp "$@"\n')
+    assert wrapper_text.endswith(f'exec {public_root / "bin/sky-cua-client"} mcp "$@"\n')
     assert wrapper.stat().st_mode & 0o111
     extension = agent_dir / "extensions/sky-cua-image-capability.ts"
     assert extension.is_symlink()
+    assert extension.readlink() == public_root / "resources/pi/sky-cua-image-capability.ts"
     assert extension.resolve() == install_root / "resources/pi/sky-cua-image-capability.ts"
     merged = json.loads(config_path.read_text(encoding="utf-8"))
     assert merged["mcpServers"]["context7"] == {"command": "context7"}
@@ -432,6 +456,12 @@ def test_install_projects_pi_wrapper_and_preserves_other_servers(
         "directTools": True,
     }
     assert report["pi_config"] == str(config_path)
+
+    raw_extension = extension.readlink()
+    second_report = install_payload(payload, home=home, env=env, configure_hosts=False)
+    assert second_report["pi_config"] == str(config_path)
+    assert extension.readlink() == raw_extension
+    assert extension.resolve() == install_root / "resources/pi/sky-cua-image-capability.ts"
 
 
 def test_install_refuses_to_replace_unmanaged_pi_extension(
@@ -520,7 +550,7 @@ def test_install_projects_both_mcp_servers_into_existing_hermes_config(
         which=lambda _name: None,
     )
 
-    install_root = Path(str(report["install_root"]))
+    public_root = Path(str(report["public_root"]))
     hermes_report = cast(dict[str, object], report["hermes_config"])
     assert hermes_report["status"] == "updated"
     assert hermes_report["servers"] == ["sky_cua", "node_repl"]
@@ -533,10 +563,10 @@ def test_install_projects_both_mcp_servers_into_existing_hermes_config(
     node_line = next(line for line in text.splitlines() if line.startswith("  node_repl: "))
     sky_cua = json.loads(sky_line.removeprefix("  sky_cua: "))
     node_repl = json.loads(node_line.removeprefix("  node_repl: "))
-    assert sky_cua["command"] == str(install_root / "bin/sky-cua-client")
+    assert sky_cua["command"] == str(public_root / "bin/sky-cua-client")
     assert sky_cua["args"] == ["mcp"]
     assert sky_cua["env"]["SKY_CUA_MCP_CALLER_PROVENANCE"] == "hermes"
-    assert node_repl["command"] == str(install_root / "bin/node_repl")
+    assert node_repl["command"] == str(public_root / "bin/node_repl")
 
 
 def test_extracted_payload_install_imports_hermes_adapter(
@@ -551,6 +581,8 @@ def test_extracted_payload_install_imports_hermes_adapter(
         "scripts/_hermes_config.py",
         "scripts/_opencode_config.py",
         "scripts/_plugin_bundle.py",
+        "scripts/_skill_projection.py",
+        "scripts/_standalone_topology.py",
         "scripts/_standalone_release_command.py",
     ):
         source = real_root / relative
@@ -657,12 +689,17 @@ def test_detected_hosts_receive_native_plugins_and_hash_free_openclaw_definition
         "PATH": f"{home}/.local/bin:/usr/bin",
     }
     plugin_calls: list[str] = []
+    plugin_roots: list[Path] = []
+
+    def fake_install_plugins(root: Path, **_kwargs: object) -> tuple[str, ...]:
+        plugin_roots.append(root)
+        plugin_calls.extend(standalone_release.PLUGIN_NAMES)
+        return standalone_release.PLUGIN_NAMES
+
     monkeypatch.setattr(
         standalone_release,
         "_install_codex_plugins",
-        lambda _root, **_kwargs: (
-            plugin_calls.extend(standalone_release.PLUGIN_NAMES) or standalone_release.PLUGIN_NAMES
-        ),
+        fake_install_plugins,
     )
     openclaw_calls: list[tuple[list[str], dict[str, Any]]] = []
 
@@ -682,6 +719,7 @@ def test_detected_hosts_receive_native_plugins_and_hash_free_openclaw_definition
     )
 
     assert plugin_calls == ["computer-use", "browser"]
+    assert plugin_roots == [home / ".local/share/sky-cua"]
     assert report["codex_plugins"] == ["computer-use", "browser"]
     assert report["openclaw_node_repl"] is True
     permission_command, permission_kwargs = openclaw_calls[0]
@@ -795,6 +833,295 @@ def _assemble_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return payload
 
 
+def _make_stale_checkout_skills(root: Path) -> Path:
+    skills = root / "skills"
+    for name in standalone_release.SKILL_NAMES:
+        _write(skills / name / "SKILL.md", f"# stale {name}\n")
+    _write(root / "Cargo.toml", "[workspace]\n")
+    _write(root / "scripts/sync_agent_skills.py", "# fixture\n")
+    _write(root / "crates/sky-cua-client/Cargo.toml", '[package]\nname = "sky-cua-client"\n')
+    return skills
+
+
+def test_default_install_uses_direct_public_root_and_canonical_relative_skill_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "custom-home"
+
+    report = install_payload(
+        payload,
+        home=home,
+        env={"HOME": str(home)},
+        configure_hosts=False,
+    )
+
+    public_root = home / ".local/share/sky-cua"
+    assert report["install_root"] == str(public_root)
+    assert report["public_root"] == str(public_root)
+    assert public_root.is_dir()
+    assert not public_root.is_symlink()
+    for name in standalone_release.SKILL_NAMES:
+        link = home / ".agents/skills" / name
+        assert link.readlink() == Path(f"../../.local/share/sky-cua/skills/{name}")
+        assert link.resolve() == public_root / "skills" / name
+
+
+def test_install_normalizes_old_absolute_links_and_preserves_canonical_link_inode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    env = {"HOME": str(home)}
+    install_payload(payload, home=home, env=env, configure_hosts=False)
+    public_root = home / ".local/share/sky-cua"
+    computer = home / ".agents/skills/computer-use"
+    computer.unlink()
+    computer.symlink_to(public_root / "skills/computer-use")
+    assert computer.readlink().is_absolute()
+
+    install_payload(payload, home=home, env=env, configure_hosts=False)
+
+    assert computer.readlink() == Path("../../.local/share/sky-cua/skills/computer-use")
+    inode = computer.lstat().st_ino
+    install_payload(payload, home=home, env=env, configure_hosts=False)
+    assert computer.lstat().st_ino == inode
+
+
+def test_install_migrates_projection_from_a_prior_live_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    stale_skills = _make_stale_checkout_skills(tmp_path / "stale-worktree")
+    computer = home / ".agents/skills/computer-use"
+    computer.parent.mkdir(parents=True)
+    computer.symlink_to(stale_skills / "computer-use")
+
+    install_payload(
+        payload,
+        home=home,
+        env={"HOME": str(home)},
+        configure_hosts=False,
+    )
+
+    assert computer.readlink() == Path("../../.local/share/sky-cua/skills/computer-use")
+    assert computer.resolve() == home / ".local/share/sky-cua/skills/computer-use"
+
+
+def test_agents_canonical_links_remain_byte_identical_when_sky_cua_installs_after_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    skills_root = home / ".agents/skills"
+    skills_root.mkdir(parents=True)
+    before: dict[str, tuple[Path, int]] = {}
+    for name in standalone_release.SKILL_NAMES:
+        link = skills_root / name
+        raw = Path(f"../../.local/share/sky-cua/skills/{name}")
+        link.symlink_to(raw)
+        before[name] = (raw, link.lstat().st_ino)
+
+    install_payload(
+        payload,
+        home=home,
+        env={"HOME": str(home), "XDG_DATA_HOME": str(tmp_path / "xdg-data")},
+        configure_hosts=False,
+    )
+
+    for name, (raw, inode) in before.items():
+        link = skills_root / name
+        assert link.readlink() == raw
+        assert link.lstat().st_ino == inode
+        assert (link / "SKILL.md").is_file()
+
+
+def test_durable_surface_projection_converges_without_touching_unmanaged_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    env = {"HOME": str(home)}
+    install_payload(payload, home=home, env=env, configure_hosts=False)
+    config = home / ".config/sky-cua/sky-cua.toml"
+    _write(config, "[surfaces]\ndesktop = false\nbrowser = false\nphone = true\n")
+    arbitrary_target = tmp_path / "user/browser-use"
+    arbitrary_target.mkdir(parents=True)
+    browser = home / ".agents/skills/browser-use"
+    browser.unlink()
+    browser.symlink_to(arbitrary_target)
+
+    install_payload(payload, home=home, env=env, configure_hosts=False)
+
+    assert not (home / ".agents/skills/computer-use").exists()
+    assert browser.is_symlink()
+    assert browser.resolve() == arbitrary_target
+    assert (home / ".agents/skills/phone-use").is_symlink()
+
+    _write(config, "[surfaces]\ndesktop = true\nbrowser = false\nphone = true\n")
+    install_payload(payload, home=home, env=env, configure_hosts=False)
+    assert (home / ".agents/skills/computer-use").is_symlink()
+    assert browser.resolve() == arbitrary_target
+
+
+def test_enabled_surface_refuses_unmanaged_named_skill_without_rewriting_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    user_skill = home / ".agents/skills/computer-use"
+    _write(user_skill / "SKILL.md", "# user-owned\n")
+
+    with pytest.raises(ValueError, match="unmanaged skill"):
+        install_payload(
+            payload,
+            home=home,
+            env={"HOME": str(home)},
+            configure_hosts=False,
+        )
+
+    assert user_skill.is_dir()
+    assert (user_skill / "SKILL.md").read_text(encoding="utf-8") == "# user-owned\n"
+    assert not (home / ".local/share/sky-cua").exists()
+    assert not (home / ".local/bin/sky-cua-client").exists()
+
+
+def test_custom_xdg_migrates_managed_default_tree_to_one_public_rendezvous(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    install_payload(payload, home=home, env={"HOME": str(home)}, configure_hosts=False)
+    public_root = home / ".local/share/sky-cua"
+    custom_data = tmp_path / "custom-data"
+
+    report = install_payload(
+        payload,
+        home=home,
+        env={"HOME": str(home), "XDG_DATA_HOME": str(custom_data)},
+        configure_hosts=False,
+    )
+
+    physical_root = custom_data / "sky-cua"
+    assert report["install_root"] == str(physical_root)
+    assert public_root.is_symlink()
+    assert public_root.readlink() == Path(os.path.relpath(physical_root, public_root.parent))
+    assert public_root.resolve() == physical_root
+    assert not (public_root / "RELEASE.json").is_symlink()
+    assert (public_root / "RELEASE.json").samefile(physical_root / "RELEASE.json")
+
+
+def test_changing_custom_xdg_removes_the_prior_physical_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    first_data = tmp_path / "first-data"
+    second_data = tmp_path / "second-data"
+    first_root = first_data / "sky-cua"
+    second_root = second_data / "sky-cua"
+    install_payload(
+        payload,
+        home=home,
+        env={"HOME": str(home), "XDG_DATA_HOME": str(first_data)},
+        configure_hosts=False,
+    )
+    legacy_node = home / ".local/bin/node"
+    legacy_node.symlink_to(first_root / "bin/node")
+
+    stopped: list[Path] = []
+    monkeypatch.setattr(
+        standalone_release._plugin_bundle,
+        "stop_unix_runtime_processes",
+        lambda roots: stopped.extend(roots),
+    )
+    install_payload(
+        payload,
+        home=home,
+        env={"HOME": str(home), "XDG_DATA_HOME": str(second_data)},
+        configure_hosts=False,
+    )
+
+    assert stopped == [second_root, first_root]
+    assert not first_root.exists()
+    assert second_root.is_dir()
+    assert (home / ".local/share/sky-cua").resolve() == second_root
+    assert not legacy_node.exists()
+    assert not legacy_node.is_symlink()
+
+
+def test_changing_custom_xdg_to_default_removes_the_prior_physical_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    custom_root = tmp_path / "custom-data/sky-cua"
+    install_payload(
+        payload,
+        home=home,
+        env={"HOME": str(home), "XDG_DATA_HOME": str(custom_root.parent)},
+        configure_hosts=False,
+    )
+
+    install_payload(
+        payload,
+        home=home,
+        env={"HOME": str(home)},
+        configure_hosts=False,
+    )
+
+    public_root = home / ".local/share/sky-cua"
+    assert not custom_root.exists()
+    assert public_root.is_dir()
+    assert not public_root.is_symlink()
+    assert (public_root / "RELEASE.json").is_file()
+
+
+def test_custom_xdg_replaces_development_skills_root_with_public_rendezvous(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    public_root = home / ".local/share/sky-cua"
+    for name in standalone_release.SKILL_NAMES:
+        _write(public_root / f"skills/{name}/SKILL.md", f"# {name}\n")
+    _write(public_root / PUBLIC_SKILLS_ROOT_MARKER, PUBLIC_SKILLS_ROOT_MARKER_CONTENT)
+
+    report = install_payload(
+        payload,
+        home=home,
+        env={"HOME": str(home), "XDG_DATA_HOME": str(tmp_path / "custom-data")},
+        configure_hosts=False,
+    )
+
+    assert public_root.is_symlink()
+    assert public_root.resolve() == Path(str(report["install_root"]))
+    for name in standalone_release.SKILL_NAMES:
+        assert (home / ".agents/skills" / name / "SKILL.md").is_file()
+
+
+def test_custom_xdg_refuses_unmanaged_public_rendezvous_before_installing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    public_root = home / ".local/share/sky-cua"
+    _write(public_root / "keep.txt", "user-owned\n")
+    physical_root = tmp_path / "custom-data/sky-cua"
+
+    with pytest.raises(ValueError, match="unmanaged sky-cua rendezvous"):
+        install_payload(
+            payload,
+            home=home,
+            env={"HOME": str(home), "XDG_DATA_HOME": str(physical_root.parent)},
+            configure_hosts=False,
+        )
+
+    assert (public_root / "keep.txt").read_text(encoding="utf-8") == "user-owned\n"
+    assert not physical_root.exists()
+
+
 def _seed_opencode_config(home: Path, *, body: str) -> Path:
     config_dir = home / ".config/opencode"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -864,7 +1191,7 @@ def test_install_rewrites_existing_opencode_config_to_flat_root(
     }
 
     report = install_payload(payload, home=home, env=env, configure_hosts=False)
-    install_root = Path(str(report["install_root"]))
+    public_root = Path(str(report["public_root"]))
 
     new_text = config_path.read_text(encoding="utf-8")
     assert "components/core-linux-x64" not in new_text
@@ -879,11 +1206,11 @@ def test_install_rewrites_existing_opencode_config_to_flat_root(
 
     sky_cua = new_parsed["mcp"]["sky_cua"]
     assert sky_cua["type"] == "local"
-    assert sky_cua["command"] == [str(install_root / "bin/sky-cua-client"), "mcp"]
-    assert sky_cua["cwd"] == str(install_root)
-    assert sky_cua["environment"]["SKY_CUA_REPO_ROOT"] == str(install_root)
-    assert sky_cua["environment"]["SKY_CUA_RELEASE_ROOT"] == str(install_root)
-    assert sky_cua["environment"]["SKY_CUA_DOCUMENTATION_ROOT"] == str(install_root / "docs")
+    assert sky_cua["command"] == [str(public_root / "bin/sky-cua-client"), "mcp"]
+    assert sky_cua["cwd"] == str(public_root)
+    assert sky_cua["environment"]["SKY_CUA_REPO_ROOT"] == str(public_root)
+    assert sky_cua["environment"]["SKY_CUA_RELEASE_ROOT"] == str(public_root)
+    assert sky_cua["environment"]["SKY_CUA_DOCUMENTATION_ROOT"] == str(public_root / "docs")
     assert (
         sky_cua["environment"]["SKY_CUA_CODEX_BROWSER_SOCKET_PATH"]
         == "/run/user/1000/sky-cua/codex-browser.sock"
@@ -894,17 +1221,17 @@ def test_install_rewrites_existing_opencode_config_to_flat_root(
     assert sky_cua["environment"]["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/1000/bus"
 
     node_repl = new_parsed["mcp"]["node_repl"]
-    assert node_repl["command"] == [str(install_root / "bin/node_repl")]
-    assert node_repl["environment"]["CODEX_NODE_REPL_PATH"] == str(install_root / "bin/node_repl")
-    assert node_repl["environment"]["NODE_REPL_NODE_PATH"] == str(install_root / "bin/node")
+    assert node_repl["command"] == [str(public_root / "bin/node_repl")]
+    assert node_repl["environment"]["CODEX_NODE_REPL_PATH"] == str(public_root / "bin/node_repl")
+    assert node_repl["environment"]["NODE_REPL_NODE_PATH"] == str(public_root / "bin/node")
     assert node_repl["environment"]["NODE_REPL_NODE_MODULE_DIRS"] == str(
-        install_root / "lib/node_modules"
+        public_root / "lib/node_modules"
     )
     assert node_repl["environment"]["PLAYWRIGHT_BROWSERS_PATH"] == str(
-        install_root / "share/playwright"
+        public_root / "share/playwright"
     )
     assert "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S" not in node_repl["environment"]
-    assert node_repl["environment"]["SKY_CUA_REPO_ROOT"] == str(install_root)
+    assert node_repl["environment"]["SKY_CUA_REPO_ROOT"] == str(public_root)
 
     opencode = cast("dict[str, object]", report["opencode_config"])
     assert opencode["status"] == "updated"
@@ -977,7 +1304,7 @@ def test_install_opencode_drops_jsonc_comments_but_keeps_user_keys_on_first_writ
     env = {"HOME": str(home), "XDG_DATA_HOME": str(tmp_path / "xdg-data")}
 
     report = install_payload(payload, home=home, env=env, configure_hosts=False)
-    install_root = Path(str(report["install_root"]))
+    public_root = Path(str(report["public_root"]))
 
     new_parsed = json.loads(config_path.read_text(encoding="utf-8"))
     assert new_parsed["model"] == "opencode-go/minimax-m3"
@@ -986,7 +1313,7 @@ def test_install_opencode_drops_jsonc_comments_but_keeps_user_keys_on_first_writ
 
     sky_cua = new_parsed["mcp"]["sky_cua"]
     assert sky_cua["type"] == "local"
-    assert sky_cua["command"] == [str(install_root / "bin/sky-cua-client"), "mcp"]
+    assert sky_cua["command"] == [str(public_root / "bin/sky-cua-client"), "mcp"]
     assert sky_cua["enabled"] is True
     assert sky_cua["timeout"] == 30_000
     node_repl = new_parsed["mcp"]["node_repl"]

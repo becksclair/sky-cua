@@ -91,11 +91,13 @@ repeat builds reuse precompiled artifacts: `dist/plugin/sky-cua`,
 `dist/sky-cua-linux-x64-glibc.tar.gz`. The payload contains only the latest
 bundled Chrome extension version.
 
-Install replaces the fixed root `${XDG_DATA_HOME:-~/.local/share}/sky-cua` and
-projects stable launchers, native-host manifests, skills, and detected consumer
-registrations from that root. There are no generations, `current` selector,
-rollback operation, or hash-selected install arguments. Extracted artifacts
-use the same `python3 install.py install` command. Details in
+Install replaces the physical root `${XDG_DATA_HOME:-~/.local/share}/sky-cua`.
+The stable consumer ABI is always `~/.local/share/sky-cua`; when custom XDG
+storage differs, that path is a single rendezvous symlink to the physical tree.
+Launchers, native-host manifests, skills, and detected consumer registrations
+all use the stable path. There are no generations, `current` selector, rollback
+operation, or hash-selected install arguments. Extracted artifacts use the same
+`python3 install.py install` command. Details in
 [`docs/features/one-shot-installer.md`](docs/features/one-shot-installer.md)
 and [`docs/features/release-package.md`](docs/features/release-package.md).
 
@@ -256,6 +258,12 @@ chosen by retargeting the compat root, so Codex never sees duplicate
 `computer-use` MCP servers. Deploys preserve already-staged binaries for other
 platforms, so rebuilding on Linux does not delete Windows `.exe` binaries from
 the local payload and vice versa.
+
+When the fast development loop also needs refreshed shared skill text, run
+`python3 scripts/sync_agent_skills.py`. Its default mode copies the checkout
+skills behind `~/.local/share/sky-cua/skills` and leaves the portable
+`~/.agents/skills` links stable. Direct links from the shared catalog to a
+checkout require the explicit `--checkout-links` development opt-in.
 
 `python3 install.py build` emits one complete standalone payload and
 `dist/sky-cua-linux-x64-glibc.tar.gz`. `python3 install.py install` replaces
