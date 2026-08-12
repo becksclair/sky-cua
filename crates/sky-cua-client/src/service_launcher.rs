@@ -102,8 +102,8 @@ impl ServiceClient {
                 let handle = IsolatedDesktopHandle::ensure(&cfg).with_context(|| {
                     "isolated desktop was requested (via [isolated_desktop] or \
                      SKY_CUA_ISOLATED_DESKTOP) but could not be established; refusing \
-                     to fall back to the user's live desktop. Ensure xpra, openbox, and \
-                     xdotool are installed and a display is reachable"
+                     to fall back to the user's live desktop. Ensure xpra, openbox, \
+                     xdotool, and at-spi2-core are installed and a display is reachable"
                 })?;
                 // Redirect every socket probe (including the call() re-probe)
                 // at the isolated daemon for this client's lifetime. The
@@ -560,8 +560,9 @@ impl ServiceClient {
 
         // Apply the isolated-desktop sandbox env LAST so it wins over both the
         // repaired desktop vars and the socket env: DISPLAY=:N, XDG_SESSION_TYPE=x11,
-        // QT_QPA_PLATFORM=xcb, GDK_BACKEND=x11, DBUS_SESSION_BUS_ADDRESS, the
-        // isolated socket, and WAYLAND_DISPLAY removed. call()->spawn_service
+        // QT_QPA_PLATFORM=xcb, GDK_BACKEND=x11, DBUS_SESSION_BUS_ADDRESS,
+        // NO_AT_BRIDGE=0, ACCESSIBILITY_ENABLED=1, the isolated socket, and
+        // WAYLAND_DISPLAY / stale AT_SPI_BUS_ADDRESS removed. call()->spawn_service
         // reuses self.isolated, so re-spawns stay sandboxed without re-ensuring xpra.
         #[cfg(unix)]
         if let Some(handle) = self.isolated.as_ref() {

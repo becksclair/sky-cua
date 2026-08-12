@@ -17,6 +17,9 @@
 //! xpra 6.4.4). A client-owned `dbus-daemon` fallback exists for hosts where
 //! that field is absent.
 
+#[cfg(target_os = "linux")]
+mod atspi;
+mod lifecycle_lease;
 mod owned_bus;
 mod probe;
 
@@ -32,6 +35,9 @@ use sky_cua_platform::config::{
 
 // The client-owned sandbox-bus fallback (spawn/persist/recover/reap) lives in its
 // own submodule; the parent drives it from `ensure`/`stop`.
+#[cfg(target_os = "linux")]
+use atspi::{ensure_session as ensure_atspi_session, terminate_session as terminate_atspi_session};
+use lifecycle_lease::IsolatedDesktopLifecycleLease;
 use owned_bus::{
     persist_owned_bus, reap_persisted_owned_bus, recover_owned_bus, start_owned_session_bus,
 };
@@ -109,6 +115,7 @@ impl IsolatedDesktopHandle {
         let display = resolve_display(&cfg.display)?;
         let display_number = parse_display_number(&display)
             .ok_or_else(|| anyhow!("invalid isolated desktop display string: {display}"))?;
+        let _lifecycle_lease = IsolatedDesktopLifecycleLease::acquire(display_number)?;
         let socket_path = isolated_socket_path(display_number)?;
 
         // Size the virtual display. An explicit `"<w>x<h>"` is used verbatim;
@@ -142,6 +149,18 @@ impl IsolatedDesktopHandle {
             // (as `status()` does) so the settle budget is not spun waiting for it
             // to re-reach `cfg.resolution` when the live mode and config differ.
             let geometry = read_settled_geometry(&display, None)?;
+            #[cfg(target_os = "linux")]
+            if let Err(error) =
+                ensure_atspi_session(&display, &dbus_address, &xauthority, display_number)
+                    .and_then(|()| verify_xpra_after_atspi_bootstrap(&display))
+            {
+                terminate_atspi_session(display_number);
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to bootstrap the private AT-SPI registry for reused xpra session {display}"
+                    )
+                });
+            }
             // This handle reuses, but does not own, the bus: reaping stays with
             // session teardown via the persisted record.
             return Ok(Self {
@@ -171,15 +190,44 @@ impl IsolatedDesktopHandle {
             };
 
         // A client-owned sandbox bus uses a non-deterministic address held only in
-        // this process. Persist its address and pid so a later client can recover
-        // it on reuse (xpra never reports it) and teardown can reap it. The xpra-
-        // provided bus needs no record — it is re-read from `xpra info` on reuse.
-        // Dropping `bus_child` here does NOT kill the daemon (std `Child` does not
-        // kill on drop); the bus survives as a session-scoped process, reaped on
-        // teardown via the persisted record.
+        // this process. Persist its address and pid before AT-SPI bootstrap so a
+        // failed bootstrap can reap it through the normal session-owned path. The
+        // xpra-provided bus needs no record — it is re-read from `xpra info` on
+        // reuse.
         if owns_bus && let Some(pid) = bus_child.as_ref().map(Child::id) {
             persist_owned_bus(display_number, &dbus_address, pid);
         }
+
+        // AT-SPI is isolated-desktop readiness, not a daemon-side repair. Bring
+        // up org.a11y.Bus and a responsive registry on the private session bus
+        // before returning a handle, so neither the service nor an application it
+        // launches can race an uninitialized accessibility session. The host
+        // repair path deliberately rejects this non-host bus.
+        #[cfg(target_os = "linux")]
+        if let Err(error) =
+            ensure_atspi_session(&display, &dbus_address, &xauthority, display_number)
+                .and_then(|()| verify_xpra_after_atspi_bootstrap(&display))
+        {
+            terminate_atspi_session(display_number);
+            if owns_bus {
+                reap_persisted_owned_bus(display_number);
+                if let Some(mut child) = bus_child {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+            let _ = stop_xpra_desktop(&display);
+            remove_stale_display_lock(&display);
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to bootstrap the private AT-SPI registry for xpra session {display}"
+                )
+            });
+        }
+
+        // Dropping `bus_child` here does NOT kill the daemon (std `Child` does not
+        // kill on drop); the bus survives as a session-scoped process, reaped on
+        // teardown via the persisted record.
         drop(bus_child);
 
         Ok(Self {
@@ -225,8 +273,9 @@ impl IsolatedDesktopHandle {
     }
 
     /// Environment variables to **remove** on the isolated daemon. Clearing
-    /// `WAYLAND_DISPLAY` keeps toolkit apps from preferring Wayland and
-    /// escaping the sandbox.
+    /// `WAYLAND_DISPLAY` keeps toolkit apps from preferring Wayland and escaping
+    /// the sandbox; clearing `AT_SPI_BUS_ADDRESS` prevents an inherited host-bus
+    /// override from bypassing discovery through the private session bus.
     pub fn removed_env(&self) -> Vec<&'static str> {
         removed_env()
     }
@@ -299,21 +348,16 @@ impl IsolatedDesktopHandle {
     /// Teardown filters strictly by the known display number so it can never
     /// reap the user's real session.
     pub fn stop(&self) -> Result<()> {
-        stop_xpra_desktop(&self.display)?;
-
-        // Session teardown reaps a client-owned sandbox bus — whether this handle
-        // created it or reused one an earlier client persisted — via its recorded
-        // pid, then drops the record. (A no-op when xpra provided the bus.)
         if let Some(number) = parse_display_number(&self.display) {
-            reap_persisted_owned_bus(number);
+            let _lifecycle_lease = IsolatedDesktopLifecycleLease::acquire(number)?;
+            // Verify and terminate the exact private AT-SPI owners while their
+            // buses are still reachable. This is a no-op for older sessions that
+            // have no persisted AT-SPI ownership record.
+            #[cfg(target_os = "linux")]
+            terminate_atspi_session(number);
+            return stop_locked(&self.display, number, &self.socket_path);
         }
-
-        // Reap the isolated daemon dedicated to this socket so an explicit
-        // teardown (and the ephemeral-shutdown path that calls this) leaves no
-        // orphan service pointing at the now-dead display.
-        terminate_isolated_daemon(&self.socket_path);
-        remove_stale_display_lock(&self.display);
-        Ok(())
+        stop_xpra_desktop(&self.display)
     }
 }
 
@@ -381,20 +425,37 @@ pub fn status(cfg: &ResolvedIsolatedDesktop) -> Result<IsolatedDesktopStatus> {
 /// display number, so it can never touch the user's real session.
 pub fn stop(cfg: &ResolvedIsolatedDesktop) -> Result<String> {
     let display = resolve_display(&cfg.display)?;
-    stop_xpra_desktop(&display)?;
     if let Some(number) = parse_display_number(&display) {
-        // The isolated daemon persists on its own socket and would otherwise
-        // linger pointing at the stopped display; reap it when we can resolve its
-        // socket.
-        if let Ok(socket_path) = isolated_socket_path(number) {
-            terminate_isolated_daemon(&socket_path);
-        }
-        // Reap a persisted client-owned sandbox bus (and drop its record); this
-        // handle-less path could not previously reach a client-owned bus.
-        reap_persisted_owned_bus(number);
+        let _lifecycle_lease = IsolatedDesktopLifecycleLease::acquire(number)?;
+        #[cfg(target_os = "linux")]
+        terminate_atspi_session(number);
+        let socket_path = isolated_socket_path(number)?;
+        stop_locked(&display, number, &socket_path)?;
+        return Ok(display);
     }
+    stop_xpra_desktop(&display)?;
     remove_stale_display_lock(&display);
     Ok(display)
+}
+
+/// Finish display teardown while the caller holds the per-display lifecycle
+/// lease. AT-SPI termination intentionally happens in the caller first, while
+/// both private buses are reachable.
+fn stop_locked(display: &str, display_number: u32, socket_path: &Path) -> Result<()> {
+    stop_xpra_desktop(display)?;
+    reap_persisted_owned_bus(display_number);
+    terminate_isolated_daemon(socket_path);
+    remove_stale_display_lock(display);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn verify_xpra_after_atspi_bootstrap(display: &str) -> Result<()> {
+    if xpra_session_is_healthy(display)? {
+        Ok(())
+    } else {
+        bail!("xpra session {display} stopped during private AT-SPI bootstrap")
+    }
 }
 
 /// Build the daemon spawn environment for the given display, sandbox bus, and
@@ -411,6 +472,8 @@ fn build_spawn_env(
         ("XDG_SESSION_TYPE".to_string(), "x11".to_string()),
         ("QT_QPA_PLATFORM".to_string(), "xcb".to_string()),
         ("GDK_BACKEND".to_string(), "x11".to_string()),
+        ("NO_AT_BRIDGE".to_string(), "0".to_string()),
+        ("ACCESSIBILITY_ENABLED".to_string(), "1".to_string()),
         (
             "DBUS_SESSION_BUS_ADDRESS".to_string(),
             dbus_address.to_string(),
@@ -429,7 +492,7 @@ fn build_spawn_env(
 
 /// Environment variables to remove on the isolated daemon.
 fn removed_env() -> Vec<&'static str> {
-    vec!["WAYLAND_DISPLAY"]
+    vec!["WAYLAND_DISPLAY", "AT_SPI_BUS_ADDRESS"]
 }
 
 /// Resolve a configured display string to a concrete `":N"`. The literal
@@ -854,180 +917,4 @@ fn terminate_isolated_daemon(socket_path: &Path) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    // The owned-bus helpers moved to `owned_bus`; these tests stay here because
-    // they share `ENV_LOCK` with the socket-path tests (which also mutate
-    // `XDG_RUNTIME_DIR`). `persist_owned_bus`/`recover_owned_bus` arrive via the
-    // parent's `use owned_bus::…`; import the remaining test-only helpers here.
-    use super::owned_bus::{pid_is_dbus_daemon, read_owned_bus, remove_owned_bus_state};
-
-    #[test]
-    fn isolated_desktop_builds_spawn_env() {
-        let env = build_spawn_env(
-            ":100",
-            "unix:path=/tmp/dbus-abc,guid=deadbeef",
-            "/run/user/1000/xpra/Xauthority",
-            Path::new("/run/user/1000/sky-cua/service-isolated-100.sock"),
-        );
-        let lookup = |key: &str| {
-            env.iter()
-                .find(|(candidate, _)| candidate == key)
-                .map(|(_, value)| value.as_str())
-        };
-        assert_eq!(lookup("DISPLAY"), Some(":100"));
-        assert_eq!(lookup("XDG_SESSION_TYPE"), Some("x11"));
-        assert_eq!(lookup("QT_QPA_PLATFORM"), Some("xcb"));
-        assert_eq!(lookup("GDK_BACKEND"), Some("x11"));
-        assert_eq!(
-            lookup("DBUS_SESSION_BUS_ADDRESS"),
-            Some("unix:path=/tmp/dbus-abc,guid=deadbeef")
-        );
-        assert_eq!(lookup("XAUTHORITY"), Some("/run/user/1000/xpra/Xauthority"));
-        assert_eq!(
-            lookup("SKY_CUA_SERVICE_SOCKET_PATH"),
-            Some("/run/user/1000/sky-cua/service-isolated-100.sock")
-        );
-        assert_eq!(
-            lookup(CODEX_BROWSER_SOCKET_PATH_ENV),
-            Some("/run/user/1000/sky-cua/service-isolated-100.codex-browser.sock")
-        );
-    }
-
-    #[test]
-    fn isolated_desktop_removes_only_wayland_display_env() {
-        assert_eq!(removed_env(), vec!["WAYLAND_DISPLAY"]);
-    }
-
-    #[test]
-    fn isolated_desktop_socket_path_follows_runtime_dir_convention() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let old = std::env::var_os("XDG_RUNTIME_DIR");
-        // SAFETY: serialized by ENV_LOCK; restored below.
-        unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000") };
-        let path = isolated_socket_path(100).expect("socket path resolves");
-        match old {
-            Some(value) => unsafe { std::env::set_var("XDG_RUNTIME_DIR", value) },
-            None => unsafe { std::env::remove_var("XDG_RUNTIME_DIR") },
-        }
-        assert_eq!(
-            path,
-            PathBuf::from("/run/user/1000/sky-cua/service-isolated-100.sock")
-        );
-    }
-
-    #[test]
-    fn isolated_desktop_socket_path_requires_runtime_dir() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let old = std::env::var_os("XDG_RUNTIME_DIR");
-        // SAFETY: serialized by ENV_LOCK; restored below.
-        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
-        let result = isolated_socket_path(100);
-        if let Some(value) = old {
-            // SAFETY: serialized by ENV_LOCK; restores the pre-test value.
-            unsafe { std::env::set_var("XDG_RUNTIME_DIR", value) }
-        }
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn owned_bus_state_round_trips_and_rejects_malformed() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let old = std::env::var_os("XDG_RUNTIME_DIR");
-        let temp =
-            std::env::temp_dir().join(format!("sky-cua-owned-bus-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&temp);
-        // SAFETY: serialized by ENV_LOCK; restored below.
-        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &temp) };
-
-        assert_eq!(read_owned_bus(123), None);
-        persist_owned_bus(123, "unix:path=/run/sandbox-bus,guid=abc", 4242);
-        assert_eq!(
-            read_owned_bus(123),
-            Some(("unix:path=/run/sandbox-bus,guid=abc".to_string(), 4242))
-        );
-        // An init/invalid owner pid is rejected as malformed.
-        persist_owned_bus(124, "unix:path=/run/x", 1);
-        assert_eq!(read_owned_bus(124), None);
-        remove_owned_bus_state(123);
-        assert_eq!(read_owned_bus(123), None);
-
-        let _ = std::fs::remove_dir_all(&temp);
-        match old {
-            Some(value) => unsafe { std::env::set_var("XDG_RUNTIME_DIR", value) },
-            None => unsafe { std::env::remove_var("XDG_RUNTIME_DIR") },
-        }
-    }
-
-    #[test]
-    fn recover_owned_bus_drops_a_stale_record() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let old = std::env::var_os("XDG_RUNTIME_DIR");
-        let temp =
-            std::env::temp_dir().join(format!("sky-cua-stale-bus-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&temp);
-        // SAFETY: serialized by ENV_LOCK; restored below.
-        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &temp) };
-
-        // Persist a record whose pid is THIS process — not a `dbus-daemon`, so the
-        // recorded bus is treated as dead: `recover_owned_bus` returns `None` and
-        // removes the stale record so the caller restarts rather than reusing it.
-        persist_owned_bus(200, "unix:path=/run/dead-bus", std::process::id());
-        assert_eq!(recover_owned_bus(200), None);
-        assert_eq!(read_owned_bus(200), None);
-
-        let _ = std::fs::remove_dir_all(&temp);
-        match old {
-            Some(value) => unsafe { std::env::set_var("XDG_RUNTIME_DIR", value) },
-            None => unsafe { std::env::remove_var("XDG_RUNTIME_DIR") },
-        }
-    }
-
-    #[test]
-    fn pid_is_dbus_daemon_rejects_non_dbus_processes() {
-        // This test binary is not a dbus-daemon; pid 1 (init/systemd) is not one;
-        // a very high pid almost certainly does not exist. None should match.
-        assert!(!pid_is_dbus_daemon(std::process::id()));
-        assert!(!pid_is_dbus_daemon(1));
-        assert!(!pid_is_dbus_daemon(u32::MAX - 1));
-    }
-
-    #[test]
-    fn parse_largest_connected_mode_picks_biggest_and_skips_disconnected() {
-        let sample = "\
-Screen 0: minimum 320 x 200, current 4480 x 1440, maximum 16384 x 16384
-DP-3 connected primary 2560x1440+0+0 (normal left inverted right x axis y axis) 597mm x 336mm
-   2560x1440    179.94*+
-HDMI-1 connected 1920x1080+2560+0 (normal left inverted right x axis y axis) 510mm x 290mm
-   1920x1080     60.00*+
-DP-1 disconnected (normal left inverted right x axis y axis)
-";
-        assert_eq!(parse_largest_connected_mode(sample), Some((2560, 1440)));
-    }
-
-    #[test]
-    fn parse_largest_connected_mode_none_without_a_connected_output() {
-        let sample = "Screen 0: current 0 x 0\nDP-1 disconnected (normal)\n";
-        assert_eq!(parse_largest_connected_mode(sample), None);
-    }
-
-    #[test]
-    fn three_quarter_even_scales_and_floors_to_even() {
-        assert_eq!(three_quarter_even(2560, 1440), (1920, 1080));
-        assert_eq!(three_quarter_even(3840, 2160), (2880, 1620));
-        // 1366*3/4 = 1024 (even); 766*3/4 floors 574.5 -> 574 (even).
-        assert_eq!(three_quarter_even(1366, 766), (1024, 574));
-        // 1362*3/4 floors to 1021 (odd) -> 1020; 768*3/4 = 576 (even).
-        assert_eq!(three_quarter_even(1362, 768), (1020, 576));
-    }
-
-    #[test]
-    fn resolve_resolution_passes_explicit_values_through() {
-        assert_eq!(resolve_resolution("1280x800"), "1280x800");
-        assert_eq!(resolve_resolution("2560x1440"), "2560x1440");
-    }
-
-    /// Serializes the env-mutating socket-path tests so they cannot race on
-    /// `XDG_RUNTIME_DIR` under the parallel test runner.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-}
+mod tests;

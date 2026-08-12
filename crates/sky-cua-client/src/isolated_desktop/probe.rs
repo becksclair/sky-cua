@@ -10,6 +10,9 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, bail};
 
+pub(super) const AT_SPI_BUS_LAUNCHER_PATH: &str = "/usr/lib/at-spi-bus-launcher";
+pub(super) const AT_SPI_REGISTRY_PATH: &str = "/usr/lib/at-spi2-registryd";
+
 /// xpra `info` key carrying the sandbox session-bus address under xpra's
 /// default dbus launch. Confirmed by the Milestone 1b spike.
 pub(super) const XPRA_INFO_DBUS_ADDRESS_KEY: &str = "dbus.env.DBUS_SESSION_BUS_ADDRESS";
@@ -39,7 +42,15 @@ impl std::fmt::Display for DisplayGeometry {
 /// generic spawn failure. The order is the dependency-check order in
 /// [`ensure_dependencies`].
 #[allow(dead_code)] // only reachable via the test-only `missing()` order assertion
-const REQUIRED_DEPENDENCIES: &[&str] = &["xpra", "openbox", "xdotool"];
+const REQUIRED_DEPENDENCIES: &[&str] = &[
+    "xpra",
+    "openbox",
+    "xdotool",
+    #[cfg(target_os = "linux")]
+    AT_SPI_BUS_LAUNCHER_PATH,
+    #[cfg(target_os = "linux")]
+    AT_SPI_REGISTRY_PATH,
+];
 
 /// Presence of the external binaries isolated mode depends on. Reported as
 /// structured fields (not prose) so a client learns the truth from the status
@@ -57,12 +68,16 @@ pub struct IsolatedDesktopDependencies {
     pub openbox: bool,
     /// `xdotool` (XTest pointer/keyboard injection and X11 window queries).
     pub xdotool: bool,
+    /// Fixed-path AT-SPI accessibility-bus launcher from `at-spi2-core`.
+    pub at_spi_bus_launcher: bool,
+    /// Fixed-path AT-SPI registry daemon from `at-spi2-core`.
+    pub at_spi_registry: bool,
 }
 
 impl IsolatedDesktopDependencies {
     /// Probe the host `PATH` for each required binary.
     pub fn probe() -> Self {
-        Self::from_lookup(command_on_path)
+        Self::from_lookup(dependency_present)
     }
 
     /// Pure constructor over a name-presence predicate, so the presence logic is
@@ -72,13 +87,24 @@ impl IsolatedDesktopDependencies {
             xpra: present("xpra"),
             openbox: present("openbox"),
             xdotool: present("xdotool"),
+            at_spi_bus_launcher: present(AT_SPI_BUS_LAUNCHER_PATH),
+            at_spi_registry: present(AT_SPI_REGISTRY_PATH),
         }
     }
 
     /// Whether every required binary is present.
     #[allow(dead_code)] // only reachable via the unit tests and the hidden `isolated-desktop` subcommand
     pub fn all_present(&self) -> bool {
-        self.xpra && self.openbox && self.xdotool
+        self.xpra && self.openbox && self.xdotool && {
+            #[cfg(target_os = "linux")]
+            {
+                self.at_spi_bus_launcher && self.at_spi_registry
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                true
+            }
+        }
     }
 
     /// The names of the missing required binaries, in [`REQUIRED_DEPENDENCIES`]
@@ -94,7 +120,29 @@ impl IsolatedDesktopDependencies {
         if !self.xdotool {
             missing.push("xdotool");
         }
+        #[cfg(target_os = "linux")]
+        {
+            if !self.at_spi_bus_launcher {
+                missing.push(AT_SPI_BUS_LAUNCHER_PATH);
+            }
+            if !self.at_spi_registry {
+                missing.push(AT_SPI_REGISTRY_PATH);
+            }
+        }
         missing
+    }
+}
+
+fn dependency_present(name: &str) -> bool {
+    if name.contains('/') {
+        std::fs::metadata(name)
+            .map(|metadata| {
+                use std::os::unix::fs::PermissionsExt as _;
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            })
+            .unwrap_or(false)
+    } else {
+        command_on_path(name)
     }
 }
 
@@ -117,9 +165,8 @@ pub(super) fn ensure_dependencies() -> Result<()> {
         return Ok(());
     }
     bail!(
-        "isolated desktop dependencies are missing: {}. Install {} and ensure \
-         they are on PATH",
-        missing.join(", "),
+        "isolated desktop dependencies are missing: {}. Install the packages \
+         providing them; command dependencies must be on PATH",
         missing.join(", "),
     );
 }
@@ -442,6 +489,8 @@ Found the following xpra sessions:
                 xpra: true,
                 openbox: true,
                 xdotool: true,
+                at_spi_bus_launcher: true,
+                at_spi_registry: true,
             }
         );
         assert!(all.all_present());
@@ -450,7 +499,7 @@ Found the following xpra sessions:
         // Nothing present: every required binary is reported missing in order.
         let none = IsolatedDesktopDependencies::from_lookup(|_| false);
         assert!(!none.all_present());
-        assert_eq!(none.missing(), vec!["xpra", "openbox", "xdotool"]);
+        assert_eq!(none.missing(), REQUIRED_DEPENDENCIES);
 
         // A single absent binary is named precisely.
         let no_xdotool = IsolatedDesktopDependencies::from_lookup(|name| name != "xdotool");
@@ -459,6 +508,30 @@ Found the following xpra sessions:
         assert!(no_xdotool.xpra);
         assert!(no_xdotool.openbox);
         assert!(!no_xdotool.xdotool);
+        assert!(no_xdotool.at_spi_bus_launcher);
+        assert!(no_xdotool.at_spi_registry);
+    }
+
+    #[test]
+    fn isolated_desktop_at_spi_dependency_gating_is_target_conditioned() {
+        let no_at_spi = IsolatedDesktopDependencies::from_lookup(|name| {
+            name != AT_SPI_BUS_LAUNCHER_PATH && name != AT_SPI_REGISTRY_PATH
+        });
+
+        #[cfg(target_os = "linux")]
+        {
+            assert!(!no_at_spi.all_present());
+            assert_eq!(
+                no_at_spi.missing(),
+                vec![AT_SPI_BUS_LAUNCHER_PATH, AT_SPI_REGISTRY_PATH]
+            );
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            assert!(no_at_spi.all_present());
+            assert!(no_at_spi.missing().is_empty());
+        }
     }
 
     #[test]

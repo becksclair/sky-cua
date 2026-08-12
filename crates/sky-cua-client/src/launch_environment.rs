@@ -872,6 +872,8 @@ mod tests {
             ("XDG_SESSION_TYPE".to_string(), "x11".to_string()),
             ("QT_QPA_PLATFORM".to_string(), "xcb".to_string()),
             ("GDK_BACKEND".to_string(), "x11".to_string()),
+            ("NO_AT_BRIDGE".to_string(), "0".to_string()),
+            ("ACCESSIBILITY_ENABLED".to_string(), "1".to_string()),
             (
                 "DBUS_SESSION_BUS_ADDRESS".to_string(),
                 "unix:path=/tmp/dbus-sandbox".to_string(),
@@ -886,7 +888,7 @@ mod tests {
             ),
             ("WAYLAND_DISPLAY".to_string(), "wayland-0".to_string()),
         ];
-        let removed_env: &[&'static str] = &["WAYLAND_DISPLAY"];
+        let removed_env: &[&'static str] = &["WAYLAND_DISPLAY", "AT_SPI_BUS_ADDRESS"];
 
         let env = LaunchEnvironment::for_isolated_daemon(&spawn_env, removed_env);
 
@@ -906,6 +908,8 @@ mod tests {
             env.repaired_desktop_var("XAUTHORITY"),
             Some("/run/user/1000/xpra/Xauthority")
         );
+        assert_eq!(env.repaired_desktop_var("NO_AT_BRIDGE"), Some("0"));
+        assert_eq!(env.repaired_desktop_var("ACCESSIBILITY_ENABLED"), Some("1"));
 
         // WAYLAND_DISPLAY is removed on the daemon, so it must NOT become a
         // health expectation even though it is a graphical key — this exclusion

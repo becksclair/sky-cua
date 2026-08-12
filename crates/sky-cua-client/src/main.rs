@@ -146,6 +146,14 @@ fn run_isolated_desktop(args: &[String]) -> Result<ExitCode> {
             println!("dep_xpra={}", status.dependencies.xpra);
             println!("dep_openbox={}", status.dependencies.openbox);
             println!("dep_xdotool={}", status.dependencies.xdotool);
+            println!(
+                "dep_at_spi_bus_launcher={}",
+                status.dependencies.at_spi_bus_launcher
+            );
+            println!(
+                "dep_at_spi_registry={}",
+                status.dependencies.at_spi_registry
+            );
             Ok(ExitCode::SUCCESS)
         }
         Some("stop") => {
