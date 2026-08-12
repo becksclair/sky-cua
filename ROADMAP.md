@@ -17,6 +17,9 @@ Open boxes link to the active ExecPlan that owns the work.
         `isolated-xpra` VM smoke profile (proven 2026-07-07: VM profile green
         on COSMIC guest, live host-leak + MCP end-to-end re-proven on KDE
         host)
+  - [x] Private AT-SPI lifecycle (isolated launcher/registry bootstrap,
+        activation fallback, exact-owner persistence/reuse, and teardown;
+        live host proof 2026-08-12; full Arch testing-vm rerun pending)
 - [x] AT-SPI rich readback — [`docs/features/atspi-rich-readback.md`](docs/features/atspi-rich-readback.md)
 - [x] Detached session-env repair — [`docs/features/session-env-repair.md`](docs/features/session-env-repair.md)
   - [x] Add stripped-env repair to the curated VM runner profile set

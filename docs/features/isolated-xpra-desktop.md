@@ -30,15 +30,22 @@ re-run and stayed green on the KDE Wayland host: the gated
 (`unix:path=/tmp/dbus-...`), kcalc visible in the sandbox `observe`, host
 session untouched).
 
-Provisioning gap found during the VM run: the testing-vm provisioner does
-not yet install `xpra`, `xdotool`, or `xorg-xdpyinfo` into the guest, so the
-first `isolated-xpra` profile run needed a manual `pacman -Sy xpra xdotool
-xorg-xdpyinfo` before a `--skip-host-build` re-run could pass. Follow-up:
-add these packages to `scripts/testing-vm/` provisioning so the profile is
-green on a fresh guest without manual intervention. Separately, the guest's
-sshd and DHCP lease had died after a host suspend during this session
-(recovered via the qemu-guest-agent path: `systemctl restart sshd` plus a
-network bounce) — an environment quirk, not a profile defect.
+The private AT-SPI lifecycle was live-verified on the host on 2026-08-12 at
+`:93`. Activation was advertised but returned a remote user-unit failure; the
+guarded direct registry fallback succeeded. A second `ensure` preserved the
+exact launcher/registry PIDs and state (`registry_direct=true`), and KCalc
+registered as `kcalc` with role `application` and one child. `stop` removed both
+owner processes, the persisted ownership state, and the Xpra display. The
+enhanced `isolated-xpra` profile also passed locally on the host: Zenity was
+present only on `:131`, its application and window roots were readable through
+the private registry, its environment matched the sandbox identity, and stop
+left no display or AT-SPI state. The profile has not yet been rerun on the full
+Arch testing-vm.
+
+The provisioning gap found during the 2026-07-07 VM run is closed in the
+current provisioner: `at-spi2-core`, `xpra`, `xdotool`, `xorg-xdpyinfo`,
+Openbox, and Zenity are part of the guest package set. The old run still needed
+a manual package install because its guest image predated that change.
 
 ## Summary
 
@@ -119,12 +126,13 @@ lifetime.
 Hidden development/operations subcommand `sky-cua-client isolated-desktop
 {ensure|status|stop}`:
 
-- `ensure` brings the private desktop up idempotently and prints its display,
-  settled geometry, and viewer mode.
+- `ensure` brings the private desktop up idempotently, establishes private
+  AT-SPI readiness, and prints its display, settled geometry, and viewer mode.
 - `status` reports, without starting anything, whether the configured display is
   up, its geometry, the resolved selection (enabled/viewer/lifecycle), and the
-  presence of the required dependencies (`xpra`, `openbox`, `xdotool`) — all as
-  structured fields.
+  presence of the required dependencies (`xpra`, `openbox`, `xdotool`, the
+  AT-SPI bus launcher, and the AT-SPI registry daemon) — all as structured
+  fields.
 - `stop` tears the session down and removes a stale `/tmp/.X<N>-lock`.
 
 ## Behavior
@@ -194,6 +202,30 @@ filtered strictly by the known display number. A `display = "auto"` choice is
 persisted to `$XDG_RUNTIME_DIR/sky-cua/isolated-display` so later sessions reuse
 the same number.
 
+### Private AT-SPI lifecycle (Linux)
+
+Before `ensure` returns, the client starts
+`/usr/lib/at-spi-bus-launcher --launch-immediately` with the exact sandbox
+`DISPLAY`, `XAUTHORITY`, and private `DBUS_SESSION_BUS_ADDRESS`, plus
+`XDG_SESSION_TYPE=x11`, `NO_AT_BRIDGE=0`, and `ACCESSIBILITY_ENABLED=1`. It
+removes `WAYLAND_DISPLAY` and any inherited `AT_SPI_BUS_ADDRESS`, calls
+`org.a11y.Bus.GetAddress`, and attempts D-Bus activation of
+`org.a11y.atspi.Registry`. If activation reports a failure while the private
+bus/launcher ownership remains sound and the registry is unowned, it directly
+starts `/usr/lib/at-spi2-registryd --use-gnome-session` with the returned
+`AT_SPI_BUS_ADDRESS`. `GetRegisteredEvents` is the readiness probe.
+
+The launcher and registry are validated by exact executable, environment, PID,
+and process start-time identity. Compact owner state is persisted under
+`$XDG_RUNTIME_DIR/sky-cua/isolated-atspi-<N>.json`; exact session reuse
+preserves the direct-registry identity. A persistent per-display `flock` lease
+serializes Xpra/AT-SPI ensure and teardown across client processes, and ensure
+rechecks Xpra liveness after registry bootstrap. Teardown revalidates and
+terminates the registry, then the launcher, before stopping Xpra. The exact-owner
+record is removed only after teardown succeeds; an incomplete teardown retains
+it so a later ensure or stop can safely retry. This path never invokes the host
+systemd AT-SPI repair path, whose authority guard remains unchanged.
+
 ## Source paths
 
 - `crates/sky-cua-platform/src/config.rs` — `[isolated_desktop]` table, env
@@ -201,8 +233,18 @@ the same number.
   `resolve_isolated_desktop_selection` / `resolve_isolated_desktop`.
 - `crates/sky-cua-client/src/isolated_desktop.rs` — xpra lifecycle module:
   `IsolatedDesktopHandle` (`ensure`/`display`/`geometry`/`socket_path`/
-  `spawn_env`/`removed_env`/`launch_viewer`/`stop`), the module `status`/`stop`
-  helpers, dependency probing, and the geometry/`xpra list`/`xpra info` parsers.
+  `spawn_env`/`removed_env`/`launch_viewer`/`stop`), private AT-SPI integration,
+  the module `status`/`stop` helpers, dependency probing, and the
+  geometry/`xpra list`/`xpra info` parsers.
+- `crates/sky-cua-client/src/isolated_desktop/tests.rs` — focused xpra
+  lifecycle, sandbox-environment, socket, owned-bus, and geometry tests.
+- `crates/sky-cua-client/src/isolated_desktop/atspi.rs` — private launcher and
+  registry bootstrap, activation fallback, owner identity persistence/reuse,
+  and authority-checked teardown.
+- `crates/sky-cua-client/src/isolated_desktop/atspi/tests.rs` — focused
+  lifecycle, fallback, environment, identity, and state tests.
+- `crates/sky-cua-client/src/isolated_desktop/lifecycle_lease.rs` — persistent
+  per-display interprocess serialization for ensure/reuse/stop.
 - `crates/sky-cua-client/src/service_launcher.rs` — the spine: resolves the
   selection, ensures the handle, redirects the socket, applies the sandbox spawn
   env, launches the viewer, and honors the ephemeral lifecycle on shutdown.
@@ -228,11 +270,17 @@ the same number.
 - Config unit tests in `crates/sky-cua-platform/src/config.rs` cover the
   `[isolated_desktop]` precedence (env beats file beats default) and the
   viewer/lifecycle parsing and defaults.
-- xpra lifecycle unit tests in `crates/sky-cua-client/src/isolated_desktop.rs`
+- xpra lifecycle unit tests in
+  `crates/sky-cua-client/src/isolated_desktop/tests.rs`
   cover the free-display scan, `xpra list` live-display parsing, `xpra info`
   D-Bus-address parsing, `xdpyinfo` geometry parsing, resolution parsing, the
   spawn-env/removed-env recipe, the isolated socket-path convention, and
   dependency-presence reporting.
+- Private AT-SPI lifecycle tests in
+  `crates/sky-cua-client/src/isolated_desktop/atspi/tests.rs` cover the exact
+  child environment, activation success/fallback, readiness failure cleanup,
+  persistence-failure cleanup, independent teardown attempts, owner-environment
+  and generation checks, exact reuse, and compact state round-tripping.
 - `LaunchEnvironment::for_isolated_daemon` is covered by
   `for_isolated_daemon_scopes_health_to_sandbox_graphical_identity` in
   `crates/sky-cua-client/src/launch_environment.rs`.
@@ -258,13 +306,17 @@ the same number.
   same `default-members` caveat as `isolated_x11`.
 - VM smoke: an `isolated-xpra` profile for `scripts/run_gui_testing_vm_smoke.py`
   (modeled on `i3.sh`, wired into the registry, `run-profile.sh`, and the `all`
-  set) that brings the private desktop up, launches an app and captures it, and
-  asserts no host leak, exiting `67` when xpra is unavailable. Live-run
+  set) that brings the private desktop up, proves private registry readiness,
+  proves a second ensure preserves the exact persisted AT-SPI owner generations,
+  launches an app, checks its sandbox environment and (with Zenity) matches the
+  exact launched window through its AT-SPI application root, asserts no host
+  leak, and verifies the recorded owner generations exit during clean teardown;
+  it exits `67` when a required dependency is unavailable. Live-run
   2026-07-07 on the Arch testing-vm (COSMIC, `wayland-1`): green after
-  installing `xpra`/`xdotool`/`xorg-xdpyinfo` into the guest (the provisioner
-  does not yet install them — a follow-up for `scripts/testing-vm/`
-  provisioning); confirmed sandbox-up, app-present-on-sandbox,
-  app-absent-from-host, and clean-stop assertions all passed.
+  installing `xpra`/`xdotool`/`xorg-xdpyinfo` into that older guest; confirmed
+  sandbox-up, app-present-on-sandbox, app-absent-from-host, and clean-stop
+  assertions all passed. The enhanced profile passed locally on the host on
+  2026-08-12; its full Arch testing-vm rerun remains pending.
 
 ## Known limitations
 
@@ -275,16 +327,15 @@ the same number.
   move through the read-only viewer.
 - Not a security sandbox: same OS user, filesystem, network, and system D-Bus
   access. The boundary is non-interference, not containment.
-- Requires `xpra` (6.x), `openbox`, and `xdotool` on the host, plus GStreamer with
-  the `ximagesrc` and `pngenc` elements for capture. Missing dependencies fail
-  closed with a structured, naming error.
-- Host live-proof is complete (leak guard + headline `desktop_launch_app`
-  end-to-end, KDE Wayland, 2026-06-30, re-proven 2026-07-07). The
-  `isolated-xpra` VM smoke profile is also live-proven (2026-07-07, Arch
-  testing-vm, COSMIC guest). The remaining gap is operational, not a proof
-  gap: the testing-vm provisioner does not yet install `xpra`/`xdotool`/
-  `xorg-xdpyinfo`, so a fresh guest needs a manual package install before the
-  profile passes — tracked as a `scripts/testing-vm/` provisioning follow-up.
+- Requires `xpra` (6.x), `openbox`, `xdotool`, and `at-spi2-core` on the host,
+  plus GStreamer with the `ximagesrc` and `pngenc` elements for capture. Missing
+  dependencies fail closed with a naming error.
+- Host live-proof is complete for both the earlier Xpra isolation lane
+  (2026-06-30 and 2026-07-07) and the private AT-SPI lifecycle (2026-08-12).
+  The 2026-07-07 Arch testing-vm run proves the earlier isolated-xpra lane;
+  the enhanced profile's full rerun, including its AT-SPI checks, is pending.
+  The current testing-vm provisioner includes the required Xpra, X11, AT-SPI,
+  and Zenity packages.
 - Ephemeral teardown reaps the xpra session and the isolated daemon on the
   normal and pipe-error MCP exits, but not on `SIGKILL`/panic; a hard-killed
   ephemeral session leaves the xpra server, recoverable via
