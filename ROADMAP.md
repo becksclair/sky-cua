@@ -40,9 +40,16 @@ Open boxes link to the active ExecPlan that owns the work.
   - [x] Local KWin cursor shim deploy/update tooling (`install_kwin_effect.py`, `--kwin-effect` deploy flags, rotating generated ids, BuildId convergence — tooling never restarts KWin)
   - [x] Unpatched COSMIC transparent-Xcursor mode (VM-only fallback)
   - [ ] Long-term unpatched COSMIC path or accepted upstream integration
-- [ ] Wayland fallback vision anchors — [`plans/wayland_fallback_vision_anchors.md`](plans/wayland_fallback_vision_anchors.md)
-  - [ ] Choose a current fallback-only target app to replace the retired TIDAL flow
-  - [ ] Live agent-loop or app-server proof on the new target
+- [x] Wayland fallback vision anchor — one honest native-window anchor with no
+      invented semantics, live-proven through the mpv agent-loop fixture —
+      [`docs/features/wayland-fallback-vision-anchor.md`](docs/features/wayland-fallback-vision-anchor.md)
+- [x] Service desktop request lane — cached nonblocking health capabilities,
+      single background refresh/repair, serialized desktop work, bounded
+      read-only deadlines, and watchdog-owned cursor cleanup —
+      [`docs/features/service-desktop-request-lane.md`](docs/features/service-desktop-request-lane.md)
+- [x] Linux portal and EIS resilience — session cleanup, worker/device recovery,
+      XKB modifier fidelity, and compositor-cache repair —
+      [`docs/features/linux-portal-resilience.md`](docs/features/linux-portal-resilience.md)
 - [x] CDUL-inspired Linux enhancements (terminal `command_line` fidelity,
       granular input doctor diagnostics, AT-SPI app-root prefiltering,
       GNOME setup-message polish) —
