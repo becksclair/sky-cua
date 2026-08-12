@@ -19,6 +19,7 @@ import live_desktop_smoke
 import live_fallback_anchor_smoke
 import live_openclaw_mcp_smoke
 import live_portal_downgrade_smoke
+import live_targeted_screenshot_smoke
 import live_wayland_pointer_smoke
 from _codex_exec import DEFAULT_MODEL, DEFAULT_REASONING_EFFORT
 from _pointer_geometry import adjusted_origin_for_visible_monitor
@@ -75,6 +76,66 @@ def test_scroll_region_prefers_visible_scroll_pane_over_oversized_content() -> N
         }
     )
     assert selected["element_index"] == 20
+
+
+def test_live_desktop_requires_top_level_appshot_capture_provenance() -> None:
+    live_desktop_smoke.require_live_wayland_image_backend(
+        {
+            "capture_backend": "portal_pipe_wire",
+            "image_backend": "portal_pipe_wire",
+            "diagnostics": [],
+        },
+        "fixture",
+    )
+
+    with pytest.raises(RuntimeError, match="actual image backend"):
+        live_desktop_smoke.require_live_wayland_image_backend(
+            {"capture": {"image_backend": "portal_pipe_wire"}, "diagnostics": []},
+            "legacy fixture",
+        )
+
+
+def test_live_desktop_normalizes_canonical_appshot_without_losing_fences() -> None:
+    normalized = live_desktop_smoke.normalized_appshot(
+        {
+            "appshot_id": "appshot-1",
+            "action_snapshot": {"snapshot_id": "snapshot-1"},
+            "semantic_projection": {
+                "elements": [{"element_index": 0}],
+                "focused_app": {"name": "fixture"},
+                "accessibility": {"backend": "atspi"},
+            },
+            "image_backend": "portal_pipe_wire",
+        }
+    )
+
+    assert normalized["elements"] == [{"element_index": 0}]
+    assert normalized["focused_app"] == {"name": "fixture"}
+    assert normalized["accessibility"] == {"backend": "atspi"}
+    assert normalized["snapshot_id"] == "snapshot-1"
+    assert normalized["appshot_id"] == "appshot-1"
+    assert live_desktop_smoke.appshot_action_fences(normalized) == {
+        "appshot_id": "appshot-1",
+        "snapshot_id": "snapshot-1",
+    }
+
+
+def test_targeted_screenshot_click_carries_both_action_fences() -> None:
+    arguments = live_targeted_screenshot_smoke.targeted_click_arguments(
+        {
+            "appshot_id": "appshot-1",
+            "action_snapshot": {"snapshot_id": "snapshot-1"},
+        },
+        {"pixel_size": {"width": 1000, "height": 500}},
+    )
+
+    assert arguments == {
+        "operation": "click",
+        "appshot_id": "appshot-1",
+        "snapshot_id": "snapshot-1",
+        "x": 730.0,
+        "y": 407.5,
+    }
 
 
 def test_mpv_launch_argv_idles_with_distinctive_title() -> None:
@@ -448,6 +509,7 @@ def test_pointer_fixture_keeps_origin_when_allocation_fits_monitor() -> None:
 
 def test_x11_click_target_falls_back_to_native_root_window() -> None:
     snapshot = {
+        "appshot_id": "appshot-root-only",
         "snapshot_id": "snapshot-root-only",
         "elements": [
             {
@@ -464,6 +526,8 @@ def test_x11_click_target_falls_back_to_native_root_window() -> None:
 
     assert target["element_index"] == 0
     assert live_desktop_smoke.x11_click_arguments(snapshot, target) == {
+        "appshot_id": "appshot-root-only",
+        "snapshot_id": "snapshot-root-only",
         "x": 959.0,
         "y": 565.52,
     }
@@ -471,6 +535,7 @@ def test_x11_click_target_falls_back_to_native_root_window() -> None:
 
 def test_x11_click_target_prefers_lowest_leaf_region_when_available() -> None:
     snapshot = {
+        "appshot_id": "appshot-with-leaves",
         "snapshot_id": "snapshot-with-leaves",
         "elements": [
             {
@@ -499,6 +564,7 @@ def test_x11_click_target_prefers_lowest_leaf_region_when_available() -> None:
 
     assert target["element_index"] == 2
     assert live_desktop_smoke.x11_click_arguments(snapshot, target) == {
+        "appshot_id": "appshot-with-leaves",
         "snapshot_id": "snapshot-with-leaves",
         "element_index": 2,
     }

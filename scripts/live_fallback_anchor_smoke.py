@@ -12,7 +12,7 @@ one ``window``-role element carrying a ``vision_anchor`` state flag, a
 description pointing the model at the screenshot + ``snapshot_id`` pixel
 path, and no fabricated children. This fixture proves that fallback path end
 to end through the installed runtime and a real agent CLI, per
-``plans/wayland_fallback_vision_anchors.md``.
+``docs/features/wayland-fallback-vision-anchor.md``.
 
 Fixture flow:
 

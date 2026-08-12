@@ -29,6 +29,38 @@ DEFAULT_WINDOW_WIDTH = 1400
 DEFAULT_WINDOW_HEIGHT = 900
 
 
+def install_dark_theme() -> None:
+    settings = Gtk.Settings.get_default()
+    if settings is not None:
+        settings.set_property("gtk-application-prefer-dark-theme", True)
+
+    screen = Gdk.Screen.get_default()
+    if screen is None:
+        return
+    provider = Gtk.CssProvider()
+    provider.load_from_data(
+        b"""
+        window, .background {
+            background-color: #111318;
+            color: #f3f4f6;
+        }
+        label { color: #f3f4f6; }
+        entry, button, combobox, spinbutton, frame, scrolledwindow {
+            background-color: #20242c;
+            color: #f3f4f6;
+        }
+        entry, button, combobox, spinbutton {
+            border-color: #5b6472;
+        }
+        """
+    )
+    Gtk.StyleContext.add_provider_for_screen(
+        screen,
+        provider,
+        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+    )
+
+
 class PointerSmokeWindow(Gtk.Window):
     def __init__(self, state_path: Path) -> None:
         super().__init__(title=WINDOW_TITLE)
@@ -42,6 +74,7 @@ class PointerSmokeWindow(Gtk.Window):
             "clicked": False,
             "secondary_clicked": False,
             "scroll_events": 0,
+            "horizontal_scroll_events": 0,
             "drag_completed": False,
             "entry_text": "",
             "entry_focused": False,
@@ -151,6 +184,9 @@ class PointerSmokeWindow(Gtk.Window):
         self.scroll_box_frame.add(scroll_content)
         self.scroll_box.add(self.scroll_box_frame)
         self.scroll_box.get_vadjustment().connect("value-changed", self.on_scroll_adjustment)
+        self.scroll_box.get_hadjustment().connect(
+            "value-changed", self.on_horizontal_scroll_adjustment
+        )
 
         # Semantic-action targets discovered through the accessibility tree (not by
         # coordinate): a check button (CHECKABLE state -> desktop_toggle) and an
@@ -342,7 +378,7 @@ class PointerSmokeWindow(Gtk.Window):
         self.layout_signature = signature
 
         # Debounce rapid successive resize events during window initialization.
-        if hasattr(self, "_size_allocate_timeout_id"):
+        if getattr(self, "_size_allocate_timeout_id", 0):
             GLib.source_remove(self._size_allocate_timeout_id)
         self._size_allocate_timeout_id = GLib.timeout_add(
             50, self._apply_size_allocate, width, height
@@ -361,6 +397,7 @@ class PointerSmokeWindow(Gtk.Window):
         return not self.state.get("ready")
 
     def _apply_size_allocate(self, width: int, height: int) -> bool:
+        self._size_allocate_timeout_id = 0
         visible_width, visible_height = self.visible_monitor_size(width, height)
         layout_width = min(width, visible_width) if visible_width > 0 else width
         layout_height = min(height, visible_height) if visible_height > 0 else height
@@ -421,7 +458,12 @@ class PointerSmokeWindow(Gtk.Window):
         place(self.secondary_box, "secondary", 3, 0)
 
         # Row 1: scroll region, semantic controls, horizontal + vertical sliders.
-        place(self.scroll_box, "scroll", 0, 1)
+        scroll_rect = place(self.scroll_box, "scroll", 0, 1)
+        # Add horizontal overflow only after the outer fullscreen allocation is
+        # known. Advertising it during window construction distorts XWayland's
+        # initial natural-size negotiation before KWin applies fullscreen.
+        if layout_height >= 700:
+            self.scroll_box_frame.set_size_request(scroll_rect[2] * 2, -1)
         sem_x, sem_y, sem_w, sem_h = cell(1, 1)
         self.fixed.move(self.semantic_checkbox, sem_x, sem_y)
         self.semantic_checkbox.set_size_request(sem_w, 36)
@@ -556,9 +598,9 @@ class PointerSmokeWindow(Gtk.Window):
         cell = self.grid_cell_size(width, height)
         # Cairo is dynamically typed through PyGObject here.
         cairo = context
-        cairo.set_source_rgb(0.965, 0.97, 0.965)
+        cairo.set_source_rgb(0.067, 0.075, 0.094)
         cairo.paint()
-        cairo.set_source_rgba(0.18, 0.24, 0.30, 0.16)
+        cairo.set_source_rgba(0.60, 0.67, 0.76, 0.18)
         cairo.set_line_width(1.0)
         for x in range(0, width + 1, cell):
             cairo.move_to(x + 0.5, 0)
@@ -568,7 +610,7 @@ class PointerSmokeWindow(Gtk.Window):
             cairo.line_to(width, y + 0.5)
         cairo.stroke()
 
-        cairo.set_source_rgba(0.02, 0.09, 0.16, 0.55)
+        cairo.set_source_rgba(0.54, 0.68, 0.86, 0.58)
         cairo.set_line_width(2.0)
         center_x = width / 2.0
         center_y = height / 2.0
@@ -580,7 +622,7 @@ class PointerSmokeWindow(Gtk.Window):
 
         cairo.select_font_face("Sans", 0, 0)
         cairo.set_font_size(13)
-        cairo.set_source_rgba(0.02, 0.09, 0.16, 0.62)
+        cairo.set_source_rgba(0.82, 0.86, 0.92, 0.72)
         for x in range(0, width + 1, cell * 2):
             cairo.move_to(x + 6, 20)
             cairo.show_text(str(x))
@@ -845,6 +887,14 @@ class PointerSmokeWindow(Gtk.Window):
         self.update_status()
         self.write_state(force=True)
 
+    def on_horizontal_scroll_adjustment(self, adjustment: Gtk.Adjustment) -> None:
+        if adjustment.get_value() <= 0:
+            return
+        self.state["horizontal_scroll_events"] += 1
+        self.state["last_event"] = f"horizontal-scroll-adjustment:{adjustment.get_value():.1f}"
+        self.update_status()
+        self.write_state(force=True)
+
     def on_slider_h_changed(self, scale: Gtk.Scale) -> None:
         self.state["slider_h_value"] = float(scale.get_value())
         self.state["last_event"] = f"slider-h:{self.state['slider_h_value']:.1f}"
@@ -917,15 +967,15 @@ class PointerSmokeWindow(Gtk.Window):
         if width <= 0 or height <= 0:
             return False
         cairo = context
-        cairo.set_source_rgb(0.93, 0.95, 0.99)
+        cairo.set_source_rgb(0.10, 0.12, 0.16)
         cairo.paint()
-        cairo.set_source_rgba(0.18, 0.24, 0.30, 0.45)
+        cairo.set_source_rgba(0.64, 0.70, 0.80, 0.55)
         cairo.set_line_width(1.0)
         cairo.rectangle(0.5, 0.5, width - 1, height - 1)
         cairo.stroke()
         if self.xy_pad_pos is not None:
             pos_x, pos_y = self.xy_pad_pos
-            cairo.set_source_rgb(0.85, 0.12, 0.32)
+            cairo.set_source_rgb(0.96, 0.34, 0.46)
             cairo.set_line_width(2.0)
             cairo.move_to(pos_x - 9, pos_y)
             cairo.line_to(pos_x + 9, pos_y)
@@ -970,6 +1020,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     state_path = Path(argv[1]).expanduser().resolve()
+    install_dark_theme()
     window = PointerSmokeWindow(state_path)
     window.show_all()
     Gtk.main()

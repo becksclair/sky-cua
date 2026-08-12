@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -32,12 +33,63 @@ def wait_for_app_snapshot(client: McpClient, title_hint: str, deadline: float) -
     return wait_for_app_snapshot_result(client, title_hint, deadline=deadline)["structuredContent"]
 
 
+def wait_for_window_snapshot(
+    client: McpClient, selector: dict[str, Any], *, deadline: float
+) -> dict[str, Any]:
+    request_id = 10
+    last_result: dict[str, Any] | None = None
+    while time.time() < deadline:
+        result = client.tools_call(
+            request_id,
+            "observe",
+            {"surface": "desktop", **selector},
+        )
+        request_id += 1
+        normalized = normalized_grouped_result(result)
+        if not normalized.get("isError"):
+            return normalized["structuredContent"]
+        last_result = normalized
+        time.sleep(0.5)
+    raise RuntimeError(
+        f"timed out observing desktop selector {selector!r}.\n"
+        f"last_result={json.dumps(last_result, indent=2, sort_keys=True)}"
+    )
+
+
 def grouped_structured_result(result: dict[str, Any]) -> dict[str, Any]:
     structured = result.get("structuredContent") or {}
     if not isinstance(structured, dict):
         return {}
     nested = structured.get("result")
-    return nested if isinstance(nested, dict) else structured
+    payload = nested if isinstance(nested, dict) else structured
+    return normalized_appshot(payload)
+
+
+def normalized_appshot(payload: dict[str, Any]) -> dict[str, Any]:
+    """Expose canonical AppShot projections without discarding their fences."""
+    semantic_projection = payload.get("semantic_projection")
+    action_snapshot = payload.get("action_snapshot")
+    if not isinstance(semantic_projection, dict) or not isinstance(action_snapshot, dict):
+        return payload
+
+    normalized = dict(payload)
+    for key in ("accessibility", "elements", "focused_app"):
+        if key in semantic_projection:
+            normalized[key] = semantic_projection[key]
+    snapshot_id = action_snapshot.get("snapshot_id")
+    if isinstance(snapshot_id, str) and snapshot_id:
+        normalized["snapshot_id"] = snapshot_id
+    return normalized
+
+
+def appshot_action_fences(snapshot: dict[str, Any]) -> dict[str, str]:
+    appshot_id = snapshot.get("appshot_id")
+    snapshot_id = snapshot.get("snapshot_id")
+    if not isinstance(appshot_id, str) or not appshot_id:
+        raise RuntimeError(f"desktop observe did not return appshot_id: {snapshot!r}")
+    if not isinstance(snapshot_id, str) or not snapshot_id:
+        raise RuntimeError(f"desktop observe did not return action snapshot_id: {snapshot!r}")
+    return {"appshot_id": appshot_id, "snapshot_id": snapshot_id}
 
 
 def normalized_grouped_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -68,27 +120,23 @@ def wait_for_app_snapshot_result(
     client: McpClient, title_hint: str, *, deadline: float
 ) -> dict[str, Any]:
     request_id = 10
-    lowered = title_hint.lower()
+    last_result: dict[str, Any] | None = None
     while time.time() < deadline:
-        apps_result = client.tools_call(
-            request_id, "list_resources", {"surface": "desktop", "resource": "apps"}
+        result = client.tools_call(
+            request_id,
+            "observe",
+            {"surface": "desktop", "window_title": title_hint},
         )
         request_id += 1
-        apps = grouped_structured_result(apps_result).get("apps") or []
-        matching_app = next(
-            (app for app in apps if lowered in ((app.get("window_title") or "").lower())),
-            None,
-        )
-        if matching_app is not None:
-            result = client.tools_call(
-                request_id,
-                "observe",
-                {"surface": "desktop", "app_id": matching_app["app_id"]},
-            )
-            request_id += 1
-            return normalized_grouped_result(result)
+        normalized = normalized_grouped_result(result)
+        if not normalized.get("isError"):
+            return normalized
+        last_result = normalized
         time.sleep(0.5)
-    raise RuntimeError(f"timed out waiting for an app with title containing {title_hint!r}")
+    raise RuntimeError(
+        f"timed out observing a desktop window with title containing {title_hint!r}.\n"
+        f"last_result={json.dumps(last_result, indent=2, sort_keys=True)}"
+    )
 
 
 def find_editable(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -119,6 +167,36 @@ def require_editable_readback(
             f"{label} editable element did not advertise supports_editable_text.\n"
             f"element={json.dumps(element, indent=2, sort_keys=True)}"
         )
+
+
+def wait_for_editable_readback(
+    client: McpClient,
+    title_hint: str,
+    expected: str,
+    *,
+    deadline: float,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    last_snapshot: dict[str, Any] | None = None
+    last_element: dict[str, Any] | None = None
+    while time.time() < deadline:
+        snapshot = wait_for_app_snapshot(client, title_hint, deadline=deadline)
+        last_snapshot = snapshot
+        try:
+            element = find_editable(snapshot)
+        except RuntimeError:
+            time.sleep(0.1)
+            continue
+        last_element = element
+        text = element.get("text") or {}
+        if element.get("value") == expected and text.get("content") == expected:
+            require_editable_readback(element, expected, snapshot=snapshot, label=title_hint)
+            return snapshot, element
+        time.sleep(0.1)
+    raise RuntimeError(
+        f"timed out waiting for {title_hint!r} editable readback {expected!r}.\n"
+        f"element={json.dumps(last_element, indent=2, sort_keys=True)}\n"
+        f"diagnostics={json.dumps((last_snapshot or {}).get('diagnostics', []), indent=2, sort_keys=True)}"
+    )
 
 
 def find_button(snapshot: dict[str, Any], label: str) -> dict[str, Any]:
@@ -160,6 +238,7 @@ def run_zenity_input(
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.Popen[str]:
     env = dict(os.environ)
+    env["NO_AT_BRIDGE"] = "0"
     if extra_env:
         env.update(extra_env)
     command = [
@@ -185,6 +264,7 @@ def run_pointer_fixture(
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.Popen[str]:
     env = dict(os.environ)
+    env["NO_AT_BRIDGE"] = "0"
     if extra_env:
         env.update(extra_env)
     return subprocess.Popen(
@@ -215,13 +295,18 @@ def wait_for_state(
 ) -> dict[str, Any]:
     monotonic_deadline = time.monotonic() + max(0.0, deadline - time.time())
     sleep_seconds = 0.05
+    last_state: dict[str, Any] | None = None
     while time.monotonic() < monotonic_deadline:
         state = load_state(state_path)
+        last_state = state
         if state is not None and predicate(state):
             return state
         time.sleep(sleep_seconds)
         sleep_seconds = min(sleep_seconds * 1.5, 0.5)
-    raise RuntimeError(f"timed out waiting for fixture state: {description}")
+    raise RuntimeError(
+        f"timed out waiting for fixture state: {description}\n"
+        f"last_state={json.dumps(last_state, indent=2, sort_keys=True)}"
+    )
 
 
 def wait_for_stable_pointer_fixture(state_path: Path, *, deadline: float) -> dict[str, Any]:
@@ -247,7 +332,10 @@ def wait_for_stable_pointer_fixture(state_path: Path, *, deadline: float) -> dic
             return state
         candidate = state
         time.sleep(0.35)
-    raise RuntimeError("timed out waiting for stable fullscreen pointer-fixture geometry")
+    raise RuntimeError(
+        "timed out waiting for stable fullscreen pointer-fixture geometry\n"
+        f"last_state={json.dumps(candidate, indent=2, sort_keys=True)}"
+    )
 
 
 def wait_for_x11_window_titles(
@@ -283,6 +371,40 @@ def wait_for_x11_window_titles(
         f"titles={json.dumps(titles, indent=2)}\n"
         f"last_tree_tail={last_tree[-4000:]}"
     )
+
+
+def activate_x11_window(title: str, *, pid: int | None = None, deadline: float) -> None:
+    if shutil.which("xdotool") is None:
+        raise RuntimeError("xdotool is required to activate the X11 pointer fixture")
+
+    last_search = ""
+    while time.time() < deadline:
+        search_command = ["xdotool", "search", "--onlyvisible"]
+        if pid is not None:
+            search_command.extend(["--pid", str(pid)])
+        search_command.extend(["--name", title])
+        search = subprocess.run(
+            search_command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        last_search = search.stderr.strip() or search.stdout.strip()
+        window_ids = [line.strip() for line in search.stdout.splitlines() if line.strip()]
+        if search.returncode == 0 and window_ids:
+            activate = subprocess.run(
+                ["xdotool", "windowactivate", "--sync", window_ids[-1]],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=3,
+            )
+            if activate.returncode == 0:
+                return
+            last_search = activate.stderr.strip() or activate.stdout.strip()
+        time.sleep(0.2)
+
+    raise RuntimeError(f"timed out activating X11 window {title!r} with xdotool: {last_search}")
 
 
 def pick_x11_click_target(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -332,7 +454,7 @@ def pick_x11_click_target(snapshot: dict[str, Any]) -> dict[str, Any]:
 def x11_click_arguments(snapshot: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
     if target.get("role") in {"x11_leaf_region", "x11_action_region"}:
         return {
-            "snapshot_id": snapshot["snapshot_id"],
+            **appshot_action_fences(snapshot),
             "element_index": target["element_index"],
         }
 
@@ -345,6 +467,7 @@ def x11_click_arguments(snapshot: dict[str, Any], target: dict[str, Any]) -> dic
             f"target={json.dumps(target, indent=2, sort_keys=True)}"
         )
     return {
+        **appshot_action_fences(snapshot),
         "x": float(bounds.get("x", 0.0)) + (width / 2.0),
         "y": float(bounds.get("y", 0.0)) + (height * 0.76),
     }
@@ -385,12 +508,12 @@ def require_no_pipewire_failure(snapshot: dict[str, Any], label: str) -> None:
 
 
 def require_live_wayland_image_backend(snapshot: dict[str, Any], label: str) -> None:
-    capture = snapshot.get("capture") or {}
-    image_backend = capture.get("image_backend")
+    image_backend = snapshot.get("image_backend")
     if image_backend != "portal_pipe_wire":
         raise RuntimeError(
             f"{label} snapshot did not keep PipeWire as the actual image backend.\n"
-            f"capture={json.dumps(capture, indent=2, sort_keys=True)}\n"
+            f"capture_backend={snapshot.get('capture_backend')!r}\n"
+            f"image_backend={image_backend!r}\n"
             f"diagnostics={json.dumps(snapshot.get('diagnostics', []), indent=2, sort_keys=True)}"
         )
 
@@ -411,18 +534,13 @@ def require_no_portal_approval_pending(snapshot: dict[str, Any], label: str) -> 
 def semantic_text_smoke(client: McpClient) -> None:
     dialog = run_zenity_input(ZENITY_TITLE, initial_text="stale-smoke")
     try:
-        snapshot = wait_for_app_snapshot(client, ZENITY_TITLE, deadline=time.time() + 30)
+        snapshot, editable = wait_for_editable_readback(
+            client, ZENITY_TITLE, "stale-smoke", deadline=time.time() + 30
+        )
         require_no_portal_approval_pending(snapshot, "initial zenity snapshot")
         require_no_pipewire_failure(snapshot, "initial zenity")
         require_live_wayland_image_backend(snapshot, "initial zenity")
-        editable = find_editable(snapshot)
         ok_button = find_button(snapshot, "OK")
-        require_editable_readback(
-            editable,
-            "stale-smoke",
-            snapshot=snapshot,
-            label="initial zenity snapshot",
-        )
 
         print(f"Focused app: {snapshot.get('focused_app')}")
         print(f"Editable element index: {editable['element_index']}")
@@ -434,20 +552,15 @@ def semantic_text_smoke(client: McpClient) -> None:
                 20,
                 "desktop_set_value",
                 {
-                    "snapshot_id": snapshot["snapshot_id"],
+                    **appshot_action_fences(snapshot),
                     "element_index": editable["element_index"],
                     "value": "smoke-value",
                 },
             ),
             "set_value",
         )
-        updated_snapshot = wait_for_app_snapshot(client, ZENITY_TITLE, deadline=time.time() + 10)
-        updated_editable = find_editable(updated_snapshot)
-        require_editable_readback(
-            updated_editable,
-            "smoke-value",
-            snapshot=updated_snapshot,
-            label="post-set_value zenity snapshot",
+        updated_snapshot, _updated_editable = wait_for_editable_readback(
+            client, ZENITY_TITLE, "smoke-value", deadline=time.time() + 10
         )
         ok_button = find_button(updated_snapshot, "OK")
         require_ok(
@@ -456,7 +569,7 @@ def semantic_text_smoke(client: McpClient) -> None:
                 "desktop_pointer",
                 {
                     "operation": "click",
-                    "snapshot_id": updated_snapshot["snapshot_id"],
+                    **appshot_action_fences(updated_snapshot),
                     "element_index": ok_button["element_index"],
                 },
             ),
@@ -488,7 +601,7 @@ def semantic_text_smoke(client: McpClient) -> None:
                 "desktop_pointer",
                 {
                     "operation": "click",
-                    "snapshot_id": snapshot["snapshot_id"],
+                    **appshot_action_fences(snapshot),
                     "element_index": editable["element_index"],
                 },
             ),
@@ -500,21 +613,17 @@ def semantic_text_smoke(client: McpClient) -> None:
                 "desktop_keyboard",
                 {
                     "operation": "type_text",
-                    "snapshot_id": snapshot["snapshot_id"],
+                    **appshot_action_fences(snapshot),
                     "text": "typed-smoke",
                 },
             ),
             "type_text",
         )
-        typed_snapshot = wait_for_app_snapshot(
-            client, f"{ZENITY_TITLE} enter", deadline=time.time() + 10
-        )
-        typed_editable = find_editable(typed_snapshot)
-        require_editable_readback(
-            typed_editable,
+        typed_snapshot, _typed_editable = wait_for_editable_readback(
+            client,
+            f"{ZENITY_TITLE} enter",
             "typed-smoke",
-            snapshot=typed_snapshot,
-            label="post-type_text zenity snapshot",
+            deadline=time.time() + 10,
         )
         require_ok(
             client.tools_call(
@@ -522,7 +631,7 @@ def semantic_text_smoke(client: McpClient) -> None:
                 "desktop_keyboard",
                 {
                     "operation": "press_key",
-                    "snapshot_id": typed_snapshot["snapshot_id"],
+                    **appshot_action_fences(typed_snapshot),
                     "key": "Enter",
                 },
             ),
@@ -542,27 +651,166 @@ def semantic_text_smoke(client: McpClient) -> None:
             enter_dialog.terminate()
 
 
-def physical_pointer_smoke(client: McpClient) -> None:
-    with tempfile.TemporaryDirectory(prefix="sky-cua-pointer-smoke-") as tmpdir:
+def service_scroll_at(
+    socket_path: Path,
+    appshot_id: str,
+    x: float,
+    y: float,
+) -> dict[str, Any]:
+    request = {
+        "type": "scroll",
+        "context": {
+            "session_id": "live-xpra-pointer-smoke",
+            "turn_id": f"scroll-{time.time_ns()}",
+            "appshot_id": appshot_id,
+            "deadline_ms": 10_000,
+        },
+        "direction": "down",
+        "pixels": 120,
+        "x": x,
+        "y": y,
+        "post_action_sleep_ms": 0,
+    }
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
+        stream.settimeout(15.0)
+        stream.connect(str(socket_path))
+        stream.sendall(json.dumps(request).encode("utf-8") + b"\n")
+        response = b""
+        while b"\n" not in response:
+            chunk = stream.recv(65_536)
+            if not chunk:
+                break
+            response += chunk
+    raw = response.partition(b"\n")[0].strip()
+    if not raw:
+        raise RuntimeError(f"empty CUA scroll response from {socket_path}")
+    parsed = json.loads(raw)
+    if parsed.get("type") != "scroll" or not parsed.get("ok"):
+        raise RuntimeError(f"CUA scroll failed: {json.dumps(parsed, indent=2, sort_keys=True)}")
+    return parsed
+
+
+def physical_pointer_smoke(
+    client: McpClient,
+    *,
+    xwayland: bool = False,
+    raw_scroll_socket: Path | None = None,
+) -> None:
+    backend_label = "XWayland" if xwayland else "Wayland"
+    if xwayland:
+        if shutil.which("xdpyinfo") is None:
+            print("Skipping XWayland pointer smoke: xdpyinfo is not installed.")
+            return
+        display_check = subprocess.run(
+            ["xdpyinfo"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if display_check.returncode != 0:
+            print("Skipping XWayland pointer smoke: no usable X11 display is available.")
+            return
+
+    with tempfile.TemporaryDirectory(
+        prefix=f"sky-cua-pointer-smoke-{'xwayland' if xwayland else 'wayland'}-"
+    ) as tmpdir:
         state_path = Path(tmpdir) / "state.json"
-        fixture = run_pointer_fixture(state_path)
+        fixture = run_pointer_fixture(
+            state_path,
+            extra_env={"GDK_BACKEND": "x11"} if xwayland else None,
+        )
         try:
+            if xwayland:
+                activate_x11_window(
+                    POINTER_TITLE,
+                    pid=fixture.pid,
+                    deadline=time.time() + 10,
+                )
             state = wait_for_stable_pointer_fixture(state_path, deadline=time.time() + 20)
-            print(f"Pointer fixture ready: {json.dumps(state['points'], sort_keys=True)}")
+            print(
+                f"{backend_label} pointer fixture ready: "
+                f"{json.dumps(state['points'], sort_keys=True)}"
+            )
             apps = grouped_structured_result(
                 client.tools_call(39, "list_resources", {"surface": "desktop", "resource": "apps"})
             ).get("apps", [])
-            fixture_visible = any(
-                POINTER_TITLE.lower() in ((app.get("window_title") or "").lower()) for app in apps
-            )
-            print(f"Pointer fixture visible in AT-SPI app list: {fixture_visible}")
+            matching_apps = [
+                app
+                for app in apps
+                if POINTER_TITLE.lower() in ((app.get("window_title") or "").lower())
+            ]
+            fixture_visible = bool(matching_apps)
+            print(f"{backend_label} pointer fixture visible in app list: {fixture_visible}")
 
-            click_point = state["points"]["click_button"]
+            selector: dict[str, Any] = {"window_title": POINTER_TITLE}
+            if xwayland:
+                windows = grouped_structured_result(
+                    client.tools_call(
+                        39,
+                        "list_resources",
+                        {"surface": "desktop", "resource": "windows"},
+                    )
+                ).get("windows", [])
+                x11_window = next(
+                    (
+                        window
+                        for window in windows
+                        if window.get("title") == POINTER_TITLE
+                        and window.get("backend") == "x11"
+                        and isinstance(window.get("window_id"), str)
+                    ),
+                    None,
+                )
+                if x11_window is None:
+                    raise RuntimeError(
+                        "GTK pointer fixture launched with GDK_BACKEND=x11 but no exact "
+                        "XWayland window handle was exposed.\n"
+                        f"windows={json.dumps(windows, indent=2, sort_keys=True)}"
+                    )
+                selector = {"window_id": x11_window["window_id"]}
+
+            def action_point(point: dict[str, Any], appshot: dict[str, Any]) -> dict[str, float]:
+                if not xwayland:
+                    return {"x": float(point["x"]), "y": float(point["y"])}
+                bounds = appshot.get("bounds") or {}
+                window_size = state.get("window_size") or {}
+                width = float(window_size.get("width") or 0)
+                height = float(window_size.get("height") or 0)
+                if (
+                    width <= 0
+                    or height <= 0
+                    or float(bounds.get("width") or 0) <= 0
+                    or float(bounds.get("height") or 0) <= 0
+                ):
+                    raise RuntimeError(
+                        "XWayland pointer smoke could not map fixture physical pixels "
+                        "to AppShot desktop-logical bounds.\n"
+                        f"window_size={window_size!r} bounds={bounds!r}"
+                    )
+                return {
+                    "x": float(bounds.get("x") or 0)
+                    + float(point["x"]) * float(bounds["width"]) / width,
+                    "y": float(bounds.get("y") or 0)
+                    + float(point["y"]) * float(bounds["height"]) / height,
+                }
+
+            fixture_appshot = wait_for_window_snapshot(client, selector, deadline=time.time() + 10)
+            if xwayland:
+                print(
+                    "XWayland AppShot bounds: "
+                    f"{json.dumps(fixture_appshot.get('bounds'), sort_keys=True)}"
+                )
+            click_point = action_point(state["points"]["click_button"], fixture_appshot)
             require_ok(
                 client.tools_call(
                     40,
                     "desktop_pointer",
-                    {"operation": "click", "x": click_point["x"], "y": click_point["y"]},
+                    {
+                        "operation": "click",
+                        "appshot_id": fixture_appshot["appshot_id"],
+                        "x": click_point["x"],
+                        "y": click_point["y"],
+                    },
                 ),
                 "physical click",
             )
@@ -572,15 +820,17 @@ def physical_pointer_smoke(client: McpClient) -> None:
                 deadline=time.time() + 8,
                 description="physical click acknowledgement",
             )
-            print("physical click smoke passed.")
+            print(f"{backend_label} physical click smoke passed.")
 
-            secondary_point = state["points"]["secondary"]
+            fixture_appshot = wait_for_window_snapshot(client, selector, deadline=time.time() + 10)
+            secondary_point = action_point(state["points"]["secondary"], fixture_appshot)
             require_ok(
                 client.tools_call(
                     41,
                     "desktop_pointer",
                     {
                         "operation": "secondary_click",
+                        "appshot_id": fixture_appshot["appshot_id"],
                         "x": secondary_point["x"],
                         "y": secondary_point["y"],
                     },
@@ -593,16 +843,18 @@ def physical_pointer_smoke(client: McpClient) -> None:
                 deadline=time.time() + 8,
                 description="secondary click acknowledgement",
             )
-            print("physical secondary-click smoke passed.")
+            print(f"{backend_label} physical secondary-click smoke passed.")
 
-            drag_from = state["points"]["drag_from"]
-            drag_to = state["points"]["drag_to"]
+            fixture_appshot = wait_for_window_snapshot(client, selector, deadline=time.time() + 10)
+            drag_from = action_point(state["points"]["drag_from"], fixture_appshot)
+            drag_to = action_point(state["points"]["drag_to"], fixture_appshot)
             require_ok(
                 client.tools_call(
                     42,
                     "desktop_pointer",
                     {
                         "operation": "drag",
+                        "appshot_id": fixture_appshot["appshot_id"],
                         "x": drag_from["x"],
                         "y": drag_from["y"],
                         "to_x": drag_to["x"],
@@ -617,13 +869,14 @@ def physical_pointer_smoke(client: McpClient) -> None:
                 deadline=time.time() + 8,
                 description="drag acknowledgement",
             )
-            print("physical drag smoke passed.")
+            print(f"{backend_label} physical drag smoke passed.")
 
             observe_result = client.tools_call(
                 43,
                 "observe",
                 {
                     "surface": "desktop",
+                    **selector,
                     "detail": "full",
                     "element_query": "Scroll region",
                     "element_limit": 20,
@@ -631,35 +884,112 @@ def physical_pointer_smoke(client: McpClient) -> None:
             )
             require_ok(observe_result, "pre-scroll observation")
             fixture_snapshot = grouped_structured_result(observe_result)
-            snapshot_id = fixture_snapshot.get("snapshot_id")
-            if not isinstance(snapshot_id, str) or not snapshot_id:
-                raise RuntimeError(
-                    "pre-scroll observation did not return a snapshot_id. "
-                    f"result={json.dumps(observe_result, indent=2, sort_keys=True)}"
-                )
-            scroll_region = find_scroll_region(fixture_snapshot)
             pointer_state = load_state(state_path) or {}
             starting_scrolls = int(pointer_state.get("scroll_events", 0))
-            require_ok(
-                client.tools_call(
+            scroll_region: dict[str, Any] | None = None
+            if fixture_snapshot.get("elements"):
+                scroll_region = find_scroll_region(fixture_snapshot)
+                print(f"{backend_label} scroll target: {json.dumps(scroll_region, sort_keys=True)}")
+                scroll_result = client.tools_call(
                     44,
                     "desktop_scroll",
                     {
                         "direction": "down",
                         "pages": 1,
-                        "snapshot_id": snapshot_id,
+                        **appshot_action_fences(fixture_snapshot),
                         "element_index": scroll_region["element_index"],
                     },
-                ),
-                "physical scroll",
-            )
+                )
+                require_ok(scroll_result, "physical scroll")
+                print(
+                    f"{backend_label} scroll result: "
+                    f"{json.dumps(grouped_structured_result(scroll_result), sort_keys=True)}"
+                )
+            elif raw_scroll_socket is not None:
+                raw_scroll_point = action_point(state["points"]["scroll"], fixture_snapshot)
+                scroll_result = service_scroll_at(
+                    raw_scroll_socket,
+                    str(fixture_snapshot["appshot_id"]),
+                    raw_scroll_point["x"],
+                    raw_scroll_point["y"],
+                )
+                print(
+                    f"{backend_label} raw CUA scroll result: "
+                    f"{json.dumps(scroll_result, sort_keys=True)}"
+                )
+            else:
+                raise RuntimeError(
+                    "pointer fixture exposed no accessibility elements and no raw CUA "
+                    "scroll socket was supplied"
+                )
             wait_for_state(
                 state_path,
                 lambda current: int(current.get("scroll_events", 0)) > starting_scrolls,
                 deadline=time.time() + 8,
                 description="scroll acknowledgement",
             )
-            print("physical scroll smoke passed.")
+            time.sleep(0.35)
+            settled_scrolls = int((load_state(state_path) or {}).get("scroll_events", 0))
+            if settled_scrolls != starting_scrolls + 1:
+                raise RuntimeError(
+                    f"{backend_label} one-page scroll produced "
+                    f"{settled_scrolls - starting_scrolls} fixture scroll events"
+                )
+            print(f"{backend_label} physical scroll smoke passed.")
+
+            if scroll_region is not None and xwayland:
+                horizontal_observe_result = client.tools_call(
+                    45,
+                    "observe",
+                    {
+                        "surface": "desktop",
+                        **selector,
+                        "detail": "full",
+                        "element_query": "Scroll region",
+                        "element_limit": 20,
+                    },
+                )
+                require_ok(horizontal_observe_result, "pre-horizontal-scroll observation")
+                horizontal_snapshot = grouped_structured_result(horizontal_observe_result)
+                horizontal_scroll_region = find_scroll_region(horizontal_snapshot)
+                starting_horizontal_scrolls = int(
+                    (load_state(state_path) or {}).get("horizontal_scroll_events", 0)
+                )
+                horizontal_scroll_result = client.tools_call(
+                    46,
+                    "desktop_scroll",
+                    {
+                        "direction": "right",
+                        "pages": 1,
+                        **appshot_action_fences(horizontal_snapshot),
+                        "element_index": horizontal_scroll_region["element_index"],
+                    },
+                )
+                require_ok(horizontal_scroll_result, "physical horizontal scroll")
+                print(
+                    f"{backend_label} horizontal scroll result: "
+                    f"{json.dumps(grouped_structured_result(horizontal_scroll_result), sort_keys=True)}"
+                )
+                wait_for_state(
+                    state_path,
+                    lambda current: (
+                        int(current.get("horizontal_scroll_events", 0))
+                        > starting_horizontal_scrolls
+                    ),
+                    deadline=time.time() + 8,
+                    description="horizontal scroll acknowledgement",
+                )
+                time.sleep(0.35)
+                settled_horizontal_scrolls = int(
+                    (load_state(state_path) or {}).get("horizontal_scroll_events", 0)
+                )
+                if settled_horizontal_scrolls != starting_horizontal_scrolls + 1:
+                    raise RuntimeError(
+                        f"{backend_label} one-page horizontal scroll produced "
+                        f"{settled_horizontal_scrolls - starting_horizontal_scrolls} "
+                        "fixture scroll events"
+                    )
+                print(f"{backend_label} physical horizontal scroll smoke passed.")
         finally:
             if fixture.poll() is None:
                 fixture.terminate()
@@ -672,212 +1002,11 @@ def physical_pointer_smoke(client: McpClient) -> None:
                 print("Pointer fixture stderr:", stderr.strip(), file=sys.stderr)
 
 
-def xwayland_visibility_probe(client: McpClient) -> None:
-    if shutil.which("xmessage") is None:
-        print("Skipping XWayland visibility probe: xmessage is not installed.")
-        return
-    if shutil.which("xdpyinfo") is None:
-        print("Skipping XWayland visibility probe: xdpyinfo is not installed.")
-        return
-
-    display_check = subprocess.run(
-        ["xdpyinfo"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    if display_check.returncode != 0:
-        print("Skipping XWayland visibility probe: no usable X11 display is available.")
-        return
-
-    title = "sky-cua xmessage probe"
-    probe = subprocess.Popen(
-        ["xmessage", "-title", title, "-buttons", "OK:0", "-center", "sky-cua x11 body"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        deadline = time.time() + 12
-        request_id = 60
-        seen: dict[str, Any] | None = None
-        last_sample: list[dict[str, Any]] = []
-        lowered = title.lower()
-
-        while time.time() < deadline:
-            apps = grouped_structured_result(
-                client.tools_call(
-                    request_id, "list_resources", {"surface": "desktop", "resource": "apps"}
-                )
-            ).get("apps", [])
-            request_id += 1
-            last_sample = [
-                {
-                    "name": app.get("name"),
-                    "window_title": app.get("window_title"),
-                    "desktop_file_id": app.get("desktop_file_id"),
-                }
-                for app in apps
-            ]
-            matching = [app for app in apps if lowered in ((app.get("window_title") or "").lower())]
-            seen = max(
-                matching,
-                key=lambda app: (
-                    bool(app.get("is_focused_candidate")),
-                    str(app.get("app_id") or "").startswith("x11:"),
-                    app.get("desktop_file_id") == "xmessage.desktop",
-                ),
-                default=None,
-            )
-            if seen is not None:
-                break
-            time.sleep(0.5)
-
-        if seen is None:
-            raise RuntimeError(
-                "XWayland xmessage probe did not appear in the desktop app resource list.\n"
-                f"Sample:\n{json.dumps(last_sample, indent=2, sort_keys=True)}"
-            )
-
-        snapshot = client.tools_call(
-            request_id,
-            "observe",
-            {"surface": "desktop", "app_id": seen["app_id"]},
-        )
-        snapshot = grouped_structured_result(snapshot)
-        request_id += 1
-        focused_snapshot_result = client.tools_call(request_id, "observe", {"surface": "desktop"})
-        focused_snapshot = grouped_structured_result(focused_snapshot_result)
-        print("XWayland xmessage probe visible in AT-SPI app list: True")
-        print(f"XWayland focused app: {snapshot.get('focused_app')}")
-        print(f"XWayland element count: {len(snapshot.get('elements', []))}")
-        focused_app = snapshot.get("focused_app") or {}
-        if focused_app.get("app_id") != seen.get("app_id"):
-            raise RuntimeError(
-                "XWayland desktop observe did not stay on the selected window.\n"
-                f"selected={json.dumps(seen, indent=2, sort_keys=True)}\n"
-                f"focused={json.dumps(focused_app, indent=2, sort_keys=True)}"
-            )
-        default_focused_app = focused_snapshot.get("focused_app") or {}
-        if default_focused_app.get("app_id") != seen.get("app_id"):
-            raise RuntimeError(
-                "XWayland desktop observe without a selector did not follow the focused X11 window.\n"
-                f"selected={json.dumps(seen, indent=2, sort_keys=True)}\n"
-                f"default_focused={json.dumps(default_focused_app, indent=2, sort_keys=True)}"
-            )
-        snapshot = focused_snapshot
-        if shutil.which("xwininfo") is not None:
-            require_x11_action_region_hints(snapshot, "XWayland")
-        descendant_region = pick_x11_click_target(snapshot)
-        click_result = client.tools_call(
-            request_id,
-            "desktop_pointer",
-            {"operation": "click", **x11_click_arguments(snapshot, descendant_region)},
-        )
-        require_ok(click_result, "XWayland descendant-region click")
-        click_message = grouped_structured_result(click_result).get("message")
-        if click_message:
-            print(f"XWayland click result: {click_message}")
-        request_id += 1
-        if descendant_region.get("role") in {"x11_leaf_region", "x11_action_region"}:
-            try:
-                probe.wait(timeout=4)
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError(
-                    "Clicking the recovered XWayland descendant region did not dismiss xmessage.\n"
-                    f"target={json.dumps(descendant_region, indent=2, sort_keys=True)}"
-                ) from exc
-        else:
-            print(
-                "XWayland fallback root click was sent, but dismissal is only required "
-                "when child action-region hints are available."
-            )
-        print(
-            "XWayland fallback click smoke passed."
-            if descendant_region.get("role") in {"x11_leaf_region", "x11_action_region"}
-            else "XWayland root fallback transport probe passed."
-        )
-        if shutil.which("xwininfo") is not None:
-            elements = snapshot.get("elements", [])
-            bounds = elements[0].get("bounds") or {}
-            if bounds.get("width", 0) <= 0 or bounds.get("height", 0) <= 0:
-                raise RuntimeError(
-                    "XWayland fallback root element did not include usable bounds.\n"
-                    f"element={json.dumps(elements[0], indent=2, sort_keys=True)}"
-                )
-
-            selector_alpha_title = "sky-cua selector alpha"
-            selector_beta_title = "sky-cua selector beta"
-            alpha = subprocess.Popen(
-                [
-                    "xmessage",
-                    "-title",
-                    selector_alpha_title,
-                    "-buttons",
-                    "OK:0",
-                    "-center",
-                    "sky-cua selector alpha body",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            beta = subprocess.Popen(
-                [
-                    "xmessage",
-                    "-title",
-                    selector_beta_title,
-                    "-buttons",
-                    "OK:0",
-                    "-center",
-                    "sky-cua selector beta body",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            try:
-                wait_for_x11_window_titles(
-                    [selector_alpha_title, selector_beta_title],
-                    deadline=time.time() + 12,
-                )
-
-                selector_snapshot = client.tools_call(
-                    request_id,
-                    "observe",
-                    {
-                        "surface": "desktop",
-                        "desktop_file_id": "xmessage.desktop",
-                        "window_title": selector_beta_title,
-                    },
-                )
-                selector_snapshot = grouped_structured_result(selector_snapshot)
-                selector_focused = selector_snapshot.get("focused_app") or {}
-                if selector_focused.get("window_title") != selector_beta_title:
-                    raise RuntimeError(
-                        "XWayland selector did not choose the exact title-matched xmessage window.\n"
-                        f"focused={json.dumps(selector_focused, indent=2, sort_keys=True)}"
-                    )
-                print("XWayland selector probe passed.")
-            finally:
-                for process in (alpha, beta):
-                    if process.poll() is None:
-                        process.terminate()
-                        try:
-                            process.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            process.kill()
-    finally:
-        if probe.poll() is None:
-            probe.terminate()
-            try:
-                probe.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                probe.kill()
-
-
 def main() -> int:
     print("Starting live desktop smoke.")
     print("If KDE shows a portal approval prompt, approve it so the test can continue.\n")
 
-    client = McpClient([str(CLIENT), "mcp"])
+    client = McpClient([str(CLIENT), "mcp"], read_timeout=35)
     try:
         client.initialize()
         tools = {tool["name"] for tool in client.tools_list()}
@@ -893,9 +1022,20 @@ def main() -> int:
         if missing:
             raise RuntimeError(f"MCP server did not advertise required tools: {missing}")
 
+        runtime_dir = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+        service_socket_path = Path(
+            os.environ.get(
+                "SKY_CUA_SERVICE_SOCKET_PATH",
+                str(runtime_dir / "sky-cua" / "service.sock"),
+            )
+        )
         semantic_text_smoke(client)
-        physical_pointer_smoke(client)
-        xwayland_visibility_probe(client)
+        physical_pointer_smoke(client, raw_scroll_socket=service_socket_path)
+        physical_pointer_smoke(
+            client,
+            xwayland=True,
+            raw_scroll_socket=service_socket_path,
+        )
 
         apps = grouped_structured_result(
             client.tools_call(50, "list_resources", {"surface": "desktop", "resource": "apps"})

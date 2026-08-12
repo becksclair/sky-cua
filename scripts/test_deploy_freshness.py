@@ -156,6 +156,20 @@ def test_installed_wrapper_freshness_uses_bundled_runtime_mtime(tmp_path: Path) 
     assert fresh.client_path == runtime
 
 
+def test_installed_binary_freshness_ignores_stale_bundled_sibling(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path / "r")
+    client = tmp_path / "install" / "bin" / "sky-cua-client"
+    stale_runtime = client.parent / "runtimes" / "linux-x64" / "sky-cua-client"
+    stale_runtime.parent.mkdir(parents=True)
+    client.write_bytes(b"\x7fELF-current")
+    stale_runtime.write_bytes(b"\x7fELF-stale")
+    df.write_build_stamp(client, repo)
+
+    fresh = df.check_client_freshness(client, repo)
+    assert fresh.fresh
+    assert fresh.client_path == client
+
+
 def test_allow_stale_env(monkeypatch) -> None:
     monkeypatch.delenv(df.ALLOW_STALE_ENV, raising=False)
     assert not df.allow_stale()

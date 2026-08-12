@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import signal
@@ -162,7 +163,33 @@ def zenity_ok_button_point(capture: Mapping[str, Any]) -> dict[str, float]:
     pixel_height = require_number(pixel_size, "height")
     if pixel_width <= 0 or pixel_height <= 0:
         raise RuntimeError(f"targeted screenshot pixel_size is not usable: {pixel_size!r}")
-    return {"x": pixel_width * 0.76, "y": pixel_height * 0.89}
+    # Zenity's GTK4 entry dialog places the OK button in the lower-right
+    # action row. Aim at its center, not the old near-bottom edge point: the
+    # latter can land outside the rounded button after fractional-scale crop
+    # translation.
+    return {"x": pixel_width * 0.73, "y": pixel_height * 0.815}
+
+
+def targeted_click_arguments(
+    app_snapshot: Mapping[str, Any], capture: Mapping[str, Any]
+) -> dict[str, Any]:
+    appshot_id = app_snapshot.get("appshot_id")
+    if not isinstance(appshot_id, str) or not appshot_id:
+        raise RuntimeError(f"desktop observe did not return appshot_id: {app_snapshot!r}")
+    action_snapshot = app_snapshot.get("action_snapshot")
+    if not isinstance(action_snapshot, Mapping):
+        raise RuntimeError(f"desktop observe did not return an action_snapshot: {app_snapshot!r}")
+    snapshot_id = action_snapshot.get("snapshot_id")
+    if not isinstance(snapshot_id, str) or not snapshot_id:
+        raise RuntimeError(
+            f"desktop observe action_snapshot did not return snapshot_id: {app_snapshot!r}"
+        )
+    return {
+        "operation": "click",
+        "appshot_id": appshot_id,
+        "snapshot_id": snapshot_id,
+        **zenity_ok_button_point(capture),
+    }
 
 
 def grouped_structured_result(result: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -174,7 +201,11 @@ def grouped_structured_result(result: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def wait_for_desktop_snapshot(
-    client: McpClient, title_hint: str, *, deadline: float
+    client: McpClient,
+    title_hint: str,
+    *,
+    window_id: str | None = None,
+    deadline: float,
 ) -> Mapping[str, Any]:
     request_id = 10
     lowered = title_hint.lower()
@@ -195,12 +226,18 @@ def wait_for_desktop_snapshot(
             ),
             None,
         )
-        app_id = matching_app.get("app_id") if isinstance(matching_app, Mapping) else None
-        if isinstance(app_id, str) and app_id:
+        if matching_app is not None:
             result = client.tools_call(
                 request_id,
                 "observe",
-                {"surface": "desktop", "app_id": app_id},
+                {
+                    "surface": "desktop",
+                    **(
+                        {"window_id": window_id}
+                        if window_id is not None
+                        else {"window_title": title_hint}
+                    ),
+                },
             )
             request_id += 1
             require_ok(result, "observe desktop app snapshot")
@@ -216,25 +253,34 @@ def find_window_by_title_and_pid(
     artifact_dir: Path,
     *,
     request_id: int,
+    deadline: float,
 ) -> Mapping[str, Any]:
-    result = client.tools_call(
-        request_id, "list_resources", {"surface": "desktop", "resource": "windows"}
-    )
-    write_json(artifact_dir / f"windows-{request_id}.json", result)
-    windows = grouped_structured_result(result).get("windows") or []
-    title_matches = [w for w in windows if isinstance(w, Mapping) and w.get("title") == title]
-    window = next(
-        (w for w in title_matches if w.get("pid") == pid),
-        title_matches[0] if len(title_matches) == 1 else None,
-    )
-    if window is None:
-        raise RuntimeError(
-            f"did not find unique window title={title!r} pid={pid}.\n"
-            f"windows={json.dumps(windows, indent=2, sort_keys=True)}"
+    windows: list[Any] = []
+    while time.time() < deadline:
+        result = client.tools_call(
+            request_id, "list_resources", {"surface": "desktop", "resource": "windows"}
         )
-    if not isinstance(window.get("window_id"), str):
-        raise RuntimeError(f"window did not expose window_id: {window!r}")
-    return window
+        write_json(artifact_dir / f"windows-{request_id}.json", result)
+        request_id += 1
+        windows = grouped_structured_result(result).get("windows") or []
+        title_matches = [
+            window
+            for window in windows
+            if isinstance(window, Mapping) and window.get("title") == title
+        ]
+        window = next(
+            (candidate for candidate in title_matches if candidate.get("pid") == pid),
+            title_matches[0] if len(title_matches) == 1 else None,
+        )
+        if window is not None:
+            if not isinstance(window.get("window_id"), str):
+                raise RuntimeError(f"window did not expose window_id: {window!r}")
+            return window
+        time.sleep(0.25)
+    raise RuntimeError(
+        f"did not find unique window title={title!r} pid={pid} before the deadline.\n"
+        f"windows={json.dumps(windows, indent=2, sort_keys=True)}"
+    )
 
 
 def terminate_process(process: subprocess.Popen[str]) -> None:
@@ -265,7 +311,18 @@ def terminate_processes_for_temp_socket(service_socket_path: Path) -> None:
                 os.kill(pid, signal.SIGTERM)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--shared-service",
+        action="store_true",
+        help="Use the already-running installed daemon instead of starting a private daemon.",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
+    args = parse_args()
     session_backend = require_real_graphical_session()
     gtk_env = gtk_session_env(session_backend)
 
@@ -275,13 +332,22 @@ def main() -> int:
 
     client_env = {
         "SKY_CUA_AGENT_CURSOR": "0",
+        "SKY_CUA_PHONE_DIRECT": "0",
         "SKY_CUA_SCREENSHOT_CURSOR": "0",
     }
     client_env.update(gtk_env)
 
     with tempfile.TemporaryDirectory(prefix="sky-cua-targeted-screenshot-") as tmpdir:
-        service_socket_path = Path(tmpdir) / "service.sock"
-        client_env["SKY_CUA_SERVICE_SOCKET_PATH"] = str(service_socket_path)
+        service_socket_path = Path(tmpdir) / "targeted-screenshot-service.sock"
+        if not args.shared_service:
+            client_env["SKY_CUA_CODEX_BROWSER_SOCKET_PATH"] = str(
+                Path(tmpdir) / "codex-browser.sock"
+            )
+            client_env["SKY_CUA_PHONE"] = "0"
+            client_env["SKY_CUA_SERVICE_PATH"] = str(
+                REPO_ROOT / "target" / "release" / "sky-cua-service"
+            )
+            client_env["SKY_CUA_SERVICE_SOCKET_PATH"] = str(service_socket_path)
         target_dialog = run_zenity_input(
             TARGET_TITLE,
             initial_text="targeted-screenshot-ok",
@@ -289,7 +355,7 @@ def main() -> int:
         )
         occluder: subprocess.Popen[str] | None = None
         try:
-            client = McpClient([str(CLIENT), "mcp"], extra_env=client_env)
+            client = McpClient([str(CLIENT), "mcp"], extra_env=client_env, read_timeout=35)
             try:
                 client.initialize()
                 tools = {tool["name"] for tool in client.tools_list()}
@@ -309,18 +375,22 @@ def main() -> int:
                 require_ok(doctor_result, "doctor display topology")
                 require_doctor_display_topology(doctor_result)
 
-                app_snapshot = wait_for_desktop_snapshot(
-                    client, TARGET_TITLE, deadline=time.time() + 30
-                )
-                write_json(artifact_dir / "target-app-state.json", app_snapshot)
-
                 target_window = find_window_by_title_and_pid(
                     client,
                     TARGET_TITLE,
                     target_dialog.pid,
                     artifact_dir,
                     request_id=20,
+                    deadline=time.time() + 30,
                 )
+                target_window_id = str(target_window["window_id"])
+                app_snapshot = wait_for_desktop_snapshot(
+                    client,
+                    TARGET_TITLE,
+                    window_id=target_window_id,
+                    deadline=time.time() + 30,
+                )
+                write_json(artifact_dir / "target-app-state.json", app_snapshot)
 
                 occluder = run_zenity_input(
                     OCCLUDER_TITLE,
@@ -337,7 +407,7 @@ def main() -> int:
                     raise RuntimeError("untargeted screenshot did not return structuredContent")
                 reference_capture = require_capture(untargeted_snapshot)
 
-                target = {"window_id": target_window["window_id"]}
+                target = {"window_id": target_window_id}
                 screenshot_result = client.tools_call(22, "capture_desktop", target)
                 write_json(artifact_dir / "targeted-screenshot-result.json", screenshot_result)
                 require_ok(screenshot_result, "targeted screenshot")
@@ -379,12 +449,24 @@ def main() -> int:
                 require_screenshot_file_matches_capture(capture)
                 write_json(artifact_dir / "targeted-capture.json", capture)
 
-                screenshot_point = zenity_ok_button_point(capture)
-                write_json(artifact_dir / "targeted-click-point.json", screenshot_point)
+                # Every intervening capture advances the daemon's latest-snapshot
+                # fence. Refresh the action AppShot only after screenshot and
+                # focus verification, then derive both action fences from that
+                # one envelope so the harness cannot combine a stale appshot_id
+                # with a newer capture snapshot_id.
+                action_appshot = wait_for_desktop_snapshot(
+                    client,
+                    TARGET_TITLE,
+                    window_id=target_window_id,
+                    deadline=time.time() + 30,
+                )
+                write_json(artifact_dir / "target-action-appshot.json", action_appshot)
+                click_arguments = targeted_click_arguments(action_appshot, capture)
+                write_json(artifact_dir / "targeted-click-point.json", click_arguments)
                 click_result = client.tools_call(
                     24,
                     "desktop_pointer",
-                    {"operation": "click", "snapshot_id": snapshot_id, **screenshot_point},
+                    click_arguments,
                 )
                 write_json(artifact_dir / "targeted-click-result.json", click_result)
                 require_ok(click_result, "targeted screenshot coordinate click")
@@ -405,7 +487,8 @@ def main() -> int:
                 )
             finally:
                 client.close()
-                terminate_processes_for_temp_socket(service_socket_path)
+                if not args.shared_service:
+                    terminate_processes_for_temp_socket(service_socket_path)
         finally:
             if occluder is not None:
                 terminate_process(occluder)

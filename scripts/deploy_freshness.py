@@ -180,7 +180,15 @@ def resolve_client_path_for_freshness(client_path: Path, repo_root: Path = REPO_
         return client_path
     if runtime_platform := _runtime_platform():
         bundled_runtime = client_path.parent / "runtimes" / runtime_platform / CLIENT_BINARY_NAME
-        if bundled_runtime.exists():
+        # Packaged plugin entrypoints are shell wrappers around the bundled
+        # runtime. Standalone MCP installs put the ELF directly at the
+        # entrypoint and may retain an older bundled tree from a prior plugin
+        # install; that sibling must not override the binary hosts actually run.
+        try:
+            is_wrapper = client_path.read_bytes().startswith(b"#!")
+        except OSError:
+            is_wrapper = False
+        if is_wrapper and bundled_runtime.exists():
             return bundled_runtime
 
     if candidate_path != wrapper_path:
