@@ -1589,11 +1589,7 @@ async fn service_runtime_health_never_probes_the_backend_inline() {
     for response in responses {
         match response {
             ServiceResponse::Health {
-                ok,
-                capabilities,
-                desktop_env: _,
-                browser_env: _,
-                ..
+                ok, capabilities, ..
             } => {
                 assert!(ok);
                 assert!(capabilities.iter().any(|capability| {
