@@ -58,12 +58,6 @@ pub async fn probe_environment() -> Result<EnvironmentInfo, BackendError> {
         x11::windowing::x11_server_running(),
     );
 
-    let capture_backend = select_capture_backend(
-        session_kind.clone(),
-        &portal_capabilities,
-        x11::capture::x11_capture_available(),
-    );
-
     let virtual_input_available = virtual_input::probe_virtual_input().is_ok();
     let input_backend = select_input_backend(
         session_kind.clone(),
@@ -72,6 +66,17 @@ pub async fn probe_environment() -> Result<EnvironmentInfo, BackendError> {
         compositor.as_deref(),
         x11::input_xtest::xtest_is_available(),
         virtual_input_available,
+    );
+
+    // PipeWire frame capture runs through the combined RemoteDesktop session,
+    // so it is only reachable when input is routed through that portal. Gate
+    // the capture backend on the resolved input backend rather than
+    // advertising a PipeWire lane that can never produce a frame.
+    let capture_backend = select_capture_backend(
+        session_kind.clone(),
+        &portal_capabilities,
+        x11::capture::x11_capture_available(),
+        input_backend.clone(),
     );
 
     Ok(EnvironmentInfo {
@@ -126,6 +131,7 @@ fn select_capture_backend(
     session_kind: SessionKind,
     portal_capabilities: &PortalCapabilities,
     x11_capture_available: bool,
+    input_backend: InputBackendKind,
 ) -> CaptureBackendKind {
     match session_kind {
         SessionKind::X11 => {
@@ -136,7 +142,15 @@ fn select_capture_backend(
             }
         }
         SessionKind::Wayland => {
-            if portal_capabilities.screencast_version.is_some() {
+            // PipeWire frame capture is performed through the combined
+            // RemoteDesktop+ScreenCast session, so it is only reachable when
+            // input also runs through the RemoteDesktop portal. When input
+            // falls back to virtual input, the Screenshot portal is the honest
+            // primary capture lane instead of a PipeWire lane that can never
+            // produce a frame.
+            if portal_capabilities.screencast_version.is_some()
+                && input_backend == InputBackendKind::PortalRemoteDesktop
+            {
                 CaptureBackendKind::PortalPipeWire
             } else if portal_capabilities.screenshot_version.is_some() {
                 CaptureBackendKind::PortalScreenshot
@@ -197,6 +211,7 @@ fn should_prefer_portal_input(desktop_environment: Option<&str>, compositor: Opt
             || value.contains("plasma")
             || value.contains("kwin")
             || value.contains("gnome")
+            || value.contains("cosmic")
     }
 
     desktop_environment.is_some_and(matches_portal_first_desktop)
@@ -286,6 +301,12 @@ fn detect_compositor() -> Option<String> {
         .any(|name| name.contains("gnome-shell"))
     {
         return Some("gnome-shell".to_string());
+    }
+    if process_names
+        .iter()
+        .any(|name| name.contains("cosmic-comp"))
+    {
+        return Some("cosmic-comp".to_string());
     }
     None
 }
@@ -485,7 +506,12 @@ mod tests {
         };
 
         assert_eq!(
-            select_capture_backend(SessionKind::X11, &capabilities, true),
+            select_capture_backend(
+                SessionKind::X11,
+                &capabilities,
+                true,
+                InputBackendKind::XTest
+            ),
             CaptureBackendKind::X11
         );
         assert_eq!(
@@ -506,7 +532,12 @@ mod tests {
         };
 
         assert_eq!(
-            select_capture_backend(SessionKind::Wayland, &capabilities, true),
+            select_capture_backend(
+                SessionKind::Wayland,
+                &capabilities,
+                true,
+                InputBackendKind::PortalRemoteDesktop
+            ),
             CaptureBackendKind::PortalPipeWire
         );
         assert_eq!(
@@ -523,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn non_kde_wayland_session_prefers_available_linux_virtual_input() {
+    fn wayland_portal_preferred_for_known_desktops() {
         let capabilities = PortalCapabilities {
             screencast_version: Some(5),
             remote_desktop_version: Some(2),
@@ -542,7 +573,7 @@ mod tests {
                 false,
                 true
             ),
-            InputBackendKind::LinuxVirtualInput
+            InputBackendKind::PortalRemoteDesktop
         );
         assert_eq!(
             select_input_backend(
@@ -565,6 +596,56 @@ mod tests {
                 false
             ),
             InputBackendKind::PortalRemoteDesktop
+        );
+    }
+
+    #[test]
+    fn wayland_without_remote_desktop_input_uses_screenshot_capture() {
+        // COSMIC advertises ScreenCast but not RemoteDesktop, so input falls
+        // back to LinuxVirtualInput and PipeWire frame capture (which rides the
+        // combined RemoteDesktop session) is unreachable. The Screenshot portal
+        // is the honest primary capture lane in that state.
+        let capabilities = PortalCapabilities {
+            screencast_version: Some(4),
+            remote_desktop_version: None,
+            screenshot_version: Some(2),
+            available_source_types: None,
+            available_cursor_modes: None,
+            available_device_types: None,
+        };
+
+        assert_eq!(
+            select_capture_backend(
+                SessionKind::Wayland,
+                &capabilities,
+                true,
+                InputBackendKind::LinuxVirtualInput
+            ),
+            CaptureBackendKind::PortalScreenshot
+        );
+    }
+
+    #[test]
+    fn unknown_wayland_desktop_falls_back_to_linux_virtual_input() {
+        let capabilities = PortalCapabilities {
+            screencast_version: Some(5),
+            remote_desktop_version: Some(2),
+            screenshot_version: Some(2),
+            available_source_types: None,
+            available_cursor_modes: None,
+            available_device_types: None,
+        };
+
+        assert_eq!(
+            select_input_backend(
+                SessionKind::Wayland,
+                &capabilities,
+                Some("Sway"),
+                None,
+                false,
+                true
+            ),
+            InputBackendKind::LinuxVirtualInput
         );
     }
 
