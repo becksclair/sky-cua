@@ -94,14 +94,14 @@ fn correlated_coordinate_scale(root: &RectF, window: &RectF) -> Option<(f64, f64
         .then_some((scale_x, scale_y))
 }
 
-fn dimensions_approximately_match(left: &RectF, right: &RectF) -> bool {
+pub(crate) fn dimensions_approximately_match(left: &RectF, right: &RectF) -> bool {
     let width_tolerance = (right.width * 0.02).max(2.0);
     let height_tolerance = (right.height * 0.02).max(2.0);
     (left.width - right.width).abs() <= width_tolerance
         && (left.height - right.height).abs() <= height_tolerance
 }
 
-fn near_zero(value: f64) -> bool {
+pub(crate) fn near_zero(value: f64) -> bool {
     value.abs() <= 0.5
 }
 

@@ -1,6 +1,7 @@
 use sky_cua_platform::model::{CoordinateSpace, RectF, WindowInfo};
 
 use super::discovery::{AccessibleTopLevel, DiscoveredApp};
+use crate::backend::{dimensions_approximately_match, near_zero};
 
 const MIN_BOUNDS_IOU: f64 = 0.80;
 const MIN_BOUNDS_IOU_MARGIN: f64 = 0.50;
@@ -22,7 +23,9 @@ pub(crate) enum WindowAccessibilityMatch<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MatchProvenance {
-    pub pid: u32,
+    /// Client PID the match was scoped to; `None` on the PID-less path
+    /// (compositors such as COSMIC that expose no client PID).
+    pub pid: Option<u32>,
     pub normalized_title: bool,
     pub active_bounds_tiebreak: bool,
     pub bounds_iou: Option<f64>,
@@ -33,9 +36,7 @@ pub(crate) fn match_window_accessibility<'a>(
     apps: &'a [DiscoveredApp],
 ) -> WindowAccessibilityMatch<'a> {
     let Some(pid) = window.pid.filter(|pid| *pid != 0) else {
-        return WindowAccessibilityMatch::Unavailable {
-            reason: "the compositor window did not expose a client PID",
-        };
+        return match_window_accessibility_without_pid(window, apps);
     };
     let app_candidates = apps
         .iter()
@@ -71,35 +72,14 @@ pub(crate) fn match_window_accessibility<'a>(
         .iter()
         .filter(|candidate| normalize_title(&candidate.title) == wanted_title)
         .collect::<Vec<_>>();
-    match title_candidates.as_slice() {
-        [top_level] => WindowAccessibilityMatch::Matched {
-            top_level,
-            provenance: MatchProvenance {
-                pid,
-                normalized_title: true,
-                active_bounds_tiebreak: false,
-                bounds_iou: None,
-            },
-        },
-        [] => WindowAccessibilityMatch::Unavailable {
-            reason: "no top-level AT-SPI window had the normalized compositor title",
-        },
-        candidates => match duplicate_title_winner(window.bounds.as_ref(), candidates) {
-            Some((top_level, iou)) => WindowAccessibilityMatch::Matched {
-                top_level,
-                provenance: MatchProvenance {
-                    pid,
-                    normalized_title: true,
-                    active_bounds_tiebreak: true,
-                    bounds_iou: Some(iou),
-                },
-            },
-            None => WindowAccessibilityMatch::Ambiguous {
-                reason: "duplicate-title AT-SPI windows had no unique active high-IoU winner",
-                candidate_count: candidates.len(),
-            },
-        },
-    }
+    match_title_candidates(
+        &title_candidates,
+        window.bounds.as_ref(),
+        Some(pid),
+        false, // within a PID-scoped app a unique title is sufficient identity
+        "no top-level AT-SPI window had the normalized compositor title",
+        "duplicate-title AT-SPI windows had no unique active high-IoU winner",
+    )
 }
 
 fn duplicate_title_winner<'a>(
@@ -153,6 +133,118 @@ fn rect_iou(left: &RectF, right: &RectF) -> f64 {
     }
     let intersection = intersection_width * intersection_height;
     intersection / (left.width * left.height + right.width * right.height - intersection)
+}
+
+/// Shared title-candidate dispatch for the PID-scoped and PID-less correlation
+/// paths: a normalized-title filter, then unique / absent / duplicate-title
+/// (bounds-IoU tiebreak) resolution with provenance construction.
+///
+/// `corroborate_single` requires a single candidate to overlap the compositor
+/// window's desktop-logical bounds when both are known; the PID-less path spans
+/// every app in the session, so a title collision with clearly non-matching
+/// geometry must not silently win.
+fn match_title_candidates<'a>(
+    candidates: &[&'a AccessibleTopLevel],
+    window_bounds: Option<&RectF>,
+    pid: Option<u32>,
+    corroborate_single: bool,
+    no_match_reason: &'static str,
+    ambiguous_reason: &'static str,
+) -> WindowAccessibilityMatch<'a> {
+    match candidates {
+        [] => WindowAccessibilityMatch::Unavailable {
+            reason: no_match_reason,
+        },
+        [single] => {
+            let bounds_corroborate = match (window_bounds, single.bounds.as_ref()) {
+                (Some(window_bounds), Some(candidate_bounds))
+                    if window_bounds.space == CoordinateSpace::DesktopLogical
+                        && candidate_bounds.space == CoordinateSpace::DesktopLogical =>
+                {
+                    // The compositor and AT-SPI bounds come from heterogeneous
+                    // sources that legitimately diverge on scaled outputs and
+                    // spanning windows, so a strict IoU threshold would
+                    // false-reject the correct single window. Corroborate only
+                    // far enough to disprove a title collision: reject when
+                    // the two rects are clearly disjoint, accept any overlap.
+                    let overlaps = rect_iou(window_bounds, candidate_bounds) > 0.0;
+                    // Some compositors (COSMIC) report every AT-SPI top-level
+                    // with a zero origin, so a correct window whose compositor
+                    // origin is non-zero looks disjoint even though its size is
+                    // right. When the origin is unusable, corroborate on
+                    // dimensions alone instead of false-rejecting the match.
+                    let zero_origin_size_match = near_zero(candidate_bounds.x)
+                        && near_zero(candidate_bounds.y)
+                        && dimensions_approximately_match(window_bounds, candidate_bounds);
+                    overlaps || zero_origin_size_match
+                }
+                _ => true,
+            };
+            if corroborate_single && !bounds_corroborate {
+                WindowAccessibilityMatch::Ambiguous {
+                    reason: "title correlation matched a single AT-SPI window but its bounds did not corroborate the compositor window",
+                    candidate_count: 1,
+                }
+            } else {
+                WindowAccessibilityMatch::Matched {
+                    top_level: single,
+                    provenance: MatchProvenance {
+                        pid,
+                        normalized_title: true,
+                        active_bounds_tiebreak: false,
+                        bounds_iou: None,
+                    },
+                }
+            }
+        }
+        multiple => match duplicate_title_winner(window_bounds, multiple) {
+            Some((top_level, iou)) => WindowAccessibilityMatch::Matched {
+                top_level,
+                provenance: MatchProvenance {
+                    pid,
+                    normalized_title: true,
+                    active_bounds_tiebreak: true,
+                    bounds_iou: Some(iou),
+                },
+            },
+            None => WindowAccessibilityMatch::Ambiguous {
+                reason: ambiguous_reason,
+                candidate_count: multiple.len(),
+            },
+        },
+    }
+}
+
+/// PID-less correlation path for compositors (e.g. COSMIC) that do not expose
+/// the client PID through their toplevel protocol.  Matches the compositor
+/// window to an AT-SPI top-level by normalised title across every app whose
+/// top-levels were enumerated, with bounds-IoU tiebreak for duplicate titles.
+fn match_window_accessibility_without_pid<'a>(
+    window: &WindowInfo,
+    apps: &'a [DiscoveredApp],
+) -> WindowAccessibilityMatch<'a> {
+    let wanted_title = normalize_title(window.title.as_deref().unwrap_or_default());
+    if wanted_title.is_empty() {
+        return WindowAccessibilityMatch::Unavailable {
+            reason: "the compositor window did not expose a usable title for PID-less correlation",
+        };
+    }
+
+    let candidates: Vec<&'a AccessibleTopLevel> = apps
+        .iter()
+        .filter_map(|app| app.top_levels.as_ref())
+        .flatten()
+        .filter(|tl| normalize_title(&tl.title) == wanted_title)
+        .collect();
+
+    match_title_candidates(
+        &candidates,
+        window.bounds.as_ref(),
+        None,
+        true, // PID-less spans all apps; require bounds corroboration when available
+        "no top-level AT-SPI window matched the compositor window title",
+        "title correlation matched multiple AT-SPI windows without a PID tiebreak",
+    )
 }
 
 pub(crate) fn normalize_title(value: &str) -> String {
@@ -248,6 +340,25 @@ mod tests {
             hidden: false,
             client_type: None,
             backend: "kwin".to_string(),
+            terminal: None,
+        }
+    }
+
+    fn pidless_window(title: &str, bounds: RectF) -> WindowInfo {
+        WindowInfo {
+            window_id: "cosmic:99".to_string(),
+            title: Some(title.to_string()),
+            app_id: None,
+            wm_class: None,
+            pid: None,
+            bounds: Some(bounds),
+            display: None,
+            display_intersections: Vec::new(),
+            workspace: None,
+            focused: true,
+            hidden: false,
+            client_type: None,
+            backend: "cosmic".to_string(),
             terminal: None,
         }
     }
@@ -521,5 +632,273 @@ mod tests {
             matched_path(&target, &apps),
             &object_ref("/org/a11y/dolphin/frame/selected")
         );
+    }
+
+    // --- PID-less correlation (COSMIC fallback) ---
+
+    #[test]
+    fn cosmic_no_pid_unique_title_matches() {
+        let apps = [
+            app(
+                100,
+                "cosmic_term",
+                vec![top_level(
+                    "/org/a11y/term/frame/1",
+                    "Cosmic Terminal",
+                    true,
+                    true,
+                    bounds(0.0, 0.0, 800.0, 600.0),
+                )],
+            ),
+            app(
+                200,
+                "cosmic_files",
+                vec![top_level(
+                    "/org/a11y/files/frame/1",
+                    "Cosmic Files",
+                    false,
+                    false,
+                    bounds(0.0, 0.0, 1200.0, 800.0),
+                )],
+            ),
+        ];
+        let target = pidless_window("Cosmic Terminal", bounds(0.0, 0.0, 800.0, 600.0));
+        let result = match_window_accessibility(&target, &apps);
+        assert!(matches!(result, WindowAccessibilityMatch::Matched { .. }));
+        assert_eq!(
+            matched_path(&target, &apps),
+            &object_ref("/org/a11y/term/frame/1")
+        );
+    }
+
+    #[test]
+    fn cosmic_no_pid_empty_title_fails_closed() {
+        let apps = [app(
+            100,
+            "cosmic_term",
+            vec![top_level(
+                "/org/a11y/term/frame/1",
+                "Cosmic Terminal",
+                true,
+                true,
+                bounds(0.0, 0.0, 800.0, 600.0),
+            )],
+        )];
+        let mut target = pidless_window("", bounds(0.0, 0.0, 800.0, 600.0));
+        target.title = None;
+        assert!(matches!(
+            match_window_accessibility(&target, &apps),
+            WindowAccessibilityMatch::Unavailable { .. }
+        ));
+    }
+
+    #[test]
+    fn cosmic_no_pid_no_matching_title_fails_closed() {
+        let apps = [app(
+            100,
+            "cosmic_term",
+            vec![top_level(
+                "/org/a11y/term/frame/1",
+                "Cosmic Terminal",
+                true,
+                true,
+                bounds(0.0, 0.0, 800.0, 600.0),
+            )],
+        )];
+        let target = pidless_window("Firefox", bounds(0.0, 0.0, 800.0, 600.0));
+        assert!(matches!(
+            match_window_accessibility(&target, &apps),
+            WindowAccessibilityMatch::Unavailable { .. }
+        ));
+    }
+
+    #[test]
+    fn cosmic_no_pid_single_title_with_disjoint_bounds_is_ambiguous() {
+        // A unique title match whose desktop-logical bounds are clearly
+        // disjoint from the compositor window must not silently win: the
+        // PID-less pool spans every app, so a title collision with
+        // non-overlapping geometry is rejected. Overlapping-but-different
+        // rects are accepted because the two bounds sources (compositor vs
+        // AT-SPI) legitimately diverge on scaled/spanning windows.
+        let apps = [app(
+            100,
+            "cosmic_editor",
+            vec![top_level(
+                "/org/a11y/editor/frame/1",
+                "Editor",
+                true,
+                true,
+                bounds(1000.0, 1000.0, 300.0, 200.0),
+            )],
+        )];
+        let target = pidless_window("Editor", bounds(0.0, 0.0, 800.0, 600.0));
+        assert!(matches!(
+            match_window_accessibility(&target, &apps),
+            WindowAccessibilityMatch::Ambiguous { .. }
+        ));
+    }
+
+    #[test]
+    fn cosmic_no_pid_zero_origin_matching_size_matches_nonzero_compositor_bounds() {
+        // COSMIC reports the AT-SPI top-level with a zero origin while the
+        // compositor window is placed at a non-zero origin; both carry the same
+        // size. The zero origin is unusable, so the match must be corroborated
+        // on dimensions instead of being rejected as a disjoint title collision.
+        let apps = [app(
+            100,
+            "zenity",
+            vec![top_level(
+                "/org/a11y/zenity/dialog/1",
+                "sky-cua zenity smoke",
+                true,
+                true,
+                bounds(0.0, 0.0, 300.0, 248.0),
+            )],
+        )];
+        let target = pidless_window("sky-cua zenity smoke", bounds(703.0, 161.0, 300.0, 248.0));
+        assert!(matches!(
+            match_window_accessibility(&target, &apps),
+            WindowAccessibilityMatch::Matched { .. }
+        ));
+    }
+
+    #[test]
+    fn cosmic_no_pid_zero_origin_with_wrong_size_stays_ambiguous() {
+        // A zero origin does not disable the title-collision guard entirely: a
+        // same-title candidate whose size clearly differs from the compositor
+        // window is still rejected.
+        let apps = [app(
+            100,
+            "zenity",
+            vec![top_level(
+                "/org/a11y/zenity/dialog/1",
+                "sky-cua zenity smoke",
+                true,
+                true,
+                bounds(0.0, 0.0, 500.0, 400.0),
+            )],
+        )];
+        let target = pidless_window("sky-cua zenity smoke", bounds(703.0, 161.0, 300.0, 248.0));
+        assert!(matches!(
+            match_window_accessibility(&target, &apps),
+            WindowAccessibilityMatch::Ambiguous { .. }
+        ));
+    }
+
+    #[test]
+    fn cosmic_no_pid_single_title_with_overlapping_but_smaller_bounds_matches() {
+        // The same window reported by two different bounds sources (e.g.
+        // compositor geometry at (0,0,800,600) vs AT-SPI extents at
+        // (2,2,700,500)) still overlaps, so it must not be rejected as a title
+        // collision even though its IoU is below the duplicate-title tiebreak
+        // threshold.
+        let apps = [app(
+            100,
+            "cosmic_editor",
+            vec![top_level(
+                "/org/a11y/editor/frame/1",
+                "Editor",
+                true,
+                true,
+                bounds(2.0, 2.0, 700.0, 500.0),
+            )],
+        )];
+        let target = pidless_window("Editor", bounds(0.0, 0.0, 800.0, 600.0));
+        assert!(matches!(
+            match_window_accessibility(&target, &apps),
+            WindowAccessibilityMatch::Matched { .. }
+        ));
+    }
+
+    #[test]
+    fn cosmic_no_pid_single_title_without_bounds_still_matches() {
+        // Without bounds on either side, PID-less correlation cannot
+        // corroborate and falls back to the title match (best effort).
+        let apps = [app(
+            100,
+            "cosmic_term",
+            vec![top_level(
+                "/org/a11y/term/frame/1",
+                "Cosmic Terminal",
+                true,
+                true,
+                bounds(0.0, 0.0, 800.0, 600.0),
+            )],
+        )];
+        let mut target = pidless_window("Cosmic Terminal", bounds(0.0, 0.0, 800.0, 600.0));
+        target.bounds = None;
+        assert!(matches!(
+            match_window_accessibility(&target, &apps),
+            WindowAccessibilityMatch::Matched { .. }
+        ));
+    }
+
+    #[test]
+    fn cosmic_no_pid_duplicate_title_resolved_by_bounds_and_active() {
+        let apps = [
+            app(
+                100,
+                "cosmic_term",
+                vec![top_level(
+                    "/org/a11y/term/frame/1",
+                    "Editor",
+                    true,
+                    true,
+                    bounds(0.0, 0.0, 800.0, 600.0),
+                )],
+            ),
+            app(
+                200,
+                "cosmic_files",
+                vec![top_level(
+                    "/org/a11y/files/frame/1",
+                    "Editor",
+                    false,
+                    false,
+                    bounds(200.0, 150.0, 500.0, 400.0),
+                )],
+            ),
+        ];
+        let target = pidless_window("Editor", bounds(0.0, 0.0, 800.0, 600.0));
+        let result = match_window_accessibility(&target, &apps);
+        assert!(matches!(result, WindowAccessibilityMatch::Matched { .. }));
+        assert_eq!(
+            matched_path(&target, &apps),
+            &object_ref("/org/a11y/term/frame/1")
+        );
+    }
+
+    #[test]
+    fn cosmic_no_pid_duplicate_title_no_clear_winner_ambiguous() {
+        let shared = bounds(0.0, 0.0, 800.0, 600.0);
+        let apps = [
+            app(
+                100,
+                "cosmic_term",
+                vec![top_level(
+                    "/org/a11y/term/frame/1",
+                    "Editor",
+                    false,
+                    false,
+                    shared.clone(),
+                )],
+            ),
+            app(
+                200,
+                "cosmic_files",
+                vec![top_level(
+                    "/org/a11y/files/frame/1",
+                    "Editor",
+                    false,
+                    false,
+                    shared,
+                )],
+            ),
+        ];
+        let target = pidless_window("Editor", bounds(0.0, 0.0, 800.0, 600.0));
+        assert!(matches!(
+            match_window_accessibility(&target, &apps),
+            WindowAccessibilityMatch::Ambiguous { .. }
+        ));
     }
 }

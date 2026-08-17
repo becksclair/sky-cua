@@ -545,7 +545,7 @@ impl DesktopBackend for LinuxDesktopBackend {
         let current_window: sky_cua_platform::model::WindowInfo = target_window.clone().into();
 
         let mut elements = match self
-            .discover_accessible_apps_for_window_pid(current_window.pid)
+            .discover_accessible_apps_for_window_pid(current_window.pid, true)
             .await
         {
             Ok((connection, apps)) => match match_window_accessibility(&current_window, &apps) {
@@ -558,7 +558,10 @@ impl DesktopBackend for LinuxDesktopBackend {
                         "AT-SPI application and top-level window were correlated exactly.",
                         Some(format!(
                             "pid={}; normalized_title={}; active_bounds_tiebreak={}; bounds_iou={}",
-                            provenance.pid,
+                            provenance
+                                .pid
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "unknown".to_string()),
                             provenance.normalized_title,
                             provenance.active_bounds_tiebreak,
                             provenance

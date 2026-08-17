@@ -30,9 +30,18 @@ pub struct AccessibleTopLevel {
     pub bounds: Option<RectF>,
 }
 
+/// Enumerate AT-SPI application roots.
+///
+/// `enumerate_top_levels` enables per-app top-level enumeration; it is required
+/// only for window correlation (`match_window_accessibility`), where the
+/// PID-scoped or PID-less title search needs each app's frame/window children.
+/// Generic discovery (`list_apps`, plain `get_app_state`, semantic scroll)
+/// must leave it off: enumerating every app's top levels costs several D-Bus
+/// round trips per child and the data is never consumed there.
 pub async fn discover_apps(
     connection: &AccessibilityConnection,
     window_pid: Option<u32>,
+    enumerate_top_levels: bool,
 ) -> Result<Vec<DiscoveredApp>, BackendError> {
     debug!("discovering AT-SPI applications");
     let root = connection
@@ -109,12 +118,20 @@ pub async fn discover_apps(
                     normalize_name(&name).replace(' ', "-")
                 ))
             });
-        let window_title = if window_pid.is_none() {
+        // `best_window_like_title` is only consumed by app-list/selector
+        // scoring. When top-level enumeration is requested (the PID-less
+        // correlation path), `match_window_accessibility` reads `top_levels`
+        // directly, so the DFS title walk would be a second pass over the same
+        // children for no consumer; skip it to avoid doubling the per-app
+        // D-Bus round trips.
+        let window_title = if window_pid.is_none() && !enumerate_top_levels {
             best_window_like_title(&accessible, connection.connection()).await
         } else {
             None
         };
-        let top_levels = if window_pid.is_some_and(|window_pid| pid == Some(window_pid)) {
+        let top_levels = if enumerate_top_levels
+            && window_pid.is_none_or(|window_pid| pid == Some(window_pid))
+        {
             collect_top_levels(&accessible, connection.connection()).await
         } else {
             None

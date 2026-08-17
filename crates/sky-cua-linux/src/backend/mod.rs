@@ -291,16 +291,20 @@ impl LinuxDesktopBackend {
     async fn discover_accessible_apps(
         &self,
     ) -> Result<(AccessibilityConnection, Vec<DiscoveredApp>), BackendError> {
-        self.discover_accessible_apps_for_window_pid(None).await
+        // Generic app discovery never consumes per-app top levels; see
+        // `discover_apps` for why top-level enumeration is correlation-only.
+        self.discover_accessible_apps_for_window_pid(None, false)
+            .await
     }
 
     async fn discover_accessible_apps_for_window_pid(
         &self,
         window_pid: Option<u32>,
+        collect_top_levels: bool,
     ) -> Result<(AccessibilityConnection, Vec<DiscoveredApp>), BackendError> {
         let connection = self.accessibility_connection().await?;
         match self
-            .at_spi_call_with_timeout(discover_apps(&connection, window_pid))
+            .at_spi_call_with_timeout(discover_apps(&connection, window_pid, collect_top_levels))
             .await
         {
             Ok(apps) => Ok((connection, apps)),
@@ -308,7 +312,11 @@ impl LinuxDesktopBackend {
                 self.reset_accessibility_connection().await;
                 let connection = self.accessibility_connection().await?;
                 let apps = self
-                    .at_spi_call_with_timeout(discover_apps(&connection, window_pid))
+                    .at_spi_call_with_timeout(discover_apps(
+                        &connection,
+                        window_pid,
+                        collect_top_levels,
+                    ))
                     .await?;
                 Ok((connection, apps))
             }
@@ -632,6 +640,7 @@ impl LinuxDesktopBackend {
 mod action_runtime;
 mod desktop_backend;
 mod elements;
+pub(crate) use elements::{dimensions_approximately_match, near_zero};
 
 #[cfg(test)]
 mod tests;
