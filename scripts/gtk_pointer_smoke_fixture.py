@@ -307,14 +307,15 @@ class PointerSmokeWindow(Gtk.Window):
         signal.signal(signal.SIGTERM, self.on_signal)
         signal.signal(signal.SIGINT, self.on_signal)
 
-        if os.environ.get("SKY_CUA_POINTER_FULLSCREEN", "1") == "0":
+        self.fullscreen_requested = os.environ.get("SKY_CUA_POINTER_FULLSCREEN", "1") != "0"
+        if self.fullscreen_requested:
+            self.fullscreen()
+        else:
             width = int(os.environ.get("SKY_CUA_POINTER_WIDTH", DEFAULT_WINDOW_WIDTH))
             height = int(os.environ.get("SKY_CUA_POINTER_HEIGHT", DEFAULT_WINDOW_HEIGHT))
             self.set_default_size(width, height)
             self.resize(width, height)
             self.move(0, 0)
-        else:
-            self.fullscreen()
         self.show_all()
         self.present()
         self.write_state()
@@ -387,13 +388,30 @@ class PointerSmokeWindow(Gtk.Window):
     def on_geometry_probe(self) -> bool:
         if self.state.get("ready"):
             return False
-        width = self.get_allocated_width()
-        height = self.get_allocated_height()
-        if width <= 1 or height <= 1:
-            width, height = self.visible_monitor_size(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-            self.resize(width, height)
-            self.present()
-        self._apply_size_allocate(width, height)
+        try:
+            width = self.get_allocated_width()
+            height = self.get_allocated_height()
+            monitor_width, monitor_height = self.visible_monitor_size(
+                DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT
+            )
+            if width <= 1 or height <= 1:
+                width, height = monitor_width, monitor_height
+                self.resize(width, height)
+                self.present()
+            elif self.fullscreen_requested and (
+                width < monitor_width * 0.5 or height < monitor_height * 0.5
+            ):
+                # XWayland applies fullscreen asynchronously, so a probe can run
+                # before the window manager has resized the surface and read a
+                # transient, degenerate allocation. Keep probing (and nudge the
+                # window toward the monitor) instead of committing that broken
+                # layout as ready.
+                self.resize(monitor_width, monitor_height)
+                self.present()
+                return True
+            self._apply_size_allocate(width, height)
+        except Exception as exc:
+            print(f"geometry probe failed: {exc!r}", file=sys.stderr, flush=True)
         return not self.state.get("ready")
 
     def _apply_size_allocate(self, width: int, height: int) -> bool:

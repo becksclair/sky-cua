@@ -20,7 +20,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from _mcp_stdio import McpClient
+from _mcp_stdio import McpClient, isolated_daemon_env
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLIENT = REPO_ROOT / "bin" / "sky-cua-client"
@@ -312,11 +312,13 @@ def wait_for_state(
 def wait_for_stable_pointer_fixture(state_path: Path, *, deadline: float) -> dict[str, Any]:
     monotonic_deadline = time.monotonic() + max(0.0, deadline - time.time())
     candidate: dict[str, Any] | None = None
+    last_observed: dict[str, Any] | None = None
     while time.monotonic() < monotonic_deadline:
         state = load_state(state_path)
         if state is None:
             time.sleep(0.15)
             continue
+        last_observed = state
         width = int(state.get("window_size", {}).get("width", 0) or 0)
         height = int(state.get("window_size", {}).get("height", 0) or 0)
         if not state.get("ready") or width < 1000 or height < 700:
@@ -334,7 +336,8 @@ def wait_for_stable_pointer_fixture(state_path: Path, *, deadline: float) -> dic
         time.sleep(0.35)
     raise RuntimeError(
         "timed out waiting for stable fullscreen pointer-fixture geometry\n"
-        f"last_state={json.dumps(candidate, indent=2, sort_keys=True)}"
+        f"last_state={json.dumps(candidate, indent=2, sort_keys=True)}\n"
+        f"last_observed={json.dumps(last_observed, indent=2, sort_keys=True)}"
     )
 
 
@@ -498,6 +501,24 @@ def require_ok(result: dict[str, Any], action: str) -> None:
         raise RuntimeError(f"{action} failed: {json.dumps(result, indent=2, sort_keys=True)}")
 
 
+def horizontal_scroll_unavailable(result: dict[str, Any]) -> bool:
+    """True when the backend reports horizontal scroll unsupported.
+
+    The privileged virtual-input helper (the COSMIC input lane) supports
+    vertical but not horizontal scroll; the XWayland path similarly refuses
+    horizontal scroll without XTest. Treat either as a skip, not a failure.
+    """
+    if not result.get("isError"):
+        return False
+    structured = result.get("structuredContent") or {}
+    payload = structured.get("result") if isinstance(structured, dict) else None
+    if not isinstance(payload, dict):
+        return False
+    return payload.get("code") == "ActionUnsupportedForEnvironment" and (
+        "horizontal" in (payload.get("message") or "").lower()
+    )
+
+
 def require_no_pipewire_failure(snapshot: dict[str, Any], label: str) -> None:
     diagnostics = snapshot.get("diagnostics", [])
     if any(entry.get("code") == "PipeWireStreamFailed" for entry in diagnostics):
@@ -508,10 +529,13 @@ def require_no_pipewire_failure(snapshot: dict[str, Any], label: str) -> None:
 
 
 def require_live_wayland_image_backend(snapshot: dict[str, Any], label: str) -> None:
+    # KDE keeps PipeWire as the live capture lane; desktops whose portal lacks
+    # the RemoteDesktop interface (e.g. COSMIC) legitimately use the Screenshot
+    # portal instead. Both are live Wayland portal captures.
     image_backend = snapshot.get("image_backend")
-    if image_backend != "portal_pipe_wire":
+    if image_backend not in {"portal_pipe_wire", "portal_screenshot"}:
         raise RuntimeError(
-            f"{label} snapshot did not keep PipeWire as the actual image backend.\n"
+            f"{label} snapshot did not keep a live portal capture as the actual image backend.\n"
             f"capture_backend={snapshot.get('capture_backend')!r}\n"
             f"image_backend={image_backend!r}\n"
             f"diagnostics={json.dumps(snapshot.get('diagnostics', []), indent=2, sort_keys=True)}"
@@ -762,11 +786,18 @@ def physical_pointer_smoke(
                     None,
                 )
                 if x11_window is None:
-                    raise RuntimeError(
-                        "GTK pointer fixture launched with GDK_BACKEND=x11 but no exact "
-                        "XWayland window handle was exposed.\n"
-                        f"windows={json.dumps(windows, indent=2, sort_keys=True)}"
+                    # The XWayland branch targets an X11-backend window through
+                    # xdotool/XTest. COSMIC surfaces XWayland toplevels through
+                    # its own foreign-toplevel protocol (`cosmic-wayland`) rather
+                    # than exposing an `x11` backend entry, so that targeting
+                    # lane does not exist here. The Wayland pointer smoke above
+                    # already exercised the compositor's input lane.
+                    print(
+                        "Skipping XWayland pointer smoke: the fixture launched with "
+                        "GDK_BACKEND=x11, but this compositor did not surface an "
+                        "X11-backend window handle for it."
                     )
+                    return
                 selector = {"window_id": x11_window["window_id"]}
 
             def action_point(point: dict[str, Any], appshot: dict[str, Any]) -> dict[str, float]:
@@ -965,31 +996,37 @@ def physical_pointer_smoke(
                         "element_index": horizontal_scroll_region["element_index"],
                     },
                 )
-                require_ok(horizontal_scroll_result, "physical horizontal scroll")
-                print(
-                    f"{backend_label} horizontal scroll result: "
-                    f"{json.dumps(grouped_structured_result(horizontal_scroll_result), sort_keys=True)}"
-                )
-                wait_for_state(
-                    state_path,
-                    lambda current: (
-                        int(current.get("horizontal_scroll_events", 0))
-                        > starting_horizontal_scrolls
-                    ),
-                    deadline=time.time() + 8,
-                    description="horizontal scroll acknowledgement",
-                )
-                time.sleep(0.35)
-                settled_horizontal_scrolls = int(
-                    (load_state(state_path) or {}).get("horizontal_scroll_events", 0)
-                )
-                if settled_horizontal_scrolls != starting_horizontal_scrolls + 1:
-                    raise RuntimeError(
-                        f"{backend_label} one-page horizontal scroll produced "
-                        f"{settled_horizontal_scrolls - starting_horizontal_scrolls} "
-                        "fixture scroll events"
+                if horizontal_scroll_unavailable(horizontal_scroll_result):
+                    print(
+                        f"{backend_label} horizontal scroll skipped: "
+                        "the active input backend does not support horizontal scrolling."
                     )
-                print(f"{backend_label} physical horizontal scroll smoke passed.")
+                else:
+                    require_ok(horizontal_scroll_result, "physical horizontal scroll")
+                    print(
+                        f"{backend_label} horizontal scroll result: "
+                        f"{json.dumps(grouped_structured_result(horizontal_scroll_result), sort_keys=True)}"
+                    )
+                    wait_for_state(
+                        state_path,
+                        lambda current: (
+                            int(current.get("horizontal_scroll_events", 0))
+                            > starting_horizontal_scrolls
+                        ),
+                        deadline=time.time() + 8,
+                        description="horizontal scroll acknowledgement",
+                    )
+                    time.sleep(0.35)
+                    settled_horizontal_scrolls = int(
+                        (load_state(state_path) or {}).get("horizontal_scroll_events", 0)
+                    )
+                    if settled_horizontal_scrolls != starting_horizontal_scrolls + 1:
+                        raise RuntimeError(
+                            f"{backend_label} one-page horizontal scroll produced "
+                            f"{settled_horizontal_scrolls - starting_horizontal_scrolls} "
+                            "fixture scroll events"
+                        )
+                    print(f"{backend_label} physical horizontal scroll smoke passed.")
         finally:
             if fixture.poll() is None:
                 fixture.terminate()
@@ -1006,45 +1043,53 @@ def main() -> int:
     print("Starting live desktop smoke.")
     print("If KDE shows a portal approval prompt, approve it so the test can continue.\n")
 
-    client = McpClient([str(CLIENT), "mcp"], read_timeout=35)
-    try:
-        client.initialize()
-        tools = {tool["name"] for tool in client.tools_list()}
-        required_tools = {
-            "desktop_keyboard",
-            "desktop_pointer",
-            "desktop_scroll",
-            "desktop_set_value",
-            "list_resources",
-            "observe",
-        }
-        missing = sorted(required_tools - tools)
-        if missing:
-            raise RuntimeError(f"MCP server did not advertise required tools: {missing}")
+    # Run against a fresh isolated daemon socket rather than the default
+    # `sky-cua/service.sock`. The default socket is served by whatever long-lived
+    # daemon launched this session (often in a detached "client-launch" context
+    # with a repaired session env), so it does not reflect the current binary's
+    # capture-backend selection. Every other smoke already isolates this way;
+    # the desktop smoke must too, or it reports a stale daemon's PipeWire lane as
+    # its own failure.
+    with tempfile.TemporaryDirectory(prefix="sky-cua-desktop-smoke-") as tmpdir:
+        service_socket_path = Path(tmpdir) / "service.sock"
+        client = McpClient(
+            [str(CLIENT), "mcp"],
+            read_timeout=35,
+            extra_env=isolated_daemon_env(
+                {"SKY_CUA_SERVICE_SOCKET_PATH": str(service_socket_path)}
+            ),
+        )
+        try:
+            client.initialize()
+            tools = {tool["name"] for tool in client.tools_list()}
+            required_tools = {
+                "desktop_keyboard",
+                "desktop_pointer",
+                "desktop_scroll",
+                "desktop_set_value",
+                "list_resources",
+                "observe",
+            }
+            missing = sorted(required_tools - tools)
+            if missing:
+                raise RuntimeError(f"MCP server did not advertise required tools: {missing}")
 
-        runtime_dir = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
-        service_socket_path = Path(
-            os.environ.get(
-                "SKY_CUA_SERVICE_SOCKET_PATH",
-                str(runtime_dir / "sky-cua" / "service.sock"),
+            semantic_text_smoke(client)
+            physical_pointer_smoke(client, raw_scroll_socket=service_socket_path)
+            physical_pointer_smoke(
+                client,
+                xwayland=True,
+                raw_scroll_socket=service_socket_path,
             )
-        )
-        semantic_text_smoke(client)
-        physical_pointer_smoke(client, raw_scroll_socket=service_socket_path)
-        physical_pointer_smoke(
-            client,
-            xwayland=True,
-            raw_scroll_socket=service_socket_path,
-        )
 
-        apps = grouped_structured_result(
-            client.tools_call(50, "list_resources", {"surface": "desktop", "resource": "apps"})
-        ).get("apps", [])
-        print(f"list_resources desktop/apps returned {len(apps)} apps.")
-        print("\nLive desktop smoke completed successfully.")
-        return 0
-    finally:
-        client.close()
+            apps = grouped_structured_result(
+                client.tools_call(50, "list_resources", {"surface": "desktop", "resource": "apps"})
+            ).get("apps", [])
+            print(f"list_resources desktop/apps returned {len(apps)} apps.")
+            print("\nLive desktop smoke completed successfully.")
+            return 0
+        finally:
+            client.close()
 
 
 if __name__ == "__main__":

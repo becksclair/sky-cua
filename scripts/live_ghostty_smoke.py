@@ -22,7 +22,9 @@ from typing import Any
 from live_desktop_smoke import (  # type: ignore[import-not-found]
     CLIENT,
     McpClient,
+    appshot_action_fences,
     grouped_structured_result,
+    isolated_daemon_env,
     require_no_portal_approval_pending,
     require_ok,
     wait_for_app_snapshot_result,
@@ -147,7 +149,7 @@ def main() -> int:
         ghostty = launch_ghostty(tmpdir_path)
         client = McpClient(
             [str(CLIENT), "mcp"],
-            extra_env={"SKY_CUA_SERVICE_SOCKET_PATH": str(socket_path)},
+            extra_env=isolated_daemon_env({"SKY_CUA_SERVICE_SOCKET_PATH": str(socket_path)}),
         )
         try:
             client.initialize()
@@ -178,7 +180,7 @@ def main() -> int:
             snapshot = result["structuredContent"]
             require_no_portal_approval_pending(snapshot, "Ghostty snapshot")
             focused_app = snapshot.get("focused_app") or {}
-            if focused_app.get("desktop_file_id") != "ghostty.desktop":
+            if focused_app.get("desktop_file_id") != "com.mitchellh.ghostty.desktop":
                 raise RuntimeError(
                     "Ghostty smoke did not focus the expected desktop app.\n"
                     f"focused_app={json.dumps(focused_app, indent=2, sort_keys=True)}"
@@ -201,7 +203,7 @@ def main() -> int:
                 "desktop_keyboard",
                 {
                     "operation": "type_text",
-                    "snapshot_id": snapshot["snapshot_id"],
+                    **appshot_action_fences(snapshot),
                     "text": SUMMARY_COMMAND,
                 },
             )
@@ -211,7 +213,7 @@ def main() -> int:
                 "desktop_keyboard",
                 {
                     "operation": "press_key",
-                    "snapshot_id": snapshot["snapshot_id"],
+                    **appshot_action_fences(snapshot),
                     "key": "Enter",
                 },
             )
@@ -230,7 +232,7 @@ def main() -> int:
                 "desktop_keyboard",
                 {
                     "operation": "type_text",
-                    "snapshot_id": snapshot["snapshot_id"],
+                    **appshot_action_fences(snapshot),
                     "text": COUNT_COMMAND,
                 },
             )
@@ -240,7 +242,7 @@ def main() -> int:
                 "desktop_keyboard",
                 {
                     "operation": "press_key",
-                    "snapshot_id": snapshot["snapshot_id"],
+                    **appshot_action_fences(snapshot),
                     "key": "Enter",
                 },
             )

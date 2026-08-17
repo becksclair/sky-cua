@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any
@@ -19,8 +18,10 @@ from _session_env_smoke import (
 from live_desktop_smoke import (
     CLIENT,
     McpClient,
+    appshot_action_fences,
     find_button,
     find_editable,
+    isolated_daemon_env,
     require_ok,
     wait_for_app_snapshot_result,
 )
@@ -39,10 +40,7 @@ def main() -> int:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     import_current_env_to_systemd()
     dialog = run_session_env_dialog()
-    socket_path = os.environ.get("SKY_CUA_SERVICE_SOCKET_PATH")
-    base_env = stripped_desktop_env(
-        {"SKY_CUA_SERVICE_SOCKET_PATH": socket_path} if socket_path else None
-    )
+    base_env = stripped_desktop_env(isolated_daemon_env())
     client = McpClient([str(CLIENT), "mcp"], base_env=base_env)
     try:
         client.initialize()
@@ -62,10 +60,10 @@ def main() -> int:
         (artifact_dir / "snapshot.json").write_text(
             json.dumps(state, indent=2, sort_keys=True), encoding="utf-8"
         )
-        if snapshot["environment"]["session_kind"] == "unsupported":
+        if doctor_report.get("environment", {}).get("session_kind") == "unsupported":
             raise RuntimeError(
-                "snapshot environment stayed unsupported after session-env repair.\n"
-                f"snapshot={json.dumps(snapshot, indent=2, sort_keys=True)}"
+                "environment stayed unsupported after session-env repair.\n"
+                f"doctor={json.dumps(doctor_report, indent=2, sort_keys=True)}"
             )
         try:
             editable = find_editable(snapshot)
@@ -77,7 +75,7 @@ def main() -> int:
                     "desktop_pointer",
                     {
                         "operation": "click",
-                        "snapshot_id": snapshot["snapshot_id"],
+                        **appshot_action_fences(snapshot),
                         "x": target_x,
                         "y": target_y,
                     },
@@ -106,7 +104,7 @@ def main() -> int:
                     6,
                     "desktop_set_value",
                     {
-                        "snapshot_id": snapshot["snapshot_id"],
+                        **appshot_action_fences(snapshot),
                         "element_index": editable["element_index"],
                         "value": "session-env-ok",
                     },
@@ -123,7 +121,7 @@ def main() -> int:
                     "desktop_pointer",
                     {
                         "operation": "click",
-                        "snapshot_id": updated["snapshot_id"],
+                        **appshot_action_fences(updated),
                         "element_index": ok_button["element_index"],
                     },
                 ),

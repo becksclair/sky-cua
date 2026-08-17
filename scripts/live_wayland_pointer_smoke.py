@@ -20,10 +20,15 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from _fixture_acknowledgement import (  # type: ignore[import-not-found]
+    wait_for_press_key_acknowledgement,
+    wait_for_type_text_acknowledgement,
+)
 from live_desktop_smoke import (  # type: ignore[import-not-found]
     CLIENT,
     McpClient,
     find_scroll_region,
+    isolated_daemon_env,
     load_state,
     require_ok,
     run_pointer_fixture,
@@ -156,6 +161,19 @@ def require_gnome_eis_input_used(result: dict[str, Any], action: str, *, is_gnom
         print(f"WARNING: {msg}", file=sys.stderr)
 
 
+def _observe_desktop(client: McpClient, call_id: int) -> str:
+    """Call observe on the desktop and return the appshot_id."""
+    result = client.tools_call(call_id, "observe", {"surface": "desktop"})
+    structured = grouped_structured_result(result)
+    appshot_id = structured.get("appshot_id")
+    if not isinstance(appshot_id, str) or not appshot_id:
+        raise RuntimeError(
+            f"desktop observe did not return appshot_id: "
+            f"{json.dumps(result, indent=2, sort_keys=True)}"
+        )
+    return appshot_id
+
+
 def _drag_call(
     client: McpClient,
     call_id: int,
@@ -163,19 +181,19 @@ def _drag_call(
     point_to: dict[str, float],
     *,
     duration_ms: int,
+    appshot_id: str | None = None,
 ) -> dict[str, Any]:
-    return client.tools_call(
-        call_id,
-        "desktop_pointer",
-        {
-            "operation": "drag",
-            "x": point_from["x"],
-            "y": point_from["y"],
-            "to_x": point_to["x"],
-            "to_y": point_to["y"],
-            "duration_ms": duration_ms,
-        },
-    )
+    args: dict[str, Any] = {
+        "operation": "drag",
+        "x": point_from["x"],
+        "y": point_from["y"],
+        "to_x": point_to["x"],
+        "to_y": point_to["y"],
+        "duration_ms": duration_ms,
+    }
+    if appshot_id is not None:
+        args["appshot_id"] = appshot_id
+    return client.tools_call(call_id, "desktop_pointer", args)
 
 
 def drive_extended_controls(
@@ -183,6 +201,8 @@ def drive_extended_controls(
     state_path: Path,
     points: dict[str, dict[str, float]],
     artifact_dir: Path,
+    *,
+    appshot_id: str,
 ) -> None:
     """Exercise the richer control surface (sliders, DnD, spin, combo, switch, XY pad).
 
@@ -192,7 +212,12 @@ def drive_extended_controls(
     """
     # Horizontal slider: drag the thumb rightward; the value must track.
     result = _drag_call(
-        client, 150, points["slider_h_from"], points["slider_h_to"], duration_ms=600
+        client,
+        150,
+        points["slider_h_from"],
+        points["slider_h_to"],
+        duration_ms=600,
+        appshot_id=appshot_id,
     )
     write_json(artifact_dir / "slider-h-result.json", result)
     require_ok(result, "visible Wayland horizontal slider drag")
@@ -206,7 +231,12 @@ def drive_extended_controls(
 
     # Vertical slider: drag the thumb downward (top = min on a GTK vertical scale).
     result = _drag_call(
-        client, 151, points["slider_v_from"], points["slider_v_to"], duration_ms=600
+        client,
+        151,
+        points["slider_v_from"],
+        points["slider_v_to"],
+        duration_ms=600,
+        appshot_id=appshot_id,
     )
     write_json(artifact_dir / "slider-v-result.json", result)
     require_ok(result, "visible Wayland vertical slider drag")
@@ -221,7 +251,14 @@ def drive_extended_controls(
     # Drag-and-drop: the keystone. GTK only arms a drag gesture once motion
     # crosses its threshold under the button grab, which only the interpolated
     # backend drag produces.
-    result = _drag_call(client, 152, points["dnd_source"], points["dnd_target"], duration_ms=600)
+    result = _drag_call(
+        client,
+        152,
+        points["dnd_source"],
+        points["dnd_target"],
+        duration_ms=600,
+        appshot_id=appshot_id,
+    )
     write_json(artifact_dir / "dnd-result.json", result)
     require_ok(result, "visible Wayland drag-and-drop")
     wait_for_state(
@@ -241,6 +278,7 @@ def drive_extended_controls(
             "desktop_pointer",
             {
                 "operation": "click",
+                "appshot_id": appshot_id,
                 "x": points["spin_up_button"]["x"],
                 "y": points["spin_up_button"]["y"],
             },
@@ -264,12 +302,19 @@ def drive_extended_controls(
         result = client.tools_call(
             156,
             "desktop_pointer",
-            {"operation": "click", "x": points["combo"]["x"], "y": points["combo"]["y"]},
+            {
+                "operation": "click",
+                "appshot_id": appshot_id,
+                "x": points["combo"]["x"],
+                "y": points["combo"]["y"],
+            },
         )
         require_ok(result, "visible Wayland combo open")
         for call_id, key in ((157, "Down"), (158, "Return")):
             key_result = client.tools_call(
-                call_id, "desktop_keyboard", {"operation": "press_key", "key": key}
+                call_id,
+                "desktop_keyboard",
+                {"operation": "press_key", "key": key, "appshot_id": appshot_id},
             )
             require_ok(key_result, f"visible Wayland combo {key}")
         wait_for_state(
@@ -282,7 +327,14 @@ def drive_extended_controls(
 
     # Switch: prefer a knob drag (exercises smooth motion); fall back to a click
     # if the synthetic knob drag does not toggle.
-    result = _drag_call(client, 159, points["switch_off"], points["switch_on"], duration_ms=400)
+    result = _drag_call(
+        client,
+        159,
+        points["switch_off"],
+        points["switch_on"],
+        duration_ms=400,
+        appshot_id=appshot_id,
+    )
     write_json(artifact_dir / "switch-result.json", result)
     require_ok(result, "visible Wayland switch drag")
     try:
@@ -297,7 +349,12 @@ def drive_extended_controls(
         click_result = client.tools_call(
             160,
             "desktop_pointer",
-            {"operation": "click", "x": points["switch"]["x"], "y": points["switch"]["y"]},
+            {
+                "operation": "click",
+                "appshot_id": appshot_id,
+                "x": points["switch"]["x"],
+                "y": points["switch"]["y"],
+            },
         )
         require_ok(click_result, "visible Wayland switch click fallback")
         wait_for_state(
@@ -309,7 +366,14 @@ def drive_extended_controls(
         print("Switch click fallback passed.")
 
     # 2D drag pad: free-form drag; the path must reach the bottom-right quadrant.
-    result = _drag_call(client, 161, points["xy_pad_from"], points["xy_pad_to"], duration_ms=500)
+    result = _drag_call(
+        client,
+        161,
+        points["xy_pad_from"],
+        points["xy_pad_to"],
+        duration_ms=500,
+        appshot_id=appshot_id,
+    )
     write_json(artifact_dir / "xy-pad-result.json", result)
     require_ok(result, "visible Wayland 2D drag pad")
     wait_for_state(
@@ -356,6 +420,9 @@ def main() -> int:
         state_path = tmpdir_path / "state.json"
         service_socket_path = tmpdir_path / "service.sock"
         client_env["SKY_CUA_SERVICE_SOCKET_PATH"] = str(service_socket_path)
+        # The smoke owns an isolated daemon; keep it off the machine-wide
+        # phone-direct TCP endpoint so a lingering daemon cannot break the run.
+        client_env = isolated_daemon_env(client_env)
         fixture = run_pointer_fixture(state_path, extra_env=fixture_env)
         try:
             try:
@@ -465,10 +532,16 @@ def main() -> int:
                 print(f"Waiting {step_delay:.1f}s before click...")
                 time.sleep(step_delay)
                 click_point = state["points"]["click_button"]
+                appshot_id = _observe_desktop(client, 110)
                 click_result = client.tools_call(
                     102,
                     "desktop_pointer",
-                    {"operation": "click", "x": click_point["x"], "y": click_point["y"]},
+                    {
+                        "operation": "click",
+                        "appshot_id": appshot_id,
+                        "x": click_point["x"],
+                        "y": click_point["y"],
+                    },
                 )
                 write_json(artifact_dir / "click-result.json", click_result)
                 require_ok(click_result, "visible Wayland physical click")
@@ -502,6 +575,7 @@ def main() -> int:
                     "desktop_pointer",
                     {
                         "operation": "secondary_click",
+                        "appshot_id": appshot_id,
                         "x": secondary_point["x"],
                         "y": secondary_point["y"],
                     },
@@ -528,6 +602,7 @@ def main() -> int:
                     "desktop_pointer",
                     {
                         "operation": "drag",
+                        "appshot_id": appshot_id,
                         "x": drag_from["x"],
                         "y": drag_from["y"],
                         "to_x": drag_to["x"],
@@ -564,7 +639,14 @@ def main() -> int:
                 write_json(artifact_dir / "pre-scroll-observe.json", observe_result)
                 require_ok(observe_result, "visible Wayland pre-scroll observation")
                 observed = grouped_structured_result(observe_result)
-                snapshot_id = observed.get("snapshot_id")
+                # Flatten semantic_projection elements to top level for find_scroll_region.
+                sem = observed.get("semantic_projection") or {}
+                if "elements" not in observed and isinstance(sem.get("elements"), list):
+                    observed = {**observed, "elements": sem["elements"]}
+                scroll_appshot_id = observed.get("appshot_id") or ""
+                snapshot_id = observed.get("snapshot_id") or (
+                    observed.get("action_snapshot") or {}
+                ).get("snapshot_id")
                 if not isinstance(snapshot_id, str) or not snapshot_id:
                     raise RuntimeError(
                         "pre-scroll observation did not return a snapshot_id. "
@@ -577,6 +659,7 @@ def main() -> int:
                     {
                         "direction": "down",
                         "pages": 1,
+                        "appshot_id": scroll_appshot_id,
                         "snapshot_id": snapshot_id,
                         "element_index": scroll_region["element_index"],
                     },
@@ -601,7 +684,14 @@ def main() -> int:
                 # because they are pointer-driven drag/click hardening.
                 controls_state = load_state(state_path) or {}
                 if int(controls_state.get("fixture_controls_version", 0)) >= 2:
-                    drive_extended_controls(client, state_path, state["points"], artifact_dir)
+                    appshot_id = _observe_desktop(client, 200)
+                    drive_extended_controls(
+                        client,
+                        state_path,
+                        state["points"],
+                        artifact_dir,
+                        appshot_id=appshot_id,
+                    )
                     print("Extended control surface passed.")
                 else:
                     print("Fixture predates extended controls; skipping slider/DnD proofs.")
@@ -619,7 +709,12 @@ def main() -> int:
                 focus_result = client.tools_call(
                     107,
                     "desktop_pointer",
-                    {"operation": "click", "x": text_point["x"], "y": text_point["y"]},
+                    {
+                        "operation": "click",
+                        "appshot_id": appshot_id,
+                        "x": text_point["x"],
+                        "y": text_point["y"],
+                    },
                 )
                 write_json(artifact_dir / "text-focus-result.json", focus_result)
                 require_ok(focus_result, "visible Wayland text-entry focus click")
@@ -639,35 +734,39 @@ def main() -> int:
                 type_result = client.tools_call(
                     108,
                     "desktop_keyboard",
-                    {"operation": "type_text", "text": text_value},
+                    {"operation": "type_text", "text": text_value, "appshot_id": appshot_id},
                 )
                 write_json(artifact_dir / "type-result.json", type_result)
                 require_ok(type_result, "visible Wayland type_text")
                 require_gnome_eis_input_used(
                     type_result, "visible Wayland type_text", is_gnome=is_gnome
                 )
-                wait_for_state(
+                wait_for_type_text_acknowledgement(
+                    client,
+                    108,
                     state_path,
-                    lambda current: current.get("entry_text") == text_value,
-                    deadline=time.time() + 8,
-                    description="visible Wayland type_text acknowledgement",
+                    text_value=text_value,
+                    appshot_id=appshot_id,
+                    artifact_dir=artifact_dir,
                 )
 
                 key_result = client.tools_call(
                     109,
                     "desktop_keyboard",
-                    {"operation": "press_key", "key": "Enter"},
+                    {"operation": "press_key", "key": "Enter", "appshot_id": appshot_id},
                 )
                 write_json(artifact_dir / "press-key-result.json", key_result)
                 require_ok(key_result, "visible Wayland press_key")
                 require_gnome_eis_input_used(
                     key_result, "visible Wayland press_key", is_gnome=is_gnome
                 )
-                final_state = wait_for_state(
+                final_state = wait_for_press_key_acknowledgement(
+                    client,
+                    109,
                     state_path,
-                    lambda current: current.get("submitted_text") == text_value,
-                    deadline=time.time() + 8,
-                    description="visible Wayland press_key acknowledgement",
+                    text_value=text_value,
+                    appshot_id=appshot_id,
+                    artifact_dir=artifact_dir,
                 )
                 write_json(artifact_dir / "final-state.json", final_state)
                 print("Visible Wayland type_text + press_key passed.")

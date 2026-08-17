@@ -20,7 +20,9 @@ from typing import Any
 from live_desktop_smoke import (  # type: ignore[import-not-found]
     CLIENT,
     McpClient,
+    appshot_action_fences,
     grouped_structured_result,
+    isolated_daemon_env,
     require_no_portal_approval_pending,
     require_ok,
     wait_for_app_snapshot_result,
@@ -99,7 +101,7 @@ def main() -> int:
         kwrite = launch_kwrite(file_path)
         client = McpClient(
             [str(CLIENT), "mcp"],
-            extra_env={"SKY_CUA_SERVICE_SOCKET_PATH": str(socket_path)},
+            extra_env=isolated_daemon_env({"SKY_CUA_SERVICE_SOCKET_PATH": str(socket_path)}),
         )
         try:
             client.initialize()
@@ -149,7 +151,7 @@ def main() -> int:
                 30,
                 "desktop_set_value",
                 {
-                    "snapshot_id": snapshot["snapshot_id"],
+                    **appshot_action_fences(snapshot),
                     "element_index": editor["element_index"],
                     "value": EXPECTED_TEXT,
                 },
@@ -181,7 +183,7 @@ def main() -> int:
                 "desktop_keyboard",
                 {
                     "operation": "press_key",
-                    "snapshot_id": snapshot["snapshot_id"],
+                    **appshot_action_fences(snapshot),
                     "key": "Ctrl+S",
                 },
             )

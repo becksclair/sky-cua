@@ -53,7 +53,7 @@ from _chrome_bridge import (
     wait_for_host_process,
     wait_for_socket,
 )
-from _mcp_stdio import McpClient, stop_service_processes_for_socket
+from _mcp_stdio import McpClient, isolated_daemon_env, stop_service_processes_for_socket
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MCP_CLIENT_PATH = REPO_ROOT / "target/debug/sky-cua-client"
@@ -450,12 +450,14 @@ def run_mcp_list_tabs_proof(
 
     client = McpClient(
         [str(client_path), "mcp"],
-        extra_env={
-            "CODEX_BROWSER_USE_SOCKET_DIR": str(socket_dir),
-            "SKY_CUA_BROWSER_USE_SOCKET_DIR": str(socket_dir),
-            "SKY_CUA_REPO_ROOT": str(REPO_ROOT),
-            "SKY_CUA_SERVICE_SOCKET_PATH": str(service_socket_path),
-        },
+        extra_env=isolated_daemon_env(
+            {
+                "CODEX_BROWSER_USE_SOCKET_DIR": str(socket_dir),
+                "SKY_CUA_BROWSER_USE_SOCKET_DIR": str(socket_dir),
+                "SKY_CUA_REPO_ROOT": str(REPO_ROOT),
+                "SKY_CUA_SERVICE_SOCKET_PATH": str(service_socket_path),
+            }
+        ),
         read_timeout=MCP_READ_TIMEOUT_SECONDS,
         client_name="live-chrome-host-smoke",
     )

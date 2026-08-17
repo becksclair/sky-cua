@@ -37,6 +37,7 @@ from _kwin_effect import (
     parse_kwin_effect_list,
     set_effect_enabled_config,
 )
+from _mcp_stdio import isolated_daemon_env
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_ROOT = REPO_ROOT / "artifacts" / "codex-e2e" / "agent-cursor-kde"
@@ -335,7 +336,7 @@ def build_service() -> None:
 
 
 def start_service(socket_path: Path, artifact_dir: Path, *, mode: str) -> subprocess.Popen[bytes]:
-    env = dict(os.environ)
+    env = isolated_daemon_env(dict(os.environ))
     env["SKY_CUA_SERVICE_SOCKET_PATH"] = str(socket_path)
     env.setdefault("SKY_CUA_AGENT_CURSOR", "always")
     if mode == "kwin-effect-static":
@@ -343,6 +344,13 @@ def start_service(socket_path: Path, artifact_dir: Path, *, mode: str) -> subpro
         env["SKY_CUA_OVERLAY_BACKEND"] = "none"
         env["SKY_CUA_SCREENSHOT_CURSOR"] = "never"
         env["SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE"] = "never"
+    if mode == "synthetic":
+        # The synthetic mode proves the software-painted cursor fallback, which
+        # is only exercised when no real overlay host is reachable. On
+        # compositors with a working layer-shell host (COSMIC), `auto` resolves
+        # to the real host and the `.agent-cursor.` marker is never composited,
+        # so force the host off to exercise the fallback path.
+        env["SKY_CUA_OVERLAY_BACKEND"] = "none"
     if mode in {
         "layer-shell-debug-visible",
         "layer-shell-hide-for-capture",

@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Operator-run smoke for forced Wayland capture downgrade.
 
-This starts a fresh isolated sky-cua service, forces PipeWire image capture to
-fail, and proves that get_app_state falls back to the Screenshot portal with
-explicit downgrade diagnostics and MCP summary text.
+On a PipeWire-first desktop (KDE) this starts a fresh isolated sky-cua service,
+forces PipeWire image capture to fail, and proves that get_app_state falls back
+to the Screenshot portal with explicit downgrade diagnostics and MCP summary
+text.
+
+On a Screenshot-first desktop (COSMIC) there is no PipeWire lane to downgrade
+from, so the forced failure is a no-op; the smoke instead asserts the honest
+screenshot-primary capture (Screenshot backend plus a real model image).
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from pathlib import Path
 from live_desktop_smoke import (
     CLIENT,
     McpClient,
+    isolated_daemon_env,
     run_zenity_input,
     wait_for_app_snapshot_result,
 )
@@ -32,6 +38,14 @@ def diagnostic_codes(diagnostics: list[dict[str, object]]) -> set[str]:
     return {code for entry in diagnostics if isinstance(code := entry.get("code"), str)}
 
 
+def has_real_model_image(image: dict[str, object]) -> bool:
+    """A screenshot-primary capture counts as real when the model image has a
+    positive byte size and a full SHA-256 digest."""
+    size = image.get("size_bytes")
+    digest = image.get("sha256")
+    return isinstance(size, int) and size > 0 and isinstance(digest, str) and len(digest) == 64
+
+
 def has_portal_session_diagnostic(diagnostics: list[dict[str, object]]) -> bool:
     return bool(diagnostic_codes(diagnostics).intersection(SESSION_DIAGNOSTIC_CODES))
 
@@ -46,10 +60,12 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="sky-cua-downgrade-smoke-") as tmpdir:
         socket_path = Path(tmpdir) / "service.sock"
-        extra_env = {
-            "SKY_CUA_FORCE_PIPEWIRE_CAPTURE_FAILURE": "1",
-            "SKY_CUA_SERVICE_SOCKET_PATH": str(socket_path),
-        }
+        extra_env = isolated_daemon_env(
+            {
+                "SKY_CUA_FORCE_PIPEWIRE_CAPTURE_FAILURE": "1",
+                "SKY_CUA_SERVICE_SOCKET_PATH": str(socket_path),
+            }
+        )
         dialog = run_zenity_input(DOWNGRADE_TITLE)
         client = McpClient([str(CLIENT), "mcp"], extra_env=extra_env)
         try:
@@ -82,6 +98,36 @@ def main() -> int:
             summary_text = result["content"][0]["text"]
             capture = snapshot.get("capture") or {}
             diagnostics = snapshot.get("diagnostics") or []
+
+            # On compositors whose portal never runs a combined
+            # RemoteDesktop+ScreenCast session (COSMIC), Screenshot is already
+            # the primary capture lane. The forced PipeWire failure is a no-op
+            # there: there is no PipeWire lane to downgrade from. Assert the
+            # honest screenshot-primary capture instead of a downgrade that
+            # cannot happen.
+            primary_backend = capture.get("backend") or snapshot.get("capture_backend")
+            if primary_backend == "portal_screenshot":
+                image_backend = snapshot.get("image_backend")
+                if image_backend != "portal_screenshot":
+                    raise RuntimeError(
+                        "Screenshot-primary session did not capture through the Screenshot portal.\n"
+                        f"image_backend={image_backend!r}\n"
+                        f"capture_backend={snapshot.get('capture_backend')!r}"
+                    )
+                image = snapshot.get("image")
+                if not isinstance(image, dict) or not has_real_model_image(image):
+                    raise RuntimeError(
+                        "Screenshot-primary session did not produce a real model-facing image.\n"
+                        f"image={json.dumps(image, indent=2, sort_keys=True)}"
+                    )
+                print(
+                    "Screenshot is already the primary capture lane; "
+                    "PipeWire downgrade is not applicable on this compositor."
+                )
+                print(f"Capture backend: {snapshot.get('capture_backend')}")
+                print(f"Image backend: {image_backend}")
+                print("\nScreenshot-primary portal smoke completed successfully.")
+                return 0
 
             expected_codes = {
                 "PipeWireStreamFailed",

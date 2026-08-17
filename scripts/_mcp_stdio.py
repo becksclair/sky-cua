@@ -74,6 +74,21 @@ def terminate_process(pid: int, *, proc_root: Path = Path("/proc")) -> None:
             os.kill(pid, signal.SIGKILL)
 
 
+def isolated_daemon_env(existing: dict[str, str] | None = None) -> dict[str, str]:
+    """Env for a smoke that may spawn its own daemon (isolated socket or plain
+    mode): keep it off the machine-wide phone-direct TCP endpoint so a lingering
+    daemon cannot break the run with an EADDRINUSE, and forward the caller's
+    service socket/path overrides without clobbering explicitly set values."""
+    env = dict(existing or {})
+    env.setdefault("SKY_CUA_PHONE_DIRECT", "0")
+    for key in ("SKY_CUA_SERVICE_SOCKET_PATH", "SKY_CUA_SERVICE_PATH"):
+        if key not in env:
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
+    return env
+
+
 @dataclass(frozen=True)
 class McpResponse:
     raw: dict[str, Any]

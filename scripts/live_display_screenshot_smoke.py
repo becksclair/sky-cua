@@ -14,7 +14,13 @@ from pathlib import Path
 from typing import Any
 
 from _smoke_config import env_flag
-from live_desktop_smoke import CLIENT, McpClient, require_ok, run_zenity_input
+from live_desktop_smoke import (
+    CLIENT,
+    McpClient,
+    isolated_daemon_env,
+    require_ok,
+    run_zenity_input,
+)
 from live_targeted_screenshot_smoke import (
     gtk_session_env,
     require_capture,
@@ -119,41 +125,16 @@ def display_id(display: Mapping[str, Any]) -> str:
     return value
 
 
-def bounds_contains_point(bounds: Mapping[str, Any], x: float, y: float) -> bool:
-    return (
-        x >= require_number(bounds, "x")
-        and y >= require_number(bounds, "y")
-        and x <= require_number(bounds, "x") + require_number(bounds, "width")
-        and y <= require_number(bounds, "y") + require_number(bounds, "height")
-    )
-
-
-def window_button_point(window: Mapping[str, Any]) -> tuple[float, float]:
-    bounds = require_mapping(window, "bounds")
-    return (
-        require_number(bounds, "x") + require_number(bounds, "width") * 0.76,
-        require_number(bounds, "y") + require_number(bounds, "height") * 0.89,
-    )
-
-
-def screenshot_point_for_desktop_point(
-    capture: Mapping[str, Any], point: tuple[float, float]
-) -> dict[str, float]:
-    logical_rect = require_mapping(capture, "logical_rect")
+def zenity_ok_button_point(capture: Mapping[str, Any]) -> dict[str, float]:
     pixel_size = require_mapping(capture, "pixel_size")
-    x = point[0]
-    y = point[1]
-    if not bounds_contains_point(logical_rect, x, y):
-        raise RuntimeError(
-            "target point is outside display screenshot logical_rect.\n"
-            f"point={point!r}\nlogical_rect={json.dumps(logical_rect, indent=2, sort_keys=True)}"
-        )
-    rel_x = (x - require_number(logical_rect, "x")) / require_number(logical_rect, "width")
-    rel_y = (y - require_number(logical_rect, "y")) / require_number(logical_rect, "height")
-    return {
-        "x": rel_x * require_number(pixel_size, "width"),
-        "y": rel_y * require_number(pixel_size, "height"),
-    }
+    pixel_width = require_number(pixel_size, "width")
+    pixel_height = require_number(pixel_size, "height")
+    if pixel_width <= 0 or pixel_height <= 0:
+        raise RuntimeError(f"window capture pixel_size is not usable: {pixel_size!r}")
+    # Zenity's GTK4 entry dialog places the OK button in the lower-right
+    # action row; aim at its center using the same proven fraction as the
+    # targeted-screenshot smoke.
+    return {"x": pixel_width * 0.73, "y": pixel_height * 0.815}
 
 
 def main() -> int:
@@ -165,10 +146,12 @@ def main() -> int:
     artifact_dir = artifact_root / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    client_env = {
-        "SKY_CUA_AGENT_CURSOR": "0",
-        "SKY_CUA_SCREENSHOT_CURSOR": "0",
-    }
+    client_env = isolated_daemon_env(
+        {
+            "SKY_CUA_AGENT_CURSOR": "0",
+            "SKY_CUA_SCREENSHOT_CURSOR": "0",
+        }
+    )
     client_env.update(gtk_env)
 
     with tempfile.TemporaryDirectory(prefix="sky-cua-display-screenshot-") as tmpdir:
@@ -305,25 +288,73 @@ def main() -> int:
                 target_snapshot = grouped_structured_result(target_result)
                 if not isinstance(target_snapshot, Mapping):
                     raise RuntimeError("target display screenshot did not return structuredContent")
-                target_snapshot_id = target_snapshot.get("snapshot_id")
-                if not isinstance(target_snapshot_id, str) or not target_snapshot_id:
-                    raise RuntimeError(
-                        f"target display screenshot did not return snapshot_id: {target_snapshot!r}"
-                    )
                 target_capture = require_capture(target_snapshot)
                 require_capture_scope(target_capture, "display", "target display screenshot")
                 require_display_id(target_capture, target_display_id, "target display screenshot")
                 require_positive_capture(target_capture, "target display screenshot")
 
-                click_point = screenshot_point_for_desktop_point(
-                    target_capture,
-                    window_button_point(target_window),
+                # State-changing actions require a fresh, exact-window AppShot.
+                # A window-scoped capture supplies the pixel space for the click
+                # point; an observe of that window supplies the appshot_id +
+                # snapshot_id fences. Reuse the sibling smoke's proven OK-button
+                # fraction so the point stays inside the window capture.
+                window_capture_result = client.tools_call(
+                    26,
+                    "capture_desktop",
+                    {"window_id": target_window["window_id"]},
                 )
+                write_json(
+                    artifact_dir / "target-window-capture-result.json",
+                    window_capture_result,
+                )
+                require_ok(window_capture_result, "target window capture")
+                window_capture = grouped_structured_result(window_capture_result)
+                if not isinstance(window_capture, Mapping):
+                    raise RuntimeError(
+                        "target window capture did not return structuredContent: "
+                        f"{window_capture!r}"
+                    )
+                window_capture_info = require_capture(window_capture)
+                click_point = zenity_ok_button_point(window_capture_info)
+                observe_result = client.tools_call(
+                    27,
+                    "observe",
+                    {"surface": "desktop", "window_title": TARGET_TITLE},
+                )
+                write_json(artifact_dir / "target-display-observe.json", observe_result)
+                require_ok(observe_result, "target display observe for appshot fences")
+                observe_snapshot = grouped_structured_result(observe_result)
+                if not isinstance(observe_snapshot, Mapping):
+                    raise RuntimeError(
+                        "target display observe did not return structuredContent: "
+                        f"{observe_snapshot!r}"
+                    )
+                appshot_id = observe_snapshot.get("appshot_id")
+                action_snapshot = observe_snapshot.get("action_snapshot")
+                snapshot_id = (
+                    action_snapshot.get("snapshot_id")
+                    if isinstance(action_snapshot, Mapping)
+                    else None
+                )
+                if not isinstance(appshot_id, str) or not appshot_id:
+                    raise RuntimeError(
+                        f"target display observe did not return appshot_id: {observe_snapshot!r}"
+                    )
+                if not isinstance(snapshot_id, str) or not snapshot_id:
+                    raise RuntimeError(
+                        "target display observe did not return action snapshot_id: "
+                        f"{observe_snapshot!r}"
+                    )
                 write_json(artifact_dir / "target-display-click-point.json", click_point)
                 click_result = client.tools_call(
-                    26,
+                    28,
                     "desktop_pointer",
-                    {"operation": "click", "snapshot_id": target_snapshot_id, **click_point},
+                    {
+                        "operation": "click",
+                        "appshot_id": appshot_id,
+                        "snapshot_id": snapshot_id,
+                        **click_point,
+                    },
                 )
                 write_json(artifact_dir / "target-display-click-result.json", click_result)
                 require_ok(click_result, "display screenshot coordinate click")

@@ -27,8 +27,10 @@ from _text_readback_smoke import (
 from live_desktop_smoke import (
     CLIENT,
     McpClient,
+    appshot_action_fences,
     find_button,
     find_editable,
+    isolated_daemon_env,
     require_editable_readback,
     require_ok,
     wait_for_app_snapshot_result,
@@ -39,7 +41,8 @@ def main() -> int:
     artifact_dir = Path("artifacts/text-readback-smoke") / time.strftime("%Y%m%dT%H%M%SZ")
     artifact_dir.mkdir(parents=True, exist_ok=True)
     dialog = run_zenity_readback_dialog()
-    client = McpClient([str(CLIENT), "mcp"])
+
+    client = McpClient([str(CLIENT), "mcp"], extra_env=isolated_daemon_env())
     try:
         client.initialize()
         state = wait_for_app_snapshot_result(client, TITLE, deadline=time.time() + 15)
@@ -57,7 +60,7 @@ def main() -> int:
                 20,
                 "desktop_set_value",
                 {
-                    "snapshot_id": snapshot["snapshot_id"],
+                    **appshot_action_fences(snapshot),
                     "element_index": editable["element_index"],
                     "value": REPLACEMENT_VALUE,
                 },
@@ -81,7 +84,7 @@ def main() -> int:
                 "desktop_pointer",
                 {
                     "operation": "click",
-                    "snapshot_id": updated["snapshot_id"],
+                    **appshot_action_fences(updated),
                     "element_index": ok_button["element_index"],
                 },
             ),
