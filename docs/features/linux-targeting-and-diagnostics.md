@@ -62,6 +62,12 @@ setup messages that say exactly which state the extension install reached.
   (`enrich_accessible_apps_from_windows`).
 - All-app discovery for `list_apps` is unchanged; prefiltering applies only
   to targeted snapshots.
+- Window-title targeting (`crates/sky-cua-linux/src/windowing/target.rs`)
+  treats an exact case-insensitive full-title match as window identity: when
+  the title matches one or more windows exactly, the focused window wins ties
+  and the target resolves without extra selectors. Substring title matches
+  are not identity proof, so a substring matching several windows still
+  errors as ambiguous and asks for a disambiguating selector.
 
 ## Source paths
 

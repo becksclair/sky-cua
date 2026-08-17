@@ -101,6 +101,38 @@ pub(crate) fn merge_app_lists(
     merged
 }
 
+/// A COSMIC foreign-toplevel and an X11 window describe the same XWayland
+/// surface. cosmic-comp surfaces an XWayland window's WM_CLASS instance name as
+/// its foreign-toplevel `app_id` (e.g. `kwrite`), while the X11 backend reports
+/// that name in `wm_class` and derives a `<stem>.desktop` `app_id`. COSMIC
+/// reports no PID for these surfaces and X11 reports physical-pixel bounds, so
+/// the PID/title/bounds identity in `dedupe_windows` never matches them. Match
+/// the WM_CLASS alias instead so a single XWayland toplevel is not listed
+/// twice (once by the COSMIC helper, once by the X11 EWMH backend).
+pub(crate) fn xwayland_window_alias(
+    left: &linux_windowing::LinuxWindowInfo,
+    right: &linux_windowing::LinuxWindowInfo,
+) -> bool {
+    let (cosmic, x11) = match (left.backend.as_str(), right.backend.as_str()) {
+        (
+            crate::windowing::registry::COSMIC_WAYLAND_BACKEND,
+            crate::windowing::registry::X11_BACKEND,
+        ) => (left, right),
+        (
+            crate::windowing::registry::X11_BACKEND,
+            crate::windowing::registry::COSMIC_WAYLAND_BACKEND,
+        ) => (right, left),
+        _ => return false,
+    };
+    let Some(cosmic_app) = cosmic.app_id.as_deref().map(normalize_match_key) else {
+        return false;
+    };
+    let x11_class = x11.wm_class.as_deref().map(normalize_match_key);
+    let x11_app_stem = x11.app_id.as_deref().map(normalize_desktop_id_stem);
+    x11_class.as_deref() == Some(cosmic_app.as_str())
+        || x11_app_stem.as_deref() == Some(cosmic_app.as_str())
+}
+
 fn best_linux_window_match<'a>(
     windows: &'a [linux_windowing::LinuxWindowInfo],
     app: &AppInfo,
@@ -266,11 +298,25 @@ pub(crate) fn app_from_linux_window(window: &linux_windowing::LinuxWindowInfo) -
         name,
         pid: window.pid,
         executable: None,
-        desktop_file_id: window
-            .app_id
-            .as_ref()
-            .filter(|value| value.ends_with(".desktop"))
-            .cloned(),
+        desktop_file_id: window.app_id.as_ref().and_then(|value| {
+            let value = value.trim();
+            if value.is_empty() || value.contains(':') || value.contains('/') {
+                // The `:`/`/` guards exclude synthesized `backend:window_id`
+                // fallbacks and opaque bus/object references.
+                None
+            } else if value.ends_with(".desktop") {
+                Some(value.to_string())
+            } else {
+                // Freedesktop convention: the Wayland app_id is the desktop-file
+                // basename without the ".desktop" suffix. Native Wayland apps
+                // use the reverse-DNS basename (`com.mitchellh.ghostty` ->
+                // `com.mitchellh.ghostty.desktop`), while an XWayland toplevel
+                // surfaces its WM_CLASS instance name (`kwrite` ->
+                // `kwrite.desktop`) — both round-trip to the installed desktop
+                // file the agent already holds.
+                Some(format!("{value}.desktop"))
+            }
+        }),
         app_user_model_id: None,
         window_handle: Some(window.window_id.clone()),
         toolkit_guess: window.client_type.clone(),
@@ -841,6 +887,45 @@ mod tests {
         app.window_title = Some("Shared Project".to_string());
 
         assert!(!linux_window_matches_app(&window, &app));
+    }
+
+    #[test]
+    fn app_from_linux_window_derives_desktop_file_id_from_reverse_dns_app_id() {
+        // COSMIC exposes a reverse-DNS Wayland app_id (not a `.desktop`-suffixed
+        // id), which the freedesktop convention maps back to the installed
+        // desktop file by appending the suffix.
+        let window = linux_window("cosmic:123", "com.mitchellh.ghostty", true);
+        let app = app_from_linux_window(&window);
+        assert_eq!(
+            app.desktop_file_id.as_deref(),
+            Some("com.mitchellh.ghostty.desktop")
+        );
+    }
+
+    #[test]
+    fn app_from_linux_window_derives_desktop_file_id_from_xwayland_wm_class() {
+        // An XWayland toplevel surfaces its WM_CLASS instance as the app_id
+        // (no reverse-DNS dots); the freedesktop convention still appends the
+        // `.desktop` suffix so the id round-trips to `kwrite.desktop`.
+        let window = linux_window("cosmic:123", "kwrite", true);
+        let app = app_from_linux_window(&window);
+        assert_eq!(app.desktop_file_id.as_deref(), Some("kwrite.desktop"));
+    }
+
+    #[test]
+    fn app_from_linux_window_leaves_desktop_file_id_none_without_a_desktop_app_id() {
+        let mut window = linux_window("cosmic:123", "com.mitchellh.ghostty", true);
+        window.app_id = None;
+        let app = app_from_linux_window(&window);
+        assert_eq!(app.desktop_file_id, None);
+    }
+
+    #[test]
+    fn app_from_linux_window_rejects_synthesized_bus_refs() {
+        let mut window = linux_window("cosmic:123", "com.mitchellh.ghostty", true);
+        window.app_id = Some(":1.16:/org/a11y/atspi/accessible/root".to_string());
+        let app = app_from_linux_window(&window);
+        assert_eq!(app.desktop_file_id, None);
     }
 
     #[test]

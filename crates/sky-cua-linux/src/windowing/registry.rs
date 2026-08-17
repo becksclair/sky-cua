@@ -195,8 +195,16 @@ pub async fn verify_window_focused(
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1_000);
     let mut last_focused = None;
     loop {
-        if let Some(focused) = focused_window_override() {
+        if let Some(mut focused) = focused_window_override() {
             if same_focus_target_strong(&focused, expected) {
+                // The override sources (e.g. the COSMIC helper) know window
+                // identity and bounds but not the display topology, so attach
+                // the display from the environment's own discovery. Targeted
+                // captures rely on the display ref to resolve source geometry.
+                crate::displays::assign_window_displays(
+                    std::slice::from_mut(&mut focused),
+                    &environment.displays,
+                );
                 return Ok(focused);
             }
             last_focused = Some(focused);
@@ -211,12 +219,21 @@ pub async fn verify_window_focused(
         {
             return Ok(focused);
         }
-        let windows = discover_windows(environment).await?;
-        if let Some(focused) = windows.iter().find(|window| window.focused) {
-            if same_focus_target(focused, expected, &windows) {
-                return Ok(focused.clone());
+        // On COSMIC the override above already answered with the authoritative
+        // focus signal (including the post-activation fallback); re-listing
+        // would spawn a second helper process with the same wait and return the
+        // same cosmic window, since cosmic is the only window backend in that
+        // session and there is no cross-backend alias to match. Skip it and
+        // re-check the override next tick so the focus-verification poll budget
+        // is not consumed by a redundant helper round trip.
+        if expected.backend != COSMIC_WAYLAND_BACKEND {
+            let windows = discover_windows(environment).await?;
+            if let Some(focused) = windows.iter().find(|window| window.focused) {
+                if same_focus_target(focused, expected, &windows) {
+                    return Ok(focused.clone());
+                }
+                last_focused = Some(focused.clone());
             }
-            last_focused = Some(focused.clone());
         }
         if std::time::Instant::now() >= deadline {
             break;
@@ -510,16 +527,37 @@ fn linux_window_from_x11(window: X11WindowInfo) -> LinuxWindowInfo {
 
 fn dedupe_windows(windows: &mut Vec<LinuxWindowInfo>) {
     let mut unique = Vec::new();
+    // XWayland alias absorption is one-to-one: a kept COSMIC entry absorbs at
+    // most one X11 entry of the same WM_CLASS (its own toplevel). When the
+    // COSMIC helper missed a toplevel, a second same-class X11 window is a
+    // distinct surface and must stay in the list instead of being dropped.
+    let mut alias_absorbed: Vec<bool> = Vec::new();
     for window in windows.drain(..) {
         if let Some(existing) = unique
             .iter()
-            .position(|existing: &LinuxWindowInfo| same_window_identity(existing, &window))
+            .position(|existing: &LinuxWindowInfo| same_window_identity_core(existing, &window))
         {
             if window.focused && !unique[existing].focused {
                 unique[existing] = window;
             }
             continue;
         }
+        if let Some(existing) =
+            unique
+                .iter()
+                .zip(&alias_absorbed)
+                .position(|(existing, absorbed)| {
+                    !absorbed && crate::app_match::xwayland_window_alias(existing, &window)
+                })
+        {
+            // The COSMIC entry is always kept: it carries the logical bounds
+            // this dedupe prefers, and replacing it with the X11 entry would
+            // leave the slot x11-typed while still marked absorbed. Both
+            // backends report the same focused state for the same surface.
+            alias_absorbed[existing] = true;
+            continue;
+        }
+        alias_absorbed.push(false);
         unique.push(window);
     }
     *windows = unique;
@@ -546,16 +584,22 @@ fn finalize_window_list(windows: &mut Vec<LinuxWindowInfo>, preserve_backend_ids
     });
 }
 
+/// Identity without the XWayland alias tier: same backend + window id, or the
+/// pid/title/bounds triple. The alias tier is one-to-one per surface and is
+/// handled separately by `dedupe_windows` so a second same-class X11 toplevel
+/// is not silently dropped.
+fn same_window_identity_core(left: &LinuxWindowInfo, right: &LinuxWindowInfo) -> bool {
+    (left.backend == right.backend && left.window_id == right.window_id)
+        || (left.pid.is_some()
+            && left.pid == right.pid
+            && left.title.is_some()
+            && left.title == right.title
+            && left.bounds.is_some()
+            && left.bounds == right.bounds)
+}
+
 fn same_window_identity(left: &LinuxWindowInfo, right: &LinuxWindowInfo) -> bool {
-    if left.backend == right.backend && left.window_id == right.window_id {
-        return true;
-    }
-    left.pid.is_some()
-        && left.pid == right.pid
-        && left.title.is_some()
-        && left.title == right.title
-        && left.bounds.is_some()
-        && left.bounds == right.bounds
+    same_window_identity_core(left, right) || crate::app_match::xwayland_window_alias(left, right)
 }
 
 fn same_focus_target_strong(left: &LinuxWindowInfo, right: &LinuxWindowInfo) -> bool {
@@ -915,6 +959,116 @@ mod tests {
         assert_eq!(windows.len(), 1);
         assert!(windows[0].focused);
         assert_eq!(windows[0].backend, KWIN_BACKEND);
+    }
+
+    #[test]
+    fn discovery_dedupe_collapses_xwayland_alias_keeping_cosmic() {
+        // An XWayland window appears twice: cosmic-comp surfaces its WM_CLASS
+        // instance as the foreign-toplevel app_id, and the X11 backend reports
+        // the same window with a `<stem>.desktop` app_id + physical-pixel
+        // bounds. Neither pid nor bounds match, so the alias must be collapsed
+        // by the WM_CLASS identity; the COSMIC entry (logical bounds, first in
+        // backend order) is kept.
+        let mut cosmic = linux_window(COSMIC_WAYLAND_BACKEND, "1");
+        cosmic.app_id = Some("kwrite".to_string());
+        cosmic.wm_class = None;
+        cosmic.pid = None;
+
+        let mut x11 = linux_window(X11_BACKEND, "0x800007");
+        x11.app_id = Some("kwrite.desktop".to_string());
+        x11.wm_class = Some("kwrite".to_string());
+        x11.pid = Some(4242);
+
+        let mut windows = vec![cosmic.clone(), x11.clone()];
+        dedupe_windows(&mut windows);
+
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].backend, COSMIC_WAYLAND_BACKEND);
+        assert_eq!(windows[0].app_id.as_deref(), Some("kwrite"));
+    }
+
+    #[test]
+    fn xwayland_alias_requires_a_wm_class_signal() {
+        let mut cosmic = linux_window(COSMIC_WAYLAND_BACKEND, "1");
+        cosmic.app_id = Some("com.mitchellh.ghostty".to_string());
+        cosmic.wm_class = None;
+        cosmic.pid = None;
+
+        let mut x11 = linux_window(X11_BACKEND, "0x800007");
+        x11.app_id = Some("kwrite.desktop".to_string());
+        x11.wm_class = Some("kwrite".to_string());
+
+        assert!(!same_window_identity(&cosmic, &x11));
+    }
+
+    #[test]
+    fn discovery_dedupe_preserves_two_distinct_windows_of_same_xwayland_app() {
+        // Two real toplevels of the same XWayland app: the COSMIC helper lists
+        // each once (WM_CLASS as app_id, no PID) and the X11 backend lists each
+        // once (`.desktop` app_id, PID). Alias absorption is one-to-one, so
+        // both surfaces survive as their COSMIC entries.
+        let cosmic_window = |id: &str| {
+            let mut window = linux_window(COSMIC_WAYLAND_BACKEND, id);
+            window.app_id = Some("kwrite".to_string());
+            window.wm_class = None;
+            window.pid = None;
+            window
+        };
+        let x11_window = |id: &str| {
+            let mut window = linux_window(X11_BACKEND, id);
+            window.app_id = Some("kwrite.desktop".to_string());
+            window.wm_class = Some("kwrite".to_string());
+            window.pid = Some(4242);
+            window
+        };
+        let mut windows = vec![
+            cosmic_window("1"),
+            cosmic_window("2"),
+            x11_window("0x800007"),
+            x11_window("0x800008"),
+        ];
+        dedupe_windows(&mut windows);
+
+        assert_eq!(windows.len(), 2);
+        assert!(
+            windows
+                .iter()
+                .all(|window| window.backend == COSMIC_WAYLAND_BACKEND)
+        );
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| window.window_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1", "2"]
+        );
+    }
+
+    #[test]
+    fn discovery_dedupe_keeps_second_x11_when_cosmic_missed_a_toplevel() {
+        // If the COSMIC helper missed one toplevel, one cosmic entry aliases
+        // two X11 entries of the same WM_CLASS. The second X11 entry describes
+        // a distinct surface and must stay rather than being silently dropped.
+        let mut cosmic = linux_window(COSMIC_WAYLAND_BACKEND, "1");
+        cosmic.app_id = Some("kwrite".to_string());
+        cosmic.wm_class = None;
+        cosmic.pid = None;
+
+        let x11_window = |id: &str| {
+            let mut window = linux_window(X11_BACKEND, id);
+            window.app_id = Some("kwrite.desktop".to_string());
+            window.wm_class = Some("kwrite".to_string());
+            window.pid = Some(4242);
+            window
+        };
+
+        let mut windows = vec![cosmic, x11_window("0x800007"), x11_window("0x800008")];
+        dedupe_windows(&mut windows);
+
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].backend, COSMIC_WAYLAND_BACKEND);
+        assert_eq!(windows[1].backend, X11_BACKEND);
+        assert_eq!(windows[1].window_id, "0x800008");
     }
 
     #[test]

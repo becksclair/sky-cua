@@ -61,8 +61,24 @@ pub fn resolve_window_target<'a>(
     }
 
     if let Some(title) = normalized_target(target.title.as_deref()) {
+        // Exact (case-insensitive full-title) matches are safe to auto-resolve,
+        // picking the focused window on a tie. Substring matches are not
+        // identity proof, so keep the historical ambiguity error when a
+        // substring matches more than one window.
+        let exact_matches = windows
+            .iter()
+            .filter(|window| {
+                window
+                    .title
+                    .as_deref()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(&title))
+            })
+            .collect::<Vec<_>>();
+        if !exact_matches.is_empty() {
+            return best_window_match(exact_matches, &format!("title {title}"));
+        }
         let title_lower = title.to_ascii_lowercase();
-        let matches = windows
+        let substring_matches = windows
             .iter()
             .filter(|window| {
                 window
@@ -71,7 +87,7 @@ pub fn resolve_window_target<'a>(
                     .is_some_and(|value| value.to_ascii_lowercase().contains(&title_lower))
             })
             .collect::<Vec<_>>();
-        return unique_window_match(matches, &format!("title containing {title}"));
+        return unique_window_match(substring_matches, &format!("title containing {title}"));
     }
 
     Err(invalid(
@@ -83,9 +99,72 @@ fn unique_window_match<'a>(
     matches: Vec<&'a LinuxWindowInfo>,
     description: &str,
 ) -> Result<&'a LinuxWindowInfo, BackendError> {
+    resolve_window_match(matches, description, false)
+}
+
+/// Collapse COSMIC+X11 pairs that describe the same XWayland toplevel, keeping
+/// the first (COSMIC, per backend order) entry so a selector that matches both
+/// resolves to the single logical window with logical bounds.
+fn dedupe_xwayland_alias_matches<'a>(
+    matches: Vec<&'a LinuxWindowInfo>,
+) -> Vec<&'a LinuxWindowInfo> {
+    let mut unique: Vec<&'a LinuxWindowInfo> = Vec::new();
+    for window in matches {
+        if !unique
+            .iter()
+            .any(|existing| crate::app_match::xwayland_window_alias(existing, window))
+        {
+            unique.push(window);
+        }
+    }
+    unique
+}
+
+fn best_window_match<'a>(
+    matches: Vec<&'a LinuxWindowInfo>,
+    description: &str,
+) -> Result<&'a LinuxWindowInfo, BackendError> {
+    resolve_window_match(matches, description, true)
+}
+
+/// Shared single-window resolver. `prefer_focused` makes a multi-match pick the
+/// focused window and otherwise report richer per-window details; otherwise the
+/// multi-match is ambiguous and lists bare ids. The singleton and no-match arms
+/// are identical for both modes.
+///
+/// COSMIC+X11 XWayland aliases are collapsed first: an XWayland toplevel is
+/// listed once by the COSMIC helper (WM_CLASS surfaced as `app_id`, no PID,
+/// logical bounds) and once by the X11 EWMH backend (`<stem>.desktop` app_id,
+/// PID, physical bounds). A title selector matching both must resolve to one
+/// logical window rather than reporting a spurious ambiguity; explicit
+/// `window_id`/`app_id` targets still match whichever backend carries them.
+fn resolve_window_match<'a>(
+    matches: Vec<&'a LinuxWindowInfo>,
+    description: &str,
+    prefer_focused: bool,
+) -> Result<&'a LinuxWindowInfo, BackendError> {
+    let matches = dedupe_xwayland_alias_matches(matches);
     match matches.as_slice() {
         [window] => Ok(*window),
         [] => Err(invalid(format!("No window matched {description}."))),
+        windows if prefer_focused => {
+            if let Some(focused) = windows.iter().find(|w| w.focused) {
+                return Ok(*focused);
+            }
+            let details = windows
+                .iter()
+                .map(|w| {
+                    let id = &w.window_id;
+                    let title = w.title.as_deref().unwrap_or("(no title)");
+                    let app = w.app_id.as_deref().unwrap_or("(unknown)");
+                    format!("{id}: {app} — {title}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(invalid(format!(
+                "{description} matched multiple windows [{details}]; add window_id, tty, title, or terminal_command to disambiguate."
+            )))
+        }
         windows => {
             let ids = windows
                 .iter()
@@ -388,5 +467,56 @@ mod tests {
         assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
         assert!(error.message.contains("title containing ghost"));
         assert!(error.message.contains("matched multiple"));
+    }
+
+    #[test]
+    fn exact_title_match_picks_focused_window() {
+        let mut a = window("a");
+        a.focused = false;
+        let mut b = window("b");
+        b.focused = true;
+        let windows = vec![a, b];
+        let target = WindowTarget {
+            title: Some("Ghostty".to_string()),
+            ..WindowTarget::default()
+        };
+
+        assert_eq!(
+            resolve_window_target(&windows, &target).unwrap().window_id,
+            "b"
+        );
+    }
+
+    #[test]
+    fn title_target_collapses_xwayland_alias_to_single_window() {
+        // An XWayland window is listed twice: COSMIC surfaces its WM_CLASS as
+        // app_id (no PID), and the X11 backend reports `<stem>.desktop` with a
+        // PID. A substring title matching both must resolve to one logical
+        // window (the COSMIC entry, first in backend order) instead of failing
+        // as ambiguous.
+        let mut cosmic = window("cosmic-1");
+        cosmic.backend = crate::windowing::registry::COSMIC_WAYLAND_BACKEND.to_string();
+        cosmic.app_id = Some("kwrite".to_string());
+        cosmic.wm_class = None;
+        cosmic.pid = None;
+        cosmic.title = Some("proof.txt  \u{2014} KWrite".to_string());
+
+        let mut x11 = window("0x800007");
+        x11.backend = crate::windowing::registry::X11_BACKEND.to_string();
+        x11.app_id = Some("kwrite.desktop".to_string());
+        x11.wm_class = Some("kwrite".to_string());
+        x11.pid = Some(4242);
+        x11.title = Some("proof.txt ".to_string());
+
+        let windows = vec![cosmic, x11];
+        let target = WindowTarget {
+            title: Some("proof.txt".to_string()),
+            ..WindowTarget::default()
+        };
+
+        assert_eq!(
+            resolve_window_target(&windows, &target).unwrap().window_id,
+            "cosmic-1"
+        );
     }
 }
