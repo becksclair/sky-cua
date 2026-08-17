@@ -4,6 +4,8 @@
 /.vscode
 /.opencode
 .ultra-review-state.json
+# Freebuff local session metadata; never repo material.
+/.freebuff
 *.log
 __pycache__/
 *.py[cod]
