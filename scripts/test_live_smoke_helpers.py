@@ -780,7 +780,7 @@ def test_opencode_neutral_cwd_gets_installed_project_config(
     )
 
 
-def test_pi_smoke_default_model_is_free_opencode_model() -> None:
+def test_pi_smoke_default_model_is_free_model_with_expected_auth_key() -> None:
     assert _model_profiles.model_profile("pi_mcp").model == (
         _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL
     )
@@ -788,10 +788,16 @@ def test_pi_smoke_default_model_is_free_opencode_model() -> None:
         _model_profiles.model_profile("opencode_mcp").model
         == _agent_mcp_smoke.DEFAULT_OPENCODE_SMOKE_MODEL
     )
+    # The pi-smoke default model is a free OpenRouter model, so the harness
+    # must forward the OpenRouter key and neither an OpenAI nor an OpenCode
+    # key.
     assert "OPENAI_API_KEY" not in _agent_mcp_smoke.model_auth_environment_keys(
         "pi", _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL
     )
-    assert "OPENCODE_API_KEY" in _agent_mcp_smoke.model_auth_environment_keys(
+    assert "OPENCODE_API_KEY" not in _agent_mcp_smoke.model_auth_environment_keys(
+        "pi", _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL
+    )
+    assert "OPENROUTER_API_KEY" in _agent_mcp_smoke.model_auth_environment_keys(
         "pi", _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL
     )
 

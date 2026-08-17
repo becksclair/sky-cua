@@ -15,10 +15,10 @@
       "reasoning_effort": "medium"
     },
     "opencode_mcp": {
-      "model": "opencode/deepseek-v4-flash-free"
+      "model": "openrouter/poolside/laguna-s-2.1:free"
     },
     "pi_mcp": {
-      "model": "opencode/deepseek-v4-flash-free"
+      "model": "openrouter/poolside/laguna-s-2.1:free"
     },
     "claude_mcp": {
       "model": "claude-sonnet-4-6"

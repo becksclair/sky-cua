@@ -325,6 +325,8 @@ def model_auth_environment_keys(agent: str, selected_model: str | None) -> tuple
     shared_keys = ("CONTEXT7_API_KEY",)
     if provider in {"opencode", "opencode-go"}:
         return (*shared_keys, "OPENCODE_API_KEY")
+    if provider == "openrouter":
+        return (*shared_keys, "OPENROUTER_API_KEY")
     if provider == "fireworks":
         return (*shared_keys, "FIREWORKS_API_KEY")
     if provider == "openai":
