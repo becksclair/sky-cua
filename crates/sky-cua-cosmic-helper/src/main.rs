@@ -9,15 +9,17 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle, WEnum, event_created_child,
     globals::{GlobalListContents, registry_queue_init},
-    protocol::{wl_registry, wl_seat},
+    protocol::{wl_output, wl_registry, wl_seat},
 };
 use wayland_protocols::ext::foreign_toplevel_list::v1::client::{
     ext_foreign_toplevel_handle_v1, ext_foreign_toplevel_list_v1,
 };
+use wayland_protocols::xdg::xdg_output::zv1::client::{zxdg_output_manager_v1, zxdg_output_v1};
 
 const HELP: &str = "sky-cua-cosmic-helper\n\nUsage:\n  sky-cua-cosmic-helper probe\n  sky-cua-cosmic-helper list-windows\n  sky-cua-cosmic-helper focused-window\n  sky-cua-cosmic-helper activate-window --window-id <id>\n  sky-cua-cosmic-helper cursor-bridge [--socket <path>] [--state-file <path>]";
 const BACKEND: &str = "cosmic-wayland";
@@ -44,6 +46,53 @@ struct WindowBounds {
     y: Option<i32>,
     width: u32,
     height: u32,
+}
+
+/// Toplevel geometry reported by the compositor, relative to a single output.
+#[derive(Debug, Clone, Copy)]
+struct WindowGeometry {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+/// A bound `wl_output` and its position within the global compositor space.
+///
+/// `zcosmic_toplevel_handle_v1::geometry` is relative to the provided output,
+/// so the output's global position must be added to recover desktop-logical
+/// bounds. `xdg_output.logical_position` is the canonical source; the legacy
+/// `wl_output.geometry` x/y is kept as a fallback for compositors that do not
+/// advertise the xdg-output manager. `wl_output.geometry` x/y is in physical
+/// pixels, so the fallback divides by the output scale to recover logical
+/// offsets and stay consistent with the logical toplevel geometry.
+#[derive(Debug, Clone)]
+struct OutputState {
+    proxy: wl_output::WlOutput,
+    xdg: Option<zxdg_output_v1::ZxdgOutputV1>,
+    wl_pending_position: Option<(i32, i32)>,
+    wl_position: Option<(i32, i32)>,
+    scale: Option<i32>,
+    xdg_pending_position: Option<(i32, i32)>,
+    xdg_position: Option<(i32, i32)>,
+}
+
+impl OutputState {
+    fn new(proxy: wl_output::WlOutput) -> Self {
+        Self {
+            proxy,
+            xdg: None,
+            wl_pending_position: None,
+            wl_position: None,
+            scale: None,
+            xdg_pending_position: None,
+            xdg_position: None,
+        }
+    }
+
+    fn position(&self) -> Option<(i32, i32)> {
+        self.xdg_position.or(self.wl_position)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,10 +137,11 @@ struct ToplevelRecord {
     app_id: Option<String>,
     focused: bool,
     hidden: bool,
+    geometry: HashMap<wl_output::WlOutput, WindowGeometry>,
 }
 
 impl ToplevelRecord {
-    fn to_window(&self) -> Option<WindowInfo> {
+    fn to_window(&self, outputs: &[OutputState]) -> Option<WindowInfo> {
         let identifier = self.identifier.as_deref()?;
         Some(WindowInfo {
             window_id: stable_window_id(identifier),
@@ -99,7 +149,7 @@ impl ToplevelRecord {
             app_id: self.app_id.clone().filter(|value| !value.trim().is_empty()),
             wm_class: None,
             pid: None,
-            bounds: None,
+            bounds: self.window_bounds(outputs),
             workspace: None,
             focused: self.focused,
             hidden: self.hidden,
@@ -107,12 +157,53 @@ impl ToplevelRecord {
             backend: BACKEND.to_string(),
         })
     }
+
+    /// Global desktop-logical bounds, computed as the union of the window's
+    /// per-output geometry translated by each output's position in the global
+    /// compositor space. A window that spans multiple outputs reports geometry
+    /// relative to each entered output; taking a single output's rect clips the
+    /// window to that output, so union the translated rects.
+    fn window_bounds(&self, outputs: &[OutputState]) -> Option<WindowBounds> {
+        let mut union: Option<(i32, i32, i32, i32)> = None;
+        for (output, geometry) in &self.geometry {
+            let (offset_x, offset_y) = output_position(outputs, output)?;
+            let left = offset_x + geometry.x;
+            let top = offset_y + geometry.y;
+            let right = left + geometry.width;
+            let bottom = top + geometry.height;
+            union = Some(match union {
+                None => (left, top, right, bottom),
+                Some((min_left, min_top, max_right, max_bottom)) => (
+                    min_left.min(left),
+                    min_top.min(top),
+                    max_right.max(right),
+                    max_bottom.max(bottom),
+                ),
+            });
+        }
+        let (left, top, right, bottom) = union?;
+        Some(WindowBounds {
+            x: Some(left),
+            y: Some(top),
+            width: (right - left).max(0) as u32,
+            height: (bottom - top).max(0) as u32,
+        })
+    }
+}
+
+fn output_position(outputs: &[OutputState], output: &wl_output::WlOutput) -> Option<(i32, i32)> {
+    outputs
+        .iter()
+        .find(|state| state.proxy == *output)
+        .and_then(OutputState::position)
 }
 
 #[derive(Default)]
 struct AppData {
     toplevel_info: Option<zcosmic_toplevel_info_v1::ZcosmicToplevelInfoV1>,
     toplevel_manager: Option<zcosmic_toplevel_manager_v1::ZcosmicToplevelManagerV1>,
+    xdg_output_manager: Option<zxdg_output_manager_v1::ZxdgOutputManagerV1>,
+    outputs: Vec<OutputState>,
     seats: Vec<wl_seat::WlSeat>,
     capabilities:
         Vec<WEnum<zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1>>,
@@ -390,7 +481,8 @@ fn write_cursor_bridge_state(state_file: &Path, hidden: bool) -> Result<()> {
 }
 
 fn probe() -> Result<ProbeOutput> {
-    let snapshot = Snapshot::collect()?;
+    let mut snapshot = Snapshot::collect()?;
+    snapshot.wait_for_cosmic_info()?;
     let windows = snapshot.windows();
     let can_activate = snapshot.can_activate_windows();
     Ok(ProbeOutput {
@@ -416,11 +508,14 @@ fn probe() -> Result<ProbeOutput> {
 }
 
 fn collect_windows() -> Result<Vec<WindowInfo>> {
-    Ok(Snapshot::collect()?.windows())
+    let mut snapshot = Snapshot::collect()?;
+    snapshot.wait_for_cosmic_info()?;
+    Ok(snapshot.windows())
 }
 
 fn focused_window() -> Result<Option<WindowInfo>> {
-    let snapshot = Snapshot::collect()?;
+    let mut snapshot = Snapshot::collect()?;
+    snapshot.wait_for_cosmic_info()?;
     if let Some(window) = snapshot.windows().into_iter().find(|window| window.focused) {
         clear_activation_state();
         return Ok(Some(window));
@@ -476,21 +571,40 @@ impl Snapshot {
         snapshot.app_data.toplevel_manager = globals
             .bind::<zcosmic_toplevel_manager_v1::ZcosmicToplevelManagerV1, _, _>(&qh, 1..=4, ())
             .ok();
+        snapshot.app_data.xdg_output_manager = globals
+            .bind::<zxdg_output_manager_v1::ZxdgOutputManagerV1, _, _>(&qh, 1..=3, ())
+            .ok();
         globals.contents().with_list(|entries| {
             for global in entries {
-                if global.interface == "wl_seat" {
-                    snapshot
-                        .app_data
-                        .seats
-                        .push(globals.registry().bind::<wl_seat::WlSeat, _, _>(
+                match global.interface.as_str() {
+                    "wl_seat" => {
+                        snapshot.app_data.seats.push(
+                            globals.registry().bind::<wl_seat::WlSeat, _, _>(
+                                global.name,
+                                global.version.min(9),
+                                &qh,
+                                (),
+                            ),
+                        );
+                    }
+                    "wl_output" => {
+                        let output = globals.registry().bind::<wl_output::WlOutput, _, _>(
                             global.name,
-                            global.version.min(9),
+                            global.version.min(4),
                             &qh,
                             (),
-                        ));
+                        );
+                        snapshot.app_data.outputs.push(OutputState::new(output));
+                    }
+                    _ => {}
                 }
             }
         });
+        if let Some(manager) = snapshot.app_data.xdg_output_manager.as_ref() {
+            for output in &mut snapshot.app_data.outputs {
+                output.xdg = Some(manager.get_xdg_output(&output.proxy, &qh, ()));
+            }
+        }
         if snapshot.app_data.toplevel_info.is_some() {
             let _ = globals
                 .bind::<ext_foreign_toplevel_list_v1::ExtForeignToplevelListV1, _, _>(
@@ -513,11 +627,63 @@ impl Snapshot {
         Ok(())
     }
 
+    /// cosmic-comp pushes toplevel-info events (state, geometry, output enter)
+    /// from its throttled refresh routine (at most once per ~150ms) rather than
+    /// replaying them on handle creation, so a freshly connected client sees
+    /// nothing until the next refresh cycle. Wait just long enough for one
+    /// refresh cycle so geometry and focus state are populated. Do not require
+    /// every record to carry geometry: windows that never intersect an output
+    /// (minimized, on another workspace) get no geometry event, and demanding
+    /// it would spin until the deadline on every call — eating the parent's
+    /// focus-verification poll deadline. Bounded by a deadline so the helper
+    /// still completes (with whatever state arrived) on a silent compositor.
+    fn wait_for_cosmic_info(&mut self) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_millis(300);
+        let mut list_identified_at: Option<Instant> = None;
+        loop {
+            let all_identified = self
+                .app_data
+                .records
+                .iter()
+                .all(|record| record.identifier.is_some());
+            let all_geometried = self
+                .app_data
+                .records
+                .iter()
+                .all(|record| !record.geometry.is_empty());
+            // `window_bounds` also needs each output's global position. If a
+            // window's geometry lands before its output's logical position is
+            // committed, bounds silently become `None` and PID-less
+            // corroboration degrades to a bare title match. Gate the early
+            // return on output positions the same way we gate on geometry.
+            let all_positioned = self
+                .app_data
+                .outputs
+                .iter()
+                .all(|output| output.position().is_some());
+            let cycle_elapsed = list_identified_at
+                .is_some_and(|at| Instant::now() >= at + Duration::from_millis(200));
+            if all_identified && all_positioned && (all_geometried || cycle_elapsed) {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Ok(());
+            }
+            if all_identified {
+                list_identified_at.get_or_insert_with(Instant::now);
+            }
+            thread::sleep(Duration::from_millis(50));
+            self.event_queue
+                .roundtrip(&mut self.app_data)
+                .context("Wayland roundtrip failed")?;
+        }
+    }
+
     fn windows(&self) -> Vec<WindowInfo> {
         self.app_data
             .records
             .iter()
-            .filter_map(ToplevelRecord::to_window)
+            .filter_map(|record| record.to_window(&self.app_data.outputs))
             .collect()
     }
 
@@ -766,9 +932,30 @@ impl Dispatch<zcosmic_toplevel_handle_v1::ZcosmicToplevelHandleV1, ()> for AppDa
                     }
                 }
             }
-            zcosmic_toplevel_handle_v1::Event::Geometry { .. }
-            | zcosmic_toplevel_handle_v1::Event::OutputEnter { .. }
-            | zcosmic_toplevel_handle_v1::Event::OutputLeave { .. }
+            zcosmic_toplevel_handle_v1::Event::Geometry {
+                output,
+                x,
+                y,
+                width,
+                height,
+            } => {
+                record.geometry.insert(
+                    output,
+                    WindowGeometry {
+                        x,
+                        y,
+                        width,
+                        height,
+                    },
+                );
+            }
+            zcosmic_toplevel_handle_v1::Event::OutputLeave { output } => {
+                // Geometry is keyed per output; dropping the stale rect keeps
+                // the `window_bounds` union from translating geometry for an
+                // output the window no longer intersects.
+                record.geometry.remove(&output);
+            }
+            zcosmic_toplevel_handle_v1::Event::OutputEnter { .. }
             | zcosmic_toplevel_handle_v1::Event::WorkspaceEnter { .. }
             | zcosmic_toplevel_handle_v1::Event::WorkspaceLeave { .. }
             | zcosmic_toplevel_handle_v1::Event::ExtWorkspaceEnter { .. }
@@ -818,6 +1005,95 @@ impl Dispatch<wl_seat::WlSeat, ()> for AppData {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+    }
+}
+
+impl Dispatch<wl_output::WlOutput, ()> for AppData {
+    fn event(
+        app_data: &mut Self,
+        output: &wl_output::WlOutput,
+        event: wl_output::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(state) = app_data
+            .outputs
+            .iter_mut()
+            .find(|state| &state.proxy == output)
+        else {
+            return;
+        };
+        match event {
+            // Legacy fallback source for the output position; committed on the
+            // wl_output `done` that follows the full property batch.
+            wl_output::Event::Geometry { x, y, .. } => {
+                state.wl_pending_position = Some((x, y));
+            }
+            wl_output::Event::Scale { factor } => {
+                state.scale = Some(factor);
+            }
+            wl_output::Event::Done => {
+                // wl_output.geometry is in physical pixels; divide by the
+                // output scale to recover the logical offset the toplevel
+                // geometry is expressed in.
+                state.wl_position = state.wl_pending_position.map(|(x, y)| {
+                    let factor = state.scale.filter(|factor| *factor > 1);
+                    match factor {
+                        Some(factor) => (x / factor, y / factor),
+                        None => (x, y),
+                    }
+                });
+                // For zxdg_output objects bound at version 3+ the compositor
+                // sends wl_output.done (not the deprecated zxdg_output.done)
+                // after the xdg_output properties, so commit the canonical
+                // logical position here as well.
+                state.xdg_position = state.xdg_pending_position;
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<zxdg_output_manager_v1::ZxdgOutputManagerV1, ()> for AppData {
+    fn event(
+        _app_data: &mut Self,
+        _manager: &zxdg_output_manager_v1::ZxdgOutputManagerV1,
+        _event: zxdg_output_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<zxdg_output_v1::ZxdgOutputV1, ()> for AppData {
+    fn event(
+        app_data: &mut Self,
+        xdg_output: &zxdg_output_v1::ZxdgOutputV1,
+        event: zxdg_output_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(state) = app_data
+            .outputs
+            .iter_mut()
+            .find(|state| state.xdg.as_ref() == Some(xdg_output))
+        else {
+            return;
+        };
+        match event {
+            // Canonical position of the output in the global compositor
+            // space, in logical coordinates.
+            zxdg_output_v1::Event::LogicalPosition { x, y } => {
+                state.xdg_pending_position = Some((x, y));
+            }
+            zxdg_output_v1::Event::Done => {
+                state.xdg_position = state.xdg_pending_position;
+            }
+            _ => {}
+        }
     }
 }
 

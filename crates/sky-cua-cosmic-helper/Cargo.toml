@@ -10,4 +10,6 @@ cosmic-protocols.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 wayland-client.workspace = true
-wayland-protocols.workspace = true
+# xdg-output (zxdg_output_manager_v1) is still an unstable upstream protocol;
+# it is the canonical source for an output's global logical position.
+wayland-protocols = { workspace = true, features = ["unstable"] }
