@@ -352,8 +352,7 @@ Use these lanes when validating changes:
 
 - Runtime lane: direct MCP and desktop smokes such as
   `scripts/live_desktop_smoke.py`, `scripts/live_portal_downgrade_smoke.py`,
-  `scripts/live_wayland_pointer_smoke.py`, `scripts/live_kate_smoke.py`, and
-  `scripts/live_krita_smoke.py`.
+  `scripts/live_wayland_pointer_smoke.py`, and `scripts/live_kate_smoke.py`.
 - Installed-agent lane: bundle/install checks and agentic-loop smokes such as
   `scripts/build_plugin.py`, `scripts/install_plugin.py`, and
   `scripts/live_agentic_loop_smoke.py`.

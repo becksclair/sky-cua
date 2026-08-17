@@ -293,7 +293,6 @@ portal approval, installed apps, or local Codex auth.
 python3 scripts/live_desktop_smoke.py
 python3 scripts/live_portal_downgrade_smoke.py
 python3 scripts/live_kate_smoke.py
-python3 scripts/live_krita_smoke.py
 python3 scripts/live_agentic_loop_smoke.py
 python3 scripts/live_wayland_pointer_smoke.py
 python3 scripts/run_gui_testing_vm_smoke.py --host testing-vm --profile computer-use
