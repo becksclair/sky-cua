@@ -25,3 +25,8 @@ verify-kotlin:
         echo "verify-kotlin: no JDK found, skipping companion unit tests"; exit 0
     fi
     ./android/phone-companion/gradlew -p android/phone-companion :app:testDebugUnitTest --console=plain
+
+# Runs the COSMIC desktop smoke suite. Skips cleanly (exit 0) when no live
+# desktop session is available, so headless CI containers stay green.
+verify-cosmic-smokes:
+    python3 scripts/run_cosmic_smokes.py --skip-if-no-desktop --json
