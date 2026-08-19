@@ -24,7 +24,7 @@ use crate::service_launcher::ServiceClient;
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const SERVER_NAME: &str = "sky-cua";
-const SERVER_VERSION: &str = "0.1.0";
+const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MCP_CALLER_PROVENANCE_ENV: &str = "SKY_CUA_MCP_CALLER_PROVENANCE";
 const LEGACY_MCP_HOST_ENV: &str = "SKY_CUA_MCP_HOST";
 /// Maximum JSON-RPC payload size accepted through either supported MCP framing
