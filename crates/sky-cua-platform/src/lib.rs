@@ -20,7 +20,6 @@ mod overlay_spec_tests;
 pub const DESKTOP_LAUNCH_ENV_KEYS: &[&str] = &[
     "ACCESSIBILITY_ENABLED",
     "DBUS_SESSION_BUS_ADDRESS",
-    "DESKTOP_SESSION",
     "DISPLAY",
     "NO_AT_BRIDGE",
     "PATH",
@@ -36,7 +35,6 @@ pub const DESKTOP_LAUNCH_ENV_KEYS: &[&str] = &[
 /// is normalized separately by launch repair.
 pub const GRAPHICAL_SESSION_ENV_KEYS: &[&str] = &[
     "DBUS_SESSION_BUS_ADDRESS",
-    "DESKTOP_SESSION",
     "DISPLAY",
     "WAYLAND_DISPLAY",
     "XDG_CURRENT_DESKTOP",
