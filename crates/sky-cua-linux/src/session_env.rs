@@ -328,9 +328,10 @@ fn compositor_pids() -> Vec<u32> {
         };
         let comm = comm.trim();
         if COMPOSITORS.contains(&comm)
-            && let Ok(pid) = pid_str.parse::<u32>() {
-                pids.push(pid);
-            }
+            && let Ok(pid) = pid_str.parse::<u32>()
+        {
+            pids.push(pid);
+        }
     }
     pids
 }
@@ -351,9 +352,10 @@ fn child_pids(parent: u32) -> Vec<u32> {
             continue;
         };
         if parse_parent_pid(&status) == Some(parent)
-            && let Ok(pid) = pid_str.parse::<u32>() {
-                children.push(pid);
-            }
+            && let Ok(pid) = pid_str.parse::<u32>()
+        {
+            children.push(pid);
+        }
     }
     children
 }
