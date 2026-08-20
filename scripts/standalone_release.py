@@ -571,8 +571,6 @@ def _install_openclaw_node_repl(
             "NODE_REPL_NODE_PATH": str(install_root / "bin/node"),
             "NODE_REPL_NODE_MODULE_DIRS": str(install_root / "lib/node_modules"),
             "PLAYWRIGHT_BROWSERS_PATH": str(install_root / "share/playwright"),
-            "SKY_CUA_DOCUMENTATION_ROOT": str(install_root / "docs"),
-            "SKY_CUA_REPO_ROOT": str(install_root),
         },
         "connectionTimeoutMs": 120_000,
         "requestTimeoutMs": 3_600_000,
