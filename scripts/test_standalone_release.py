@@ -565,7 +565,10 @@ def test_install_projects_both_mcp_servers_into_existing_hermes_config(
     node_repl = json.loads(node_line.removeprefix("  node_repl: "))
     assert sky_cua["command"] == str(public_root / "bin/sky-cua-client")
     assert sky_cua["args"] == ["mcp"]
-    assert sky_cua["env"]["SKY_CUA_MCP_CALLER_PROVENANCE"] == "hermes"
+    # Caller provenance is auto-detected from the MCP clientInfo; the standalone
+    # installer no longer pins SKY_CUA_MCP_CALLER_PROVENANCE.
+    assert "SKY_CUA_MCP_CALLER_PROVENANCE" not in sky_cua["env"]
+    assert sky_cua["env"]["SKY_CUA_PRESENCE_ENABLED"] == "1"
     assert node_repl["command"] == str(public_root / "bin/node_repl")
 
 
@@ -1208,17 +1211,15 @@ def test_install_rewrites_existing_opencode_config_to_flat_root(
     assert sky_cua["type"] == "local"
     assert sky_cua["command"] == [str(public_root / "bin/sky-cua-client"), "mcp"]
     assert sky_cua["cwd"] == str(public_root)
-    assert sky_cua["environment"]["SKY_CUA_REPO_ROOT"] == str(public_root)
-    assert sky_cua["environment"]["SKY_CUA_RELEASE_ROOT"] == str(public_root)
-    assert sky_cua["environment"]["SKY_CUA_DOCUMENTATION_ROOT"] == str(public_root / "docs")
-    assert (
-        sky_cua["environment"]["SKY_CUA_CODEX_BROWSER_SOCKET_PATH"]
-        == "/run/user/1000/sky-cua/codex-browser.sock"
-    )
-    assert sky_cua["environment"]["SKY_CUA_MCP_CALLER_PROVENANCE"] == "opencode"
-    assert sky_cua["environment"]["XDG_RUNTIME_DIR"] == "/run/user/1000"
-    assert sky_cua["environment"]["WAYLAND_DISPLAY"] == "wayland-0"
-    assert sky_cua["environment"]["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/1000/bus"
+    # sky-cua auto-detects its runtime roots, caller provenance, and desktop
+    # session at startup, so the standalone installer no longer pins them. The
+    # rewritten config carries an empty environment (operator overrides only).
+    assert sky_cua["environment"] == {}
+    assert "SKY_CUA_REPO_ROOT" not in sky_cua["environment"]
+    assert "SKY_CUA_RELEASE_ROOT" not in sky_cua["environment"]
+    assert "SKY_CUA_DOCUMENTATION_ROOT" not in sky_cua["environment"]
+    assert "SKY_CUA_MCP_CALLER_PROVENANCE" not in sky_cua["environment"]
+    assert "XDG_RUNTIME_DIR" not in sky_cua["environment"]
 
     node_repl = new_parsed["mcp"]["node_repl"]
     assert node_repl["command"] == [str(public_root / "bin/node_repl")]
@@ -1231,7 +1232,11 @@ def test_install_rewrites_existing_opencode_config_to_flat_root(
         public_root / "share/playwright"
     )
     assert "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S" not in node_repl["environment"]
-    assert node_repl["environment"]["SKY_CUA_REPO_ROOT"] == str(public_root)
+    # The standalone installer no longer pins runtime roots in the node_repl
+    # environment block either; sky-cua auto-detects them (resources are
+    # co-located via payload copytree, see standalone_release.py).
+    assert "SKY_CUA_REPO_ROOT" not in node_repl["environment"]
+    assert "SKY_CUA_MCP_CALLER_PROVENANCE" not in node_repl["environment"]
 
     opencode = cast("dict[str, object]", report["opencode_config"])
     assert opencode["status"] == "updated"

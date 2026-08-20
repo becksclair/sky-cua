@@ -59,8 +59,11 @@ def test_openclaw_install_sets_mcp_config_without_touching_workspace_skills(
     assert server["command"] == str(client_path)
     assert server["args"] == ["mcp"]
     assert server["cwd"] == str(target_dir)
-    assert server["env"]["SKY_CUA_REPO_ROOT"] == str(repo_root)
-    assert server["env"][_openclaw_install.MCP_CALLER_PROVENANCE_ENV] == "openclaw"
+    # sky-cua auto-detects its repo root and caller provenance at runtime, so
+    # the installer no longer pins SKY_CUA_REPO_ROOT or
+    # SKY_CUA_MCP_CALLER_PROVENANCE in the server env.
+    assert "SKY_CUA_REPO_ROOT" not in server["env"]
+    assert _openclaw_install.MCP_CALLER_PROVENANCE_ENV not in server["env"]
     assert BROWSER_SELECTION_ENV not in server["env"]
     assert server["enabled"] is True
     # Codex "approve" mode approves every tool call without user interaction;
@@ -127,11 +130,13 @@ def test_openclaw_bundle_mode_pins_bundle_resource_root(
     )
 
     server = json.loads(config_path.read_text(encoding="utf-8"))["mcp"]["servers"]["sky_cua"]
-    assert Path(server["env"]["SKY_CUA_REPO_ROOT"]) == resource_root.resolve()
+    # The bundle resource root is no longer pinned; sky-cua resolves
+    # resources/app-instructions from the binary's own path at runtime.
+    assert "SKY_CUA_REPO_ROOT" not in server["env"]
     parsed = tomllib.loads(agent_config.read_text(encoding="utf-8"))
-    pinned_root = Path(parsed["mcp_servers"]["sky_cua"]["env"]["SKY_CUA_REPO_ROOT"])
-    assert pinned_root == resource_root.resolve()
-    assert (pinned_root / "resources" / "app-instructions" / "index.json").exists()
+    codex_env = parsed["mcp_servers"]["sky_cua"]["env"]
+    assert "SKY_CUA_REPO_ROOT" not in codex_env
+    assert (resource_root / "resources" / "app-instructions" / "index.json").exists()
 
 
 def test_openclaw_codex_home_toml_upsert_is_idempotent(
@@ -149,15 +154,17 @@ def test_openclaw_codex_home_toml_upsert_is_idempotent(
     assert "[mcp_servers.sky_cua]" in first
     assert f'command = "{client_path}"' in first
     assert BROWSER_SELECTION_ENV not in first
-    assert "SKY_CUA_REPO_ROOT" in first
-    assert first.count('SKY_CUA_MCP_CALLER_PROVENANCE = "openclaw"') == 1
+    # The codex-home TOML block no longer pins SKY_CUA_REPO_ROOT or provenance;
+    # sky-cua auto-detects both at runtime.
+    assert "SKY_CUA_REPO_ROOT" not in first
+    assert 'SKY_CUA_MCP_CALLER_PROVENANCE = "openclaw"' not in first
 
     # Re-running replaces the managed block instead of appending a duplicate.
     monkeypatch.delenv(BROWSER_SELECTION_ENV, raising=False)
     _openclaw_install.install_openclaw_agent_codex_mcp_servers(tmp_path, client_path)
     second = config_path.read_text(encoding="utf-8")
     assert second.count("[mcp_servers.sky_cua]") == 1
-    assert second.count('SKY_CUA_MCP_CALLER_PROVENANCE = "openclaw"') == 1
+    assert 'SKY_CUA_MCP_CALLER_PROVENANCE = "openclaw"' not in second
     assert BROWSER_SELECTION_ENV not in second.split("[mcp_servers")[1]
 
     import tomllib
@@ -169,7 +176,7 @@ def test_openclaw_codex_home_toml_upsert_is_idempotent(
     assert parsed["mcp_servers"]["sky_cua"]["default_tools_approval_mode"] == "approve"
 
 
-def test_openclaw_provenance_is_consistent_idempotent_and_preserves_other_env(
+def test_openclaw_preserves_other_launch_env_without_forwarding_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     target_dir = tmp_path / "installed"
@@ -188,7 +195,6 @@ def test_openclaw_provenance_is_consistent_idempotent_and_preserves_other_env(
     launch_env = {
         "KEEP_ME": "unchanged",
         "SKY_CUA_MCP_HOST": "../../legacy-wrong-value",
-        _openclaw_install.MCP_CALLER_PROVENANCE_ENV: "wrong-new-value",
     }
 
     first_path = _openclaw_install.install_openclaw(
@@ -209,11 +215,14 @@ def test_openclaw_provenance_is_consistent_idempotent_and_preserves_other_env(
     assert second_path.read_bytes() == first_snippet
     assert agent_config.read_bytes() == first_codex_config
     server = json.loads(first_snippet)["mcp"]["servers"]["sky_cua"]
-    assert server["env"][_openclaw_install.MCP_CALLER_PROVENANCE_ENV] == "openclaw"
+    # Caller provenance is auto-detected from the MCP clientInfo; the installer
+    # must not forward it (even when launch_env tries to pin a wrong value).
+    assert _openclaw_install.MCP_CALLER_PROVENANCE_ENV not in server["env"]
+    # Other launch_env keys still pass through as operator overrides.
     assert server["env"]["KEEP_ME"] == "unchanged"
     assert server["env"]["SKY_CUA_MCP_HOST"] == "../../legacy-wrong-value"
     assert all(
-        json.loads(command[4])["env"][_openclaw_install.MCP_CALLER_PROVENANCE_ENV] == "openclaw"
+        _openclaw_install.MCP_CALLER_PROVENANCE_ENV not in json.loads(command[4])["env"]
         for command in calls
         if command[:4] == ["openclaw", "mcp", "set", "sky_cua"]
     )
@@ -221,7 +230,7 @@ def test_openclaw_provenance_is_consistent_idempotent_and_preserves_other_env(
     import tomllib
 
     codex_env = tomllib.loads(first_codex_config.decode())["mcp_servers"]["sky_cua"]["env"]
-    assert codex_env[_openclaw_install.MCP_CALLER_PROVENANCE_ENV] == "openclaw"
+    assert _openclaw_install.MCP_CALLER_PROVENANCE_ENV not in codex_env
     assert codex_env["KEEP_ME"] == "unchanged"
     assert codex_env["SKY_CUA_MCP_HOST"] == "../../legacy-wrong-value"
     assert len(calls) == 4
@@ -756,7 +765,9 @@ def test_openclaw_codex_home_toml_escapes_special_path_characters(
 
     parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
     assert parsed["mcp_servers"]["sky_cua"]["command"] == str(client_path)
-    assert parsed["mcp_servers"]["sky_cua"]["env"]["SKY_CUA_REPO_ROOT"] == str(weird_repo)
+    # The codex-home TOML block no longer pins SKY_CUA_REPO_ROOT; quoting the
+    # special-character command path is still exercised above.
+    assert "SKY_CUA_REPO_ROOT" not in parsed["mcp_servers"]["sky_cua"]["env"]
 
 
 def test_openclaw_codex_home_toml_escapes_del_character(
@@ -773,7 +784,7 @@ def test_openclaw_codex_home_toml_escapes_del_character(
     assert _openclaw_install.upsert_codex_mcp_server_toml(config_path, client_path)
 
     parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
-    assert parsed["mcp_servers"]["sky_cua"]["env"]["SKY_CUA_REPO_ROOT"] == str(weird_repo)
+    assert "SKY_CUA_REPO_ROOT" not in parsed["mcp_servers"]["sky_cua"]["env"]
 
 
 def test_openclaw_codex_home_toml_refuses_unmanaged_duplicate_table(

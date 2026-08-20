@@ -192,11 +192,10 @@ def test_install_backs_up_then_idempotently_updates_existing_config(tmp_path: Pa
     assert config_path.read_bytes() == first_bytes
     sky_cua = _managed_server(first_bytes.decode(), "sky_cua")
     assert sky_cua["command"] == str(install_root / "bin/sky-cua-client")
+    # sky-cua auto-detects its desktop session and runtime root at startup, so
+    # the installer pins only the presence toggle.
     assert sky_cua["env"] == {
-        "DISPLAY": ":1",
-        "SKY_CUA_MCP_CALLER_PROVENANCE": "hermes",
         "SKY_CUA_PRESENCE_ENABLED": "1",
-        "SKY_CUA_REPO_ROOT": str(install_root),
     }
     assert _managed_server(first_bytes.decode(), "node_repl")["command"] == str(
         install_root / "bin/node_repl"

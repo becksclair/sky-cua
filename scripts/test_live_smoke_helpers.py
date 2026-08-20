@@ -1246,13 +1246,17 @@ def test_agent_smoke_fails_without_action_tool_evidence(
 
 
 def test_openclaw_smoke_show_config_accepts_installed_approve_mode(tmp_path: Path) -> None:
-    client = tmp_path / "sky-cua-client"
+    client = tmp_path / "bin" / "sky-cua-client"
+    client.parent.mkdir(parents=True)
     client.write_text("", encoding="utf-8")
+    index = tmp_path / "resources" / "app-instructions" / "index.json"
+    index.parent.mkdir(parents=True)
+    index.write_text("{}", encoding="utf-8")
     config = {
         "enabled": True,
         "command": str(client),
         "args": ["mcp"],
-        "env": {"SKY_CUA_REPO_ROOT": str(tmp_path)},
+        "env": {},
         "codex": {"defaultToolsApprovalMode": "approve"},
     }
 
@@ -1260,12 +1264,16 @@ def test_openclaw_smoke_show_config_accepts_installed_approve_mode(tmp_path: Pat
 
 
 def test_openclaw_smoke_show_config_rejects_approve_mode_and_disabled(tmp_path: Path) -> None:
-    client = tmp_path / "sky-cua-client"
+    client = tmp_path / "bin" / "sky-cua-client"
+    client.parent.mkdir(parents=True)
     client.write_text("", encoding="utf-8")
+    index = tmp_path / "resources" / "app-instructions" / "index.json"
+    index.parent.mkdir(parents=True)
+    index.write_text("{}", encoding="utf-8")
     config = {
         "enabled": False,
         "command": str(client),
-        "env": {"SKY_CUA_REPO_ROOT": str(tmp_path)},
+        "env": {},
         "codex": {"defaultToolsApprovalMode": "auto"},
     }
 
@@ -1275,16 +1283,20 @@ def test_openclaw_smoke_show_config_rejects_approve_mode_and_disabled(tmp_path: 
     assert any("defaultToolsApprovalMode is 'auto'" in failure for failure in failures)
 
 
-def test_openclaw_smoke_show_config_reports_missing_binary_and_env(tmp_path: Path) -> None:
+def test_openclaw_smoke_show_config_reports_missing_binary_and_resource_root(
+    tmp_path: Path,
+) -> None:
     config = {
-        "command": str(tmp_path / "missing-client"),
+        "command": str(tmp_path / "bin" / "missing-client"),
+        "args": ["mcp"],
+        "env": {},
         "codex": {"defaultToolsApprovalMode": "approve"},
     }
 
     failures = live_openclaw_mcp_smoke.check_show_config(config)
 
     assert any("does not exist" in failure for failure in failures)
-    assert any("SKY_CUA_REPO_ROOT" in failure for failure in failures)
+    assert any("not co-located" in failure for failure in failures)
 
 
 def test_openclaw_smoke_probe_requires_browser_and_desktop_tools() -> None:

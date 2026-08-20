@@ -88,6 +88,9 @@ def test_generic_mcp_install_copies_all_current_platform_binaries(
     for binary_name in install_mcp_server.platform_runtime_binary_base_names(platform_id):
         source_name = runtime_binary_source_name(platform_id, binary_name)
         (release_root / source_name).write_text(binary_name, encoding="utf-8")
+    app_index = repo_root / install_mcp_server.APP_INSTRUCTIONS_SUBPATH / "index.json"
+    app_index.parent.mkdir(parents=True, exist_ok=True)
+    app_index.write_text('{"entries":[]}\n', encoding="utf-8")
 
     monkeypatch.setattr(_install_shared, "REPO_ROOT", repo_root)
 
@@ -96,6 +99,7 @@ def test_generic_mcp_install_copies_all_current_platform_binaries(
     assert client_path == target_dir / install_mcp_server.entrypoint_path(
         platform_id, "sky-cua-client"
     )
+    assert (target_dir / install_mcp_server.APP_INSTRUCTIONS_SUBPATH / "index.json").exists()
     for binary_name in install_mcp_server.platform_runtime_binary_base_names(platform_id):
         binary_path = target_dir / install_mcp_server.entrypoint_path(platform_id, binary_name)
         assert binary_path.exists()
@@ -160,6 +164,34 @@ def test_generic_mcp_install_removes_stale_client_build_stamp(
     assert not client_path.with_name(client_path.name + STAMP_SUFFIX).exists()
 
 
+def test_install_app_instructions_co_locates_runtime_resources(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    index = repo / install_mcp_server.APP_INSTRUCTIONS_SUBPATH / "index.json"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text('{"entries": []}\n', encoding="utf-8")
+
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+
+    destination = install_mcp_server.install_app_instructions(target_dir, repo)
+
+    assert destination == target_dir / install_mcp_server.APP_INSTRUCTIONS_SUBPATH
+    assert destination is not None
+    assert (destination / "index.json").read_text(encoding="utf-8") == '{"entries": []}\n'
+
+
+def test_install_app_instructions_noops_when_source_absent(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target_dir = tmp_path / "installed"
+    target_dir.mkdir()
+
+    destination = install_mcp_server.install_app_instructions(target_dir, repo)
+
+    assert destination is None
+    assert not (target_dir / install_mcp_server.APP_INSTRUCTIONS_SUBPATH).exists()
+
+
 def test_bundle_binary_install_copies_from_bundle_not_release_build(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -177,6 +209,9 @@ def test_bundle_binary_install_copies_from_bundle_not_release_build(
         bundle_binary = bundle_root / runtime_binary_path(platform_id, binary_name)
         bundle_binary.parent.mkdir(parents=True, exist_ok=True)
         bundle_binary.write_text(f"bundle {binary_name}", encoding="utf-8")
+    bundle_index = bundle_root / install_mcp_server.APP_INSTRUCTIONS_SUBPATH / "index.json"
+    bundle_index.parent.mkdir(parents=True, exist_ok=True)
+    bundle_index.write_text('{"entries":[]}\n', encoding="utf-8")
 
     monkeypatch.setattr(_install_shared, "REPO_ROOT", repo_root)
 
@@ -185,6 +220,7 @@ def test_bundle_binary_install_copies_from_bundle_not_release_build(
     assert client_path == target_dir / install_mcp_server.entrypoint_path(
         platform_id, "sky-cua-client"
     )
+    assert (target_dir / install_mcp_server.APP_INSTRUCTIONS_SUBPATH / "index.json").exists()
     for binary_name in install_mcp_server.platform_runtime_binary_base_names(platform_id):
         binary_path = target_dir / install_mcp_server.entrypoint_path(platform_id, binary_name)
         assert binary_path.read_text(encoding="utf-8") == f"bundle {binary_name}"
@@ -554,7 +590,9 @@ def test_opencode_install_configures_browser_tools_without_enable_flag(
 
     config = json.loads(config_path.read_text(encoding="utf-8"))
     env = config["mcp"]["sky_cua"]["environment"]
-    assert env["SKY_CUA_REPO_ROOT"] == str(_install_shared.REPO_ROOT)
+    # SKY_CUA_REPO_ROOT is no longer pinned; sky-cua auto-detects it at startup.
+    # The operator may still set it to override (it remains in the env_vars allowlist).
+    assert "SKY_CUA_REPO_ROOT" not in env
     assert _install_shared.BROWSER_SELECTION_ENV not in env
 
 
@@ -597,7 +635,9 @@ def test_hermes_install_manages_both_servers_and_skills_idempotently(
     assert "  unrelated:\n    command: keep-me\n" in text
     assert sky_cua["command"] == str(client_path)
     assert sky_cua["args"] == ["mcp"]
-    assert sky_cua["env"][install_mcp_server.MCP_CALLER_PROVENANCE_ENV] == "hermes"
+    # Provenance is now auto-detected from the MCP clientInfo; the installer no
+    # longer pins SKY_CUA_MCP_CALLER_PROVENANCE.
+    assert install_mcp_server.MCP_CALLER_PROVENANCE_ENV not in sky_cua["env"]
     assert sky_cua["env"][install_mcp_server.MCP_BROWSER_EVAL_ENV] == "on"
     assert node["command"] == str(node_repl)
     assert node["args"] == []
@@ -608,7 +648,7 @@ def test_hermes_install_manages_both_servers_and_skills_idempotently(
     assert "hermes" in _install_shared.MCP_HOST_CHOICES
 
 
-def test_bundle_mode_opencode_pins_bundle_resource_root(
+def test_bundle_mode_opencode_does_not_pin_resource_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv(_install_shared.BROWSER_SELECTION_ENV, raising=False)
@@ -630,9 +670,11 @@ def test_bundle_mode_opencode_pins_bundle_resource_root(
     )
 
     env = json.loads(config_path.read_text(encoding="utf-8"))["mcp"]["sky_cua"]["environment"]
-    resource_root = Path(env["SKY_CUA_REPO_ROOT"])
-    assert resource_root == bundle_root.resolve()
-    assert (resource_root / "resources" / "app-instructions" / "index.json").exists()
+    # The installer no longer pins SKY_CUA_REPO_ROOT; sky-cua auto-detects its
+    # resource root at startup. The bundle still ships app-instructions at its
+    # own resource root (co-located for the standalone install via copytree).
+    assert "SKY_CUA_REPO_ROOT" not in env
+    assert (bundle_root / "resources" / "app-instructions" / "index.json").exists()
 
 
 def test_bundle_mode_generic_mcp_config_pins_bundle_resource_root(
@@ -656,10 +698,11 @@ def test_bundle_mode_generic_mcp_config_pins_bundle_resource_root(
     )
 
     server = json.loads(config_path.read_text(encoding="utf-8"))["mcpServers"]["computer-use"]
-    resource_root = Path(server["env"]["SKY_CUA_REPO_ROOT"])
-    assert resource_root == bundle_root.resolve()
+    # The installer no longer pins SKY_CUA_REPO_ROOT; it remains in the env_vars
+    # allowlist as an optional override only.
+    assert "SKY_CUA_REPO_ROOT" not in server["env"]
     assert "SKY_CUA_REPO_ROOT" in server["env_vars"]
-    assert (resource_root / "resources" / "app-instructions" / "index.json").exists()
+    assert (bundle_root / "resources" / "app-instructions" / "index.json").exists()
 
 
 def test_mcp_launch_policy_uses_cli_persisted_env_default_precedence(
@@ -776,9 +819,11 @@ def test_pi_wrapper_exports_canonical_launch_policy(
     assert "export SKY_CUA_PRESENCE_ENABLED=1\n" in wrapper_text
 
 
-def test_host_adapters_declare_distinct_caller_provenance(
+def test_host_adapters_do_not_forward_caller_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Caller provenance is auto-detected from the MCP clientInfo at runtime, so
+    # no host adapter must forward SKY_CUA_MCP_CALLER_PROVENANCE.
     target_dir = tmp_path / "installed"
     target_dir.mkdir()
     client_path = target_dir / "bin" / "sky-cua-client"
@@ -786,19 +831,19 @@ def test_host_adapters_declare_distinct_caller_provenance(
 
     generic = install_mcp_server.generate_mcp_config(client_path, target_dir)
     generic_env = generic["mcpServers"]["computer-use"]["env"]  # type: ignore[index]
-    assert generic_env[env_name] == "direct_mcp"  # type: ignore[index]
+    assert env_name not in generic_env  # type: ignore[index]
 
     opencode_path = install_mcp_server.install_opencode(target_dir, client_path)
     opencode_env = json.loads(opencode_path.read_text(encoding="utf-8"))["mcp"]["sky_cua"][
         "environment"
     ]
-    assert opencode_env[env_name] == "opencode"
+    assert env_name not in opencode_env
 
     claude_desktop_path = install_mcp_server.install_claude_desktop(target_dir, client_path)
     claude_desktop_env = json.loads(claude_desktop_path.read_text(encoding="utf-8"))["mcpServers"][
         "computer-use"
     ]["env"]
-    assert claude_desktop_env[env_name] == "direct_mcp"
+    assert env_name not in claude_desktop_env
 
     monkeypatch.setattr(install_mcp_server.shutil, "which", lambda _name: None)
     claude_code_path = install_mcp_server.install_claude_code(
@@ -807,7 +852,7 @@ def test_host_adapters_declare_distinct_caller_provenance(
     claude_code_env = json.loads(claude_code_path.read_text(encoding="utf-8"))["mcpServers"][
         "sky-cua"
     ]["env"]
-    assert claude_code_env[env_name] == "direct_mcp"
+    assert env_name not in claude_code_env
 
     pi_path = install_mcp_server.install_pi(
         target_dir, client_path, pi_agent_dir=tmp_path / "missing-pi-home"
@@ -816,16 +861,7 @@ def test_host_adapters_declare_distinct_caller_provenance(
         json.loads(pi_path.read_text(encoding="utf-8"))["mcpServers"]["sky_cua"]["command"]
     )
     wrapper_text = wrapper_path.read_text(encoding="utf-8")
-    declaration = f"export {env_name}=pi\n"
-    assert wrapper_text.count(declaration) == 1
-    assert all(
-        value not in wrapper_text
-        for value in (
-            f"export {env_name}=direct_mcp\n",
-            f"export {env_name}=openclaw\n",
-            f"export {env_name}=opencode\n",
-        )
-    )
+    assert f"export {env_name}=" not in wrapper_text
 
 
 def test_pi_provenance_install_is_idempotent_and_preserves_unrelated_config(
@@ -925,7 +961,10 @@ def test_browser_control_runtime_env_is_optional_forwarded_and_idempotent(
     opencode_env = json.loads(first_opencode)["mcp"]["sky_cua"]["environment"]
     assert opencode_env[control_mode] == "hybrid"
     assert opencode_env[socket_path] == "/run/user/1000/sky cua/codex-browser.sock"
-    assert opencode_env["WAYLAND_DISPLAY"] == "wayland-0"
+    # Session variables (WAYLAND_DISPLAY/DISPLAY) are inherited by the spawned
+    # MCP child at runtime, not pinned in the environment block.
+    assert "WAYLAND_DISPLAY" not in opencode_env
+    assert "DISPLAY" not in opencode_env
     assert "DISPLAY" not in opencode_env
     install_mcp_server.install_opencode(target_dir, client_path)
     assert opencode_path.read_bytes() == first_opencode
