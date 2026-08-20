@@ -841,8 +841,11 @@ mod tests {
             libc::geteuid()
         });
 
-        // Configuration is explicit. No native-host directory, default path,
-        // or legacy discovery input exists in the resolver.
+        // Neither env nor machine config is set: the resolver now derives the
+        // documented default socket path (XDG_RUNTIME_DIR/sky-cua/codex-browser.sock)
+        // rather than disabling the compat listener, so it works without the
+        // MCP host forwarding the path explicitly. No native-host directory or
+        // legacy discovery input is consulted.
         let old = std::env::var_os(CODEX_BROWSER_SOCKET_PATH_ENV);
         let old_config = std::env::var_os(sky_cua_platform::config::MACHINE_CONFIG_PATH_ENV);
         unsafe {
@@ -852,7 +855,10 @@ mod tests {
                 root.join("missing-machine-config.toml"),
             );
         }
-        assert_eq!(configured_socket_path().unwrap(), None);
+        assert_eq!(
+            configured_socket_path().unwrap().as_deref(),
+            Some(sky_cua_platform::paths::codex_browser_socket_path().as_path())
+        );
         if let Some(old) = old {
             unsafe { std::env::set_var(CODEX_BROWSER_SOCKET_PATH_ENV, old) };
         }

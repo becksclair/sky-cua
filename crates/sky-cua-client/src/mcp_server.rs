@@ -1216,6 +1216,53 @@ mod tests {
         read_message_with_limit, with_browser_request_context, write_message,
     };
 
+    // Provenance must be derivable from the MCP `initialize` clientInfo without
+    // any `SKY_CUA_MCP_CALLER_PROVENANCE` forward in the host config. The env
+    // var remains an explicit override but is no longer required.
+    #[test]
+    fn provenance_infers_opencode_from_client_info_without_env() {
+        let initialize = json!({
+            "params": {
+                "clientInfo": { "name": "OpenCode", "version": "1.0" }
+            }
+        });
+        let provenance = browser_caller_provenance(&initialize, "conn-1", None);
+        assert_eq!(provenance.caller, BrowserCallerKind::OpenCode);
+        assert_eq!(
+            provenance.source,
+            BrowserProvenanceSource::ClientInfoInference
+        );
+        assert_eq!(provenance.declared_caller, None);
+    }
+
+    #[test]
+    fn provenance_env_override_still_wins_over_client_info() {
+        let initialize = json!({
+            "params": {
+                "clientInfo": { "name": "opencode", "version": "1.0" }
+            }
+        });
+        let provenance = browser_caller_provenance(&initialize, "conn-2", Some("pi"));
+        assert_eq!(provenance.caller, BrowserCallerKind::Pi);
+        assert_eq!(
+            provenance.source,
+            BrowserProvenanceSource::InstallerDeclaration
+        );
+        assert_eq!(provenance.declared_caller.as_deref(), Some("pi"));
+    }
+
+    #[test]
+    fn provenance_unknown_client_info_falls_back_gracefully() {
+        let initialize = json!({
+            "params": {
+                "clientInfo": { "name": "mystery-host", "version": "1.0" }
+            }
+        });
+        let provenance = browser_caller_provenance(&initialize, "conn-3", None);
+        assert_eq!(provenance.caller, BrowserCallerKind::LegacyUnknown);
+        assert_eq!(provenance.source, BrowserProvenanceSource::LegacyFallback);
+    }
+
     #[test]
     fn phone_context_preserves_codex_identity_and_client_info() {
         let initialize = json!({

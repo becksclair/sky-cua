@@ -582,7 +582,14 @@ pub fn resolved_browser_control_config() -> Result<ResolvedBrowserControlConfig,
         None => machine
             .codex_socket_path
             .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty()),
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                Some(
+                    crate::paths::codex_browser_socket_path()
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            }),
     };
     if machine_socket_was_set && codex_socket_path.is_none() && !socket_env_was_set {
         return Err("[browser_control].codex_socket_path must not be empty".to_owned());
@@ -937,7 +944,16 @@ mod tests {
 
         std::fs::remove_file(&path).expect("remove config");
         let resolved = resolved_browser_control_config().expect("missing config is legacy/unset");
-        assert_eq!(resolved, ResolvedBrowserControlConfig::default());
+        let expected_socket = crate::paths::codex_browser_socket_path()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            resolved,
+            ResolvedBrowserControlConfig {
+                mode: None,
+                codex_socket_path: Some(expected_socket),
+            }
+        );
     }
 
     #[test]

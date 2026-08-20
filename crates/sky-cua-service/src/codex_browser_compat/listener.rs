@@ -135,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_socket_path_resolves_env_then_machine_then_unset() {
+    fn configured_socket_path_resolves_env_then_machine_then_default() {
         let root = std::env::temp_dir().join(format!(
             "sky-cua-codex-listener-config-{}",
             std::process::id()
@@ -162,9 +162,18 @@ mod tests {
             Some(std::path::Path::new("/env/codex.sock"))
         );
 
-        unsafe { std::env::remove_var(CODEX_BROWSER_SOCKET_PATH_ENV) };
-        std::fs::remove_file(&config).unwrap();
-        assert_eq!(configured_socket_path().unwrap(), None);
+        // Neither env nor machine config set: the runtime derives the default
+        // from XDG_RUNTIME_DIR so the compat listener works without an explicit
+        // forward from the MCP host config.
+        unsafe {
+            std::env::remove_var(CODEX_BROWSER_SOCKET_PATH_ENV);
+            std::fs::remove_file(&config).unwrap();
+            std::env::set_var("XDG_RUNTIME_DIR", &root);
+        }
+        assert_eq!(
+            configured_socket_path().unwrap().as_deref(),
+            Some(root.join("sky-cua").join("codex-browser.sock").as_path())
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

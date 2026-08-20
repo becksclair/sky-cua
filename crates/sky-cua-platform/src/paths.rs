@@ -131,6 +131,25 @@ fn runtime_artifacts_root() -> PathBuf {
     std::env::temp_dir().join(format!("sky-cua-uid-{}", current_uid()))
 }
 
+/// Default location for the Codex browser-control compatibility socket.
+///
+/// Mirrors the path the installers historically injected
+/// (`SKY_CUA_CODEX_BROWSER_SOCKET_PATH`): `$XDG_RUNTIME_DIR/sky-cua/codex-browser.sock`,
+/// falling back to `/tmp/sky-cua/codex-browser.sock` when `XDG_RUNTIME_DIR` is
+/// unset. The env var and the machine `[browser_control].codex_socket_path`
+/// remain overrides; this is only the value the runtime uses when neither is
+/// configured, so the compat listener works without the MCP config forwarding
+/// the path explicitly.
+#[must_use]
+pub fn codex_browser_socket_path() -> PathBuf {
+    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
+        return runtime_dir.join("sky-cua").join("codex-browser.sock");
+    }
+    std::env::temp_dir()
+        .join("sky-cua")
+        .join("codex-browser.sock")
+}
+
 #[cfg(unix)]
 fn current_uid() -> u32 {
     // SAFETY: `geteuid` is a simple libc query with no preconditions.
