@@ -172,8 +172,33 @@ def check_show_config(config: dict[str, Any]) -> list[str]:
         )
 
     env = config.get("env")
-    if not isinstance(env, dict) or "SKY_CUA_REPO_ROOT" not in env:
-        failures.append("config env does not pin SKY_CUA_REPO_ROOT")
+    if not isinstance(env, dict):
+        failures.append("config has no env table")
+    elif "SKY_CUA_REPO_ROOT" in env:
+        failures.append(
+            "config env pins SKY_CUA_REPO_ROOT; the installer auto-detects the "
+            "resource root from the installed binary path; set SKY_CUA_REPO_ROOT "
+            "only as an operator override"
+        )
+
+    # The installer no longer pins SKY_CUA_REPO_ROOT; sky-cua auto-detects its
+    # resource root by walking the installed client binary's ancestors for
+    # resources/app-instructions. Verify the co-located index lives above it.
+    cwd = config.get("cwd")
+    install_dir = Path(cwd) if isinstance(cwd, str) and cwd else None
+    if install_dir is None:
+        client = config.get("command")
+        if isinstance(client, str) and client:
+            install_dir = Path(client).resolve().parent.parent
+    if (
+        install_dir is not None
+        and not (install_dir / "resources" / "app-instructions" / "index.json").is_file()
+    ):
+        failures.append(
+            f"app-instructions index not co-located at "
+            f"{install_dir}/resources/app-instructions; re-run "
+            "scripts/install_mcp_server.py --host openclaw"
+        )
 
     return failures
 
