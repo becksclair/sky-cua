@@ -1,3 +1,4 @@
+import { applyNodeReplEnvDefaults } from "./host/runtime-root.ts";
 import { createStdioServer } from "./host/mcp-server.ts";
 
 export const NODE_REPL_VERSION = "0.1.0";

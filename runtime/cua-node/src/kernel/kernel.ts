@@ -1,3 +1,4 @@
+import { applyNodeReplEnvDefaults } from "../host/runtime-root.ts";
 import { createHash } from "node:crypto";
 import { TRUSTED_MODULE_POLICY_KERNEL_SOURCE } from "../host/trusted-module-policy.ts";
 import {
