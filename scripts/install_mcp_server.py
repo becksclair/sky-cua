@@ -36,7 +36,6 @@ import _install_shared
 from _install_shared import (
     BROWSER_SELECTION_ENV,
     DEFAULT_LOCAL_INSTALL_DIR,
-    DESKTOP_SESSION_ENV_KEYS,
     MCP_HOST_CHOICES,
     atomic_sibling_path,
     ensure_parent,
@@ -77,13 +76,13 @@ MCP_BROWSER_EVAL_ENV = "SKY_CUA_BROWSER_EVAL"
 MCP_MODEL_SUPPORTS_IMAGES_ENV = "SKY_CUA_MODEL_SUPPORTS_IMAGES"
 MCP_PRESENCE_ENABLED_ENV = "SKY_CUA_PRESENCE_ENABLED"
 MCP_CALLER_PROVENANCE_ENV = "SKY_CUA_MCP_CALLER_PROVENANCE"
-DIRECT_MCP_CALLER_PROVENANCE = "direct_mcp"
-OPENCODE_CALLER_PROVENANCE = "opencode"
-PI_CALLER_PROVENANCE = "pi"
-HERMES_CALLER_PROVENANCE = "hermes"
 MCP_BROWSER_CONTROL_MODE_ENV = "SKY_CUA_BROWSER_CONTROL_MODE"
 MCP_CODEX_BROWSER_SOCKET_PATH_ENV = "SKY_CUA_CODEX_BROWSER_SOCKET_PATH"
 INSTALLABLE_MCP_HOST_CHOICES = tuple(host for host in MCP_HOST_CHOICES if host != "openclaw")
+# Only operator-supplied runtime overrides are forwarded. sky-cua detects the
+# desktop session (XDG_RUNTIME_DIR, Wayland/X11 display, dbus, compositor) and
+# runtime roots (repo/release/docs) on its own at startup, so the MCP host
+# config must not pin session environment keys.
 OPTIONAL_MCP_RUNTIME_ENV = (
     MCP_BROWSER_CONTROL_MODE_ENV,
     MCP_CODEX_BROWSER_SOCKET_PATH_ENV,
@@ -92,7 +91,6 @@ OPTIONAL_MCP_RUNTIME_ENV = (
     "SKY_CUA_PHONE_DIRECT_ENROLLMENT_TTL_MS",
     "SKY_CUA_PHONE_DIRECT_LISTEN_ADDR",
     "SKY_CUA_PHONE_DIRECT_STATE_PATH",
-    *DESKTOP_SESSION_ENV_KEYS,
 )
 MCP_LAUNCH_POLICY_STATE = "mcp-launch-policy.json"
 RECOGNIZED_MCP_LAUNCH_ENV = (
@@ -341,6 +339,7 @@ def install_binaries(target_dir: Path) -> Path:
     if installed_client is None:
         raise RuntimeError("sky-cua-client binary was not installed")
 
+    install_app_instructions(target_dir, None)
     return installed_client
 
 
@@ -377,6 +376,7 @@ def install_bundle_binaries(bundle_root: Path, target_dir: Path) -> Path:
     if installed_client is None:
         raise RuntimeError("sky-cua-client binary was not installed")
 
+    install_app_instructions(target_dir, runtime_resource_root(bundle_root))
     return installed_client
 
 
@@ -387,7 +387,6 @@ def generate_mcp_config(
     launch_policy: McpLaunchPolicy | None = None,
 ) -> dict[str, object]:
     """Build an MCP server config dict with absolute paths."""
-    root = runtime_resource_root(resource_root)
     policy = launch_policy or McpLaunchPolicy()
     return {
         "mcpServers": {
@@ -395,10 +394,8 @@ def generate_mcp_config(
                 "command": str(client_path),
                 "args": ["mcp"],
                 "env": {
-                    "SKY_CUA_REPO_ROOT": str(root),
                     **policy.env(),
                     **optional_mcp_runtime_env(),
-                    MCP_CALLER_PROVENANCE_ENV: DIRECT_MCP_CALLER_PROVENANCE,
                 },
                 # Guarded by scripts/test_env_key_contract.py — new SKY_CUA_*
                 # keys must be added here or exempted there.
@@ -483,6 +480,38 @@ def runtime_resource_root(bundle_root: Path | None) -> Path:
     return (bundle_root or _install_shared.REPO_ROOT).resolve()
 
 
+# Sibling of the installed client under target_dir, e.g.
+# ~/.local/share/sky-cua/resources/app-instructions.
+APP_INSTRUCTIONS_SUBPATH = Path("resources") / "app-instructions"
+
+
+def install_app_instructions(target_dir: Path, resource_root: Path | None) -> Path | None:
+    """Co-locate runtime app-instructions so ``repo_root()`` auto-detects them.
+
+    ``sky-cua-platform``'s ``repo_root()`` resolves ``resources/app-instructions``
+    by walking ``current_exe()``/``cwd`` ancestors and by honoring the
+    ``SKY_CUA_REPO_ROOT`` override. The installers no longer pin that override,
+    so the resource tree must sit above the installed client binary. This copies
+    ``resources/app-instructions`` from the build/bundle root into
+    ``target_dir/resources/app-instructions`` (an ancestor of
+    ``target_dir/bin/sky-cua-client``).
+
+    Returns the destination path, or ``None`` when the source is absent (the
+    install does not hard-fail: app-instruction guidance simply degrades, which
+    matches the standalone release's behavior for ad-hoc bundles).
+    """
+    source = (resource_root or _install_shared.REPO_ROOT).resolve() / APP_INSTRUCTIONS_SUBPATH
+    if not source.is_dir():
+        print(
+            f"warning: not co-locating app-instructions: source not found: {source}",
+            file=sys.stderr,
+        )
+        return None
+    destination = target_dir / APP_INSTRUCTIONS_SUBPATH
+    _install_shared.replace_tree_atomically(source, destination)
+    return destination
+
+
 def install_opencode(
     target_dir: Path,
     client_path: Path,
@@ -490,7 +519,6 @@ def install_opencode(
     launch_policy: McpLaunchPolicy | None = None,
 ) -> Path:
     """Update or create opencode.json in the target directory."""
-    root = runtime_resource_root(resource_root)
     policy = launch_policy or McpLaunchPolicy()
     opencode_config: dict[str, object] = {
         "$schema": "https://opencode.ai/config.json",
@@ -499,10 +527,8 @@ def install_opencode(
                 "type": "local",
                 "command": [str(client_path), "mcp"],
                 "environment": {
-                    "SKY_CUA_REPO_ROOT": str(root),
                     **policy.env(),
                     **optional_mcp_runtime_env(),
-                    MCP_CALLER_PROVENANCE_ENV: OPENCODE_CALLER_PROVENANCE,
                 },
                 "enabled": True,
                 "timeout": 30000,
@@ -522,7 +548,6 @@ def install_claude_desktop(
     launch_policy: McpLaunchPolicy | None = None,
 ) -> Path:
     """Emit a Claude Desktop config snippet and print instructions."""
-    root = runtime_resource_root(resource_root)
     policy = launch_policy or McpLaunchPolicy()
     snippet: dict[str, object] = {
         "mcpServers": {
@@ -530,10 +555,8 @@ def install_claude_desktop(
                 "command": str(client_path),
                 "args": ["mcp"],
                 "env": {
-                    "SKY_CUA_REPO_ROOT": str(root),
                     **policy.env(),
                     **optional_mcp_runtime_env(),
-                    MCP_CALLER_PROVENANCE_ENV: DIRECT_MCP_CALLER_PROVENANCE,
                 },
             }
         }
@@ -553,20 +576,18 @@ def install_claude_code(
 ) -> Path:
     """Register sky-cua with Claude Code and copy skills into ~/.claude/skills.
 
-    Claude Code stdio MCP servers inherit the parent process environment, so the
-    config only pins SKY_CUA_REPO_ROOT plus any explicit browser selection.
+    Claude Code stdio MCP servers inherit the parent process environment, and
+    sky-cua auto-detects its session and runtime roots, so the config only
+    carries explicit launch-policy toggles and any operator overrides.
     """
-    root = runtime_resource_root(resource_root)
     policy = launch_policy or McpLaunchPolicy()
     server: dict[str, object] = {
         "type": "stdio",
         "command": str(client_path),
         "args": ["mcp"],
         "env": {
-            "SKY_CUA_REPO_ROOT": str(root),
             **policy.env(),
             **optional_mcp_runtime_env(),
-            MCP_CALLER_PROVENANCE_ENV: DIRECT_MCP_CALLER_PROVENANCE,
         },
     }
     # Claude Code reserves the MCP server name "computer-use" for its native
@@ -743,7 +764,6 @@ def install_pi(
     client binary.
     """
     wrapper_path = target_dir / "pi_mcp_wrapper.sh"
-    root = runtime_resource_root(resource_root)
     policy = launch_policy or McpLaunchPolicy()
     policy_exports = [
         f"export {name}={shlex.quote(value)}\n"
@@ -756,9 +776,7 @@ def install_pi(
     wrapper_content = "".join(
         [
             "#!/bin/bash\n",
-            f"export SKY_CUA_REPO_ROOT={shlex.quote(str(root))}\n",
             *policy_exports,
-            f"export {MCP_CALLER_PROVENANCE_ENV}={PI_CALLER_PROVENANCE}\n",
             f'exec {shlex.quote(str(client_path))} mcp "$@"\n',
         ]
     )
@@ -811,17 +829,14 @@ def install_hermes(
     launch_policy: McpLaunchPolicy | None = None,
 ) -> Path:
     """Install both Sky CUA MCP servers into Hermes Agent's global config."""
-    root = runtime_resource_root(resource_root)
     policy = launch_policy or McpLaunchPolicy()
     active_env = dict(os.environ)
     home = Path.home()
     if hermes_home is not None:
         active_env["HERMES_HOME"] = str(hermes_home.expanduser())
     sky_cua_env = {
-        "SKY_CUA_REPO_ROOT": str(root),
         **policy.env(),
         **optional_mcp_runtime_env(active_env),
-        MCP_CALLER_PROVENANCE_ENV: HERMES_CALLER_PROVENANCE,
     }
     result = _hermes_config.install_hermes_config(
         target_dir,

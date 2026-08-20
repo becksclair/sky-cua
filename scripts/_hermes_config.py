@@ -18,7 +18,6 @@ HERMES_MANAGED_START = "  # BEGIN SKY-CUA MANAGED MCP SERVERS"
 HERMES_MANAGED_END = "  # END SKY-CUA MANAGED MCP SERVERS"
 HERMES_AGENTS_START = "<!-- BEGIN SKY-CUA NODE_REPL INSTRUCTIONS -->"
 HERMES_AGENTS_END = "<!-- END SKY-CUA NODE_REPL INSTRUCTIONS -->"
-HERMES_CALLER_PROVENANCE = "hermes"
 HERMES_NO_PROMPT_POLICY = {
     ("approvals", "mode"): '"off"',
     ("approvals", "mcp_reload_confirm"): "false",
@@ -30,16 +29,7 @@ HERMES_NO_PROMPT_POLICY = {
 }
 HERMES_NO_PROMPT_REMOVED_PATHS = (("approvals", "deny"),)
 _ROOT_KEY = re.compile(r"^mcp_servers:\s*(?P<value>[^#]*?)\s*(?:#.*)?$")
-DESKTOP_SESSION_ENV_KEYS = (
-    "DBUS_SESSION_BUS_ADDRESS",
-    "DESKTOP_SESSION",
-    "DISPLAY",
-    "WAYLAND_DISPLAY",
-    "XDG_CURRENT_DESKTOP",
-    "XDG_RUNTIME_DIR",
-    "XDG_SESSION_TYPE",
-    "XAUTHORITY",
-)
+
 HERMES_NODE_REPL_INSTRUCTIONS = """## Node REPL routing
 
 Use `mcp__node_repl__js` when work materially benefits from a persistent Node
@@ -151,19 +141,12 @@ def build_hermes_servers(
     }
 
 
-def default_sky_cua_env(
-    install_root: Path,
-    *,
-    env: Mapping[str, str],
-) -> dict[str, str]:
-    forwarded = {
-        name: env[name] for name in DESKTOP_SESSION_ENV_KEYS if name in env and env[name].strip()
-    }
+def default_sky_cua_env() -> dict[str, str]:
+    # sky-cua auto-detects its desktop session and runtime roots at startup, so
+    # the only key we pin is the presence toggle (on by default); operator
+    # overrides are inherited through the parent process environment.
     return {
-        "SKY_CUA_MCP_CALLER_PROVENANCE": HERMES_CALLER_PROVENANCE,
         "SKY_CUA_PRESENCE_ENABLED": "1",
-        "SKY_CUA_REPO_ROOT": str(install_root),
-        **forwarded,
     }
 
 
@@ -429,7 +412,7 @@ def install_hermes_config(
     current = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
     servers = build_hermes_servers(
         install_root,
-        sky_cua_env=sky_cua_env or default_sky_cua_env(install_root, env=env),
+        sky_cua_env=sky_cua_env or default_sky_cua_env(),
     )
     updated = merge_hermes_config(current, servers)
     if updated == current:

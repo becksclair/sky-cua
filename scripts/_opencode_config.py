@@ -19,34 +19,32 @@ from pathlib import Path
 
 OPENCODE_GLOBAL_CONFIG_NAMES = ("opencode.json", "opencode.jsonc")
 OPENCODE_MANAGED_SERVERS = ("sky_cua", "node_repl")
-OPENCODE_CALLER_PROVENANCE = "opencode"
 OPENCODE_MCP_TIMEOUT_MS = 30_000
 OPENCODE_BACKUP_DIR_NAME = ".sky-cua-backups"
-DESKTOP_SESSION_ENV_KEYS = (
-    "DBUS_SESSION_BUS_ADDRESS",
-    "DESKTOP_SESSION",
-    "DISPLAY",
-    "WAYLAND_DISPLAY",
-    "XDG_CURRENT_DESKTOP",
-    "XDG_RUNTIME_DIR",
-    "XDG_SESSION_TYPE",
-    "XAUTHORITY",
+
+# Genuine operator runtime-config overrides that may be forwarded to the MCP
+# server. Session variables (XDG_RUNTIME_DIR, Wayland/X11 display, dbus,
+# compositor) and runtime roots (repo/release/docs) are intentionally excluded:
+# sky-cua auto-detects those at startup, and because MCP `env` merges with the
+# parent process, an empty block still inherits any operator-set values the
+# parent already has. The default install forwards nothing.
+OVERRIDE_ENV_KEYS = (
+    "SKY_CUA_BROWSER_CONTROL_MODE",
+    "SKY_CUA_CODEX_BROWSER_SOCKET_PATH",
+    "SKY_CUA_PHONE_DIRECT",
+    "SKY_CUA_PHONE_DIRECT_ADVERTISED_ENDPOINT",
+    "SKY_CUA_PHONE_DIRECT_ENROLLMENT_TTL_MS",
+    "SKY_CUA_PHONE_DIRECT_LISTEN_ADDR",
+    "SKY_CUA_PHONE_DIRECT_STATE_PATH",
 )
 
 
-def _desktop_session_env(env: Mapping[str, str]) -> dict[str, str]:
+def _explicit_override_env(active_env: Mapping[str, str]) -> dict[str, str]:
     return {
-        key: env[key].strip() for key in DESKTOP_SESSION_ENV_KEYS if key in env and env[key].strip()
+        key: active_env[key].strip()
+        for key in OVERRIDE_ENV_KEYS
+        if key in active_env and active_env[key].strip()
     }
-
-
-def _opencode_browser_socket_path(env: Mapping[str, str]) -> str:
-    runtime_dir = env.get("XDG_RUNTIME_DIR", "").strip()
-    if runtime_dir:
-        resolved = Path(runtime_dir)
-        if resolved.is_absolute():
-            return str(resolved / "sky-cua" / "codex-browser.sock")
-    return "/tmp/sky-cua/codex-browser.sock"
 
 
 def _strip_jsonc_comments(text: str) -> str:
@@ -97,22 +95,17 @@ def _strip_jsonc_comments(text: str) -> str:
 def _build_opencode_servers(
     install_root: Path,
     *,
-    browser_socket_path: str,
     timeout_ms: int = OPENCODE_MCP_TIMEOUT_MS,
     env: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     client = str(install_root / "bin/sky-cua-client")
     node_repl = str(install_root / "bin/node_repl")
     active_env = os.environ if env is None else env
-    desktop_env = _desktop_session_env(active_env)
-    shared_env = {
-        "SKY_CUA_CODEX_BROWSER_SOCKET_PATH": browser_socket_path,
-        "SKY_CUA_MCP_CALLER_PROVENANCE": OPENCODE_CALLER_PROVENANCE,
-        "SKY_CUA_DOCUMENTATION_ROOT": str(install_root / "docs"),
-        "SKY_CUA_RELEASE_ROOT": str(install_root),
-        "SKY_CUA_REPO_ROOT": str(install_root),
-        **desktop_env,
-    }
+    # sky-cua detects its desktop session (XDG_RUNTIME_DIR, Wayland/X11 display,
+    # dbus, compositor) and runtime roots (repo/release/docs) on its own at
+    # startup, so the MCP host config must not pin them. Only honour explicit
+    # operator overrides here; the default install emits an empty environment.
+    shared_env: dict[str, str] = _explicit_override_env(active_env)
     return {
         "sky_cua": {
             "type": "local",
@@ -242,10 +235,8 @@ def install_opencode_config(
     if not isinstance(existing, dict):
         raise RuntimeError(f"OpenCode config root must be an object: {config_path}")
 
-    browser_socket_path = _opencode_browser_socket_path(env)
     servers = _build_opencode_servers(
         install_root,
-        browser_socket_path=browser_socket_path,
         timeout_ms=timeout_ms,
         env=env,
     )
