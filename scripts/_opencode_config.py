@@ -119,13 +119,12 @@ def _build_opencode_servers(
             "type": "local",
             "command": [node_repl],
             "cwd": str(install_root),
-            "environment": {
-                **shared_env,
-                "CODEX_NODE_REPL_PATH": node_repl,
-                "NODE_REPL_NODE_PATH": str(install_root / "bin/node"),
-                "NODE_REPL_NODE_MODULE_DIRS": str(install_root / "lib/node_modules"),
-                "PLAYWRIGHT_BROWSERS_PATH": str(install_root / "share/playwright"),
-            },
+            # node_repl derives its runtime paths (node binary, module root,
+            # Playwright browsers, launcher path) from its own binary location
+            # at startup, so the host config must not pin them. Only honour
+            # explicit operator overrides here; the default install emits an
+            # empty environment.
+            "environment": shared_env,
             "enabled": True,
             "timeout": timeout_ms,
         },

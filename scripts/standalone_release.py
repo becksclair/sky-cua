@@ -566,12 +566,11 @@ def _install_openclaw_node_repl(
         "command": str(install_root / "bin/node_repl"),
         "args": [],
         "cwd": str(install_root),
-        "env": {
-            "CODEX_NODE_REPL_PATH": str(install_root / "bin/node_repl"),
-            "NODE_REPL_NODE_PATH": str(install_root / "bin/node"),
-            "NODE_REPL_NODE_MODULE_DIRS": str(install_root / "lib/node_modules"),
-            "PLAYWRIGHT_BROWSERS_PATH": str(install_root / "share/playwright"),
-        },
+        # node_repl derives its runtime paths (node binary, module root,
+        # Playwright browsers, launcher path) from its own binary location at
+        # startup, so the host config must not pin them. Keep an empty env so
+        # the process inherits the parent environment and auto-detects.
+        "env": {},
         "connectionTimeoutMs": 120_000,
         "requestTimeoutMs": 3_600_000,
         "supportsParallelToolCalls": False,
