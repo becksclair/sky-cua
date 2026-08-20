@@ -30,6 +30,7 @@ pub fn hydrate_session_env() -> DoctorSessionEnvReport {
     let blocked_keys = client_cleared_graphical_keys();
     hydrate_desktop_env_from_process_tree(&mut report, &blocked_keys);
     hydrate_desktop_env_from_systemd(&mut report, &blocked_keys);
+    hydrate_desktop_env_from_active_sessions(&mut report, &blocked_keys);
 
     if env_var("XDG_RUNTIME_DIR").is_none()
         && let Some(runtime) = xdg_runtime_dir()
@@ -126,6 +127,21 @@ fn hydrate_desktop_env_from_systemd(
     hydrate_desktop_env_from_map(report, "systemd-user", &systemd_env, blocked_keys);
 }
 
+fn hydrate_desktop_env_from_active_sessions(
+    report: &mut DoctorSessionEnvReport,
+    blocked_keys: &HashSet<String>,
+) {
+    for session_env in active_session_environments() {
+        hydrate_desktop_env_from_map(report, "active-session", &session_env, blocked_keys);
+        if GRAPHICAL_SESSION_ENV_KEYS
+            .iter()
+            .all(|key| env_var(key).is_some())
+        {
+            break;
+        }
+    }
+}
+
 fn hydrate_desktop_env_from_map(
     report: &mut DoctorSessionEnvReport,
     source: &str,
@@ -191,6 +207,197 @@ fn parse_environment_line(line: &str) -> Option<(String, String)> {
         return None;
     }
     Some((key.to_string(), value[1..].to_string()))
+}
+
+fn active_session_environments() -> Vec<HashMap<String, String>> {
+    let mut environments = Vec::new();
+    // Prefer the canonical logind view: active graphical user sessions.
+    for pid in loginctl_session_leaders() {
+        if let Some(env) = read_process_environ(pid) {
+            if env.contains_key("WAYLAND_DISPLAY") || env.contains_key("DISPLAY") {
+                environments.push(env);
+            }
+        } else {
+            // Leader may be privileged (e.g. greetd worker); try its children.
+            for child_pid in child_pids(pid) {
+                if let Some(env) = read_process_environ(child_pid)
+                    && (env.contains_key("WAYLAND_DISPLAY") || env.contains_key("DISPLAY"))
+                {
+                    environments.push(env);
+                }
+            }
+        }
+    }
+    // Fallback: scan all user processes for any with a graphical display.
+    // This covers greetd's 2-session mode where the daemon's parent chain
+    // (systemd --user) has no display, but a sibling desktop session does.
+    if environments.is_empty() {
+        for pid in all_user_pids_with_display() {
+            if let Some(env) = read_process_environ(pid) {
+                environments.push(env);
+                // One good sample is enough; avoid collecting stale duplicates.
+                if environments.len() >= 2 {
+                    break;
+                }
+            }
+        }
+    }
+    // Last resort: well-known compositor processes (may have minimal env but
+    // still carry XDG_CURRENT_DESKTOP).
+    if environments.is_empty() {
+        for pid in compositor_pids() {
+            if let Some(env) = read_process_environ(pid) {
+                environments.push(env);
+            }
+        }
+    }
+    environments
+}
+
+fn loginctl_session_leaders() -> Vec<u32> {
+    let output = Command::new("loginctl")
+        .args(["list-sessions", "--no-legend"])
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut leaders = Vec::new();
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        // loginctl format: SESSION UID USER SEAT LEADER CLASS TTY ...
+        if parts.len() < 6 {
+            continue;
+        }
+        let session_id = parts[0];
+        let class = parts[5];
+        // Only user sessions (not manager) that could hold a desktop.
+        if class != "user" {
+            continue;
+        }
+        // Fetch per-session details to confirm graphical.
+        let detail = Command::new("loginctl")
+            .args(["show-session", session_id, "-p", "Type", "-p", "Display"])
+            .output();
+        if let Ok(detail) = detail
+            && detail.status.success()
+        {
+            let text = String::from_utf8_lossy(&detail.stdout);
+            // Type=wayland or Type=x11 (manager is Type=unspecified)
+            let is_graphical = text.contains("Type=wayland") || text.contains("Type=x11");
+            // Some compositors report Display=:1 even on Wayland (Xwayland).
+            // We accept any session that loginctl marks as graphical.
+            if !is_graphical {
+                continue;
+            }
+        }
+        if let Ok(pid) = parts[4].parse::<u32>() {
+            leaders.push(pid);
+        }
+    }
+    leaders
+}
+
+fn compositor_pids() -> Vec<u32> {
+    const COMPOSITORS: &[&str] = &[
+        "cosmic-comp",
+        "kwin_wayland",
+        "gnome-shell",
+        "sway",
+        "hyprland",
+        "river",
+        "niri",
+        "weston",
+    ];
+    let mut pids = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return pids;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let pid_str = name.to_string_lossy();
+        if pid_str.parse::<u32>().is_err() {
+            continue;
+        }
+        let comm_path = format!("/proc/{pid_str}/comm");
+        let Ok(comm) = std::fs::read_to_string(&comm_path) else {
+            continue;
+        };
+        let comm = comm.trim();
+        if COMPOSITORS.contains(&comm)
+            && let Ok(pid) = pid_str.parse::<u32>() {
+                pids.push(pid);
+            }
+    }
+    pids
+}
+
+fn child_pids(parent: u32) -> Vec<u32> {
+    let mut children = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return children;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let pid_str = name.to_string_lossy();
+        if pid_str.parse::<u32>().is_err() {
+            continue;
+        }
+        let status_path = format!("/proc/{pid_str}/status");
+        let Ok(status) = std::fs::read_to_string(&status_path) else {
+            continue;
+        };
+        if parse_parent_pid(&status) == Some(parent)
+            && let Ok(pid) = pid_str.parse::<u32>() {
+                children.push(pid);
+            }
+    }
+    children
+}
+
+fn all_user_pids_with_display() -> Vec<u32> {
+    let uid = user_id().and_then(|s| s.parse::<u32>().ok());
+    let mut pids = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return pids;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let pid_str = name.to_string_lossy();
+        let Ok(pid) = pid_str.parse::<u32>() else {
+            continue;
+        };
+        // Only consider processes owned by current user.
+        if let Some(expected_uid) = uid {
+            let status_path = format!("/proc/{pid}/status");
+            let Ok(status) = std::fs::read_to_string(&status_path) else {
+                continue;
+            };
+            let has_uid = status.lines().any(|line| {
+                line.starts_with("Uid:")
+                    && line
+                        .split_whitespace()
+                        .any(|v| v == expected_uid.to_string())
+            });
+            if !has_uid {
+                continue;
+            }
+        }
+        // Quick check: does environ contain DISPLAY or WAYLAND_DISPLAY?
+        let environ_path = format!("/proc/{pid}/environ");
+        let Ok(bytes) = std::fs::read(&environ_path) else {
+            continue;
+        };
+        if bytes.windows(8).any(|w| w == b"DISPLAY=")
+            || bytes.windows(16).any(|w| w == b"WAYLAND_DISPLAY=")
+        {
+            pids.push(pid);
+        }
+    }
+    pids
 }
 
 fn normalize_path(report: &mut DoctorSessionEnvReport) {
