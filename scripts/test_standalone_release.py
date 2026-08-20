@@ -767,6 +767,15 @@ def test_detected_hosts_receive_native_plugins_and_hash_free_openclaw_definition
     assert openclaw_command[1:4] == ["mcp", "set", "node_repl"]
     assert openclaw_kwargs["env"]["PATH"] == "/usr/bin"
     assert "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S" not in definition["env"]
+    # node_repl auto-detects its runtime paths from its own binary location, so
+    # the standalone installer must not pin them in the OpenClaw env block.
+    for key in (
+        "CODEX_NODE_REPL_PATH",
+        "NODE_REPL_NODE_PATH",
+        "NODE_REPL_NODE_MODULE_DIRS",
+        "PLAYWRIGHT_BROWSERS_PATH",
+    ):
+        assert key not in definition["env"]
     assert definition["command"].endswith("/sky-cua/bin/node_repl")
     for skill_root in (home / ".codex/skills", home / ".openclaw/skills"):
         assert sorted(path.name for path in skill_root.iterdir()) == sorted(
@@ -1223,18 +1232,16 @@ def test_install_rewrites_existing_opencode_config_to_flat_root(
 
     node_repl = new_parsed["mcp"]["node_repl"]
     assert node_repl["command"] == [str(public_root / "bin/node_repl")]
-    assert node_repl["environment"]["CODEX_NODE_REPL_PATH"] == str(public_root / "bin/node_repl")
-    assert node_repl["environment"]["NODE_REPL_NODE_PATH"] == str(public_root / "bin/node")
-    assert node_repl["environment"]["NODE_REPL_NODE_MODULE_DIRS"] == str(
-        public_root / "lib/node_modules"
-    )
-    assert node_repl["environment"]["PLAYWRIGHT_BROWSERS_PATH"] == str(
-        public_root / "share/playwright"
-    )
+    # node_repl derives its runtime paths (node binary, module root, Playwright
+    # browsers, launcher path) from its own binary location at startup, so the
+    # standalone installer no longer pins them. The rewritten config carries an
+    # empty environment (operator overrides only), matching sky_cua.
+    assert node_repl["environment"] == {}
     assert "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S" not in node_repl["environment"]
-    # The standalone installer no longer pins runtime roots in the node_repl
-    # environment block either; sky-cua auto-detects them (resources are
-    # co-located via payload copytree, see standalone_release.py).
+    assert "CODEX_NODE_REPL_PATH" not in node_repl["environment"]
+    assert "NODE_REPL_NODE_PATH" not in node_repl["environment"]
+    assert "NODE_REPL_NODE_MODULE_DIRS" not in node_repl["environment"]
+    assert "PLAYWRIGHT_BROWSERS_PATH" not in node_repl["environment"]
     assert "SKY_CUA_REPO_ROOT" not in node_repl["environment"]
     assert "SKY_CUA_MCP_CALLER_PROVENANCE" not in node_repl["environment"]
 
