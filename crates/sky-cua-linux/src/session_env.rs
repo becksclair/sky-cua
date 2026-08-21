@@ -9,6 +9,7 @@ use sky_cua_platform::{
     CLIENT_CLEARED_SESSION_ENV_KEYS_ENV, CLIENT_SESSION_ENV_REPAIRS_ENV, DESKTOP_LAUNCH_ENV_KEYS,
     GRAPHICAL_SESSION_ENV_KEYS,
     model::{DoctorSessionEnvRepair, DoctorSessionEnvReport},
+    x11_display_number,
 };
 const DEFAULT_PATH_DIRS: &[&str] = &[
     "/usr/local/sbin",
@@ -149,13 +150,117 @@ fn hydrate_desktop_env_from_map(
     blocked_keys: &HashSet<String>,
 ) {
     for key in GRAPHICAL_SESSION_ENV_KEYS {
-        if env_var(key).is_some() || blocked_keys.contains(*key) {
+        let Some(candidate) = values.get(*key).filter(|value| !value.trim().is_empty()) else {
+            continue;
+        };
+        let current = env_var(key);
+        let is_blocked = blocked_keys.contains(*key);
+        // Non-active sources only fill missing slots and respect the client's
+        // cleared list (e.g. isolated X11 sandbox that intentionally removed
+        // WAYLAND_DISPLAY). They never correct a stale value.
+        if source != "active-session" {
+            if current.is_some() || is_blocked {
+                continue;
+            }
+            unsafe { env::set_var(key, candidate) };
+            push_repair(report, *key, source, Some(candidate.clone()));
             continue;
         }
-        if let Some(value) = values.get(*key).filter(|value| !value.trim().is_empty()) {
-            unsafe { env::set_var(key, value) };
-            push_repair(report, *key, source, Some(value.clone()));
+        // active-session is authoritative and may correct stale values (e.g.
+        // DISPLAY :0 -> :1 after Xwayland restart) even when the daemon was
+        // spawned with a blocked/cleared list containing :0 from client-launch.
+        if let Some(cur) = current {
+            if cur == *candidate {
+                continue;
+            }
+            // Isolated X11 sandbox intentionally hosts DISPLAY=:N with
+            // WAYLAND_DISPLAY removed and XDG_SESSION_TYPE=x11. Host's
+            // wayland session must not flip it to :1 even if its X socket
+            // is not yet live (xpra just spawned). Detect via the sandbox
+            // markers and skip all active-session overwrites for the sandbox.
+            if is_isolated_sandbox(blocked_keys) {
+                continue;
+            }
+            // Only overwrite a present value when the current value is no
+            // longer live (its socket/path vanished). This prevents an
+            // isolated xpra daemon (DISPLAY=:131, X131 live) from being
+            // flipped to the host's :1, while still healing a shared daemon
+            // whose old X0 socket has been removed and only X1 remains.
+            if is_env_value_live(key, &cur) {
+                continue;
+            }
+            unsafe { env::set_var(key, candidate) };
+            push_repair(report, *key, source, Some(candidate.clone()));
+        } else {
+            // Missing - active session fills even when the client marked the
+            // key as cleared (detached launch). The live session is the truth,
+            // except for the isolated X11 sandbox which intentionally removed
+            // WAYLAND_DISPLAY to force Qt/GTK onto X11. That sandbox has
+            // XDG_SESSION_TYPE=x11 and DISPLAY=:N (high N) and must stay
+            // without WAYLAND_DISPLAY even though the host's wayland-1 exists.
+            if *key == "WAYLAND_DISPLAY" && env_var("XDG_SESSION_TYPE").as_deref() == Some("x11") {
+                continue;
+            }
+            unsafe { env::set_var(key, candidate) };
+            push_repair(report, *key, source, Some(candidate.clone()));
         }
+    }
+}
+
+fn is_isolated_sandbox(blocked_keys: &HashSet<String>) -> bool {
+    // Isolated xpra sandbox: build_spawn_env sets XDG_SESSION_TYPE=x11,
+    // WAYLAND_DISPLAY removed (blocked), DISPLAY=:N, QT_QPA_PLATFORM=xcb and
+    // GDK_BACKEND=x11. Host X11 also has x11 type but lacks xcb/x11 forcing,
+    // so it stays eligible for active-session correction.
+    env_var("XDG_SESSION_TYPE").as_deref() == Some("x11")
+        && env_var("WAYLAND_DISPLAY").is_none()
+        && blocked_keys.contains("WAYLAND_DISPLAY")
+        && env_var("DISPLAY").is_some()
+        && env_var("QT_QPA_PLATFORM").as_deref() == Some("xcb")
+        && env_var("GDK_BACKEND").as_deref() == Some("x11")
+}
+
+fn is_env_value_live(key: &str, value: &str) -> bool {
+    match key {
+        "DISPLAY" => {
+            // :N or unix/:N - live iff /tmp/.X11-unix/XN exists
+            if let Some(num) = x11_display_number(value) {
+                return PathBuf::from(format!("/tmp/.X11-unix/X{num}")).exists();
+            }
+            // Fallback: treat non-local or unparseable as live to avoid
+            // aggressive overwrites (e.g. localhost:10.0 forwarding).
+            true
+        }
+        "WAYLAND_DISPLAY" => {
+            if let Some(runtime) = env_var("XDG_RUNTIME_DIR") {
+                return Path::new(&runtime).join(value).exists();
+            }
+            if let Some(runtime) = xdg_runtime_dir() {
+                return runtime.join(value).exists();
+            }
+            false
+        }
+        "XDG_RUNTIME_DIR" => Path::new(value).is_dir(),
+        "DBUS_SESSION_BUS_ADDRESS" => {
+            if let Some(path) = value.strip_prefix("unix:path=") {
+                // Address may include ",guid=..." suffix after the socket path.
+                let socket_path = path
+                    .split(',')
+                    .next()
+                    .unwrap_or(path)
+                    .split(';')
+                    .next()
+                    .unwrap_or(path);
+                return Path::new(socket_path).exists();
+            }
+            // abstract or other transports - consider live
+            true
+        }
+        // Desktop/type are not socket-bound; treat any non-empty as live so
+        // we only overwrite when missing, not when stale. The client health
+        // check will still trigger a daemon restart if they diverge, which is
+        // the correct self-heal for those keys.
+        _ => true,
     }
 }
 
@@ -810,5 +915,127 @@ mod tests {
     #[test]
     fn session_env_diagnostic_is_absent_when_nothing_changed() {
         assert!(session_env_diagnostic(&DoctorSessionEnvReport::default()).is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn hydrate_isolated_sandbox_keeps_wayland_absent_and_dbus_private() {
+        let _restore = EnvRestore::capture(&[
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "XDG_SESSION_TYPE",
+            "QT_QPA_PLATFORM",
+            "GDK_BACKEND",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "XDG_RUNTIME_DIR",
+        ]);
+        // Isolated xpra sandbox: DISPLAY=:90, x11, toolkit forced to xcb, WAYLAND_DISPLAY intentionally removed
+        unsafe {
+            std::env::set_var("DISPLAY", ":90");
+            std::env::set_var("XDG_SESSION_TYPE", "x11");
+            std::env::set_var("QT_QPA_PLATFORM", "xcb");
+            std::env::set_var("GDK_BACKEND", "x11");
+            std::env::remove_var("WAYLAND_DISPLAY");
+            std::env::set_var(
+                "DBUS_SESSION_BUS_ADDRESS",
+                "unix:path=/tmp/dbus-isolated-test,guid=abc",
+            );
+            std::env::set_var("XDG_RUNTIME_DIR", "/tmp");
+        }
+        // Create the private bus socket file so is_env_value_live considers it live
+        let _ = std::fs::File::create("/tmp/dbus-isolated-test");
+        let mut report = DoctorSessionEnvReport::default();
+        let values = HashMap::from([
+            ("DISPLAY".to_string(), ":1".to_string()),
+            ("WAYLAND_DISPLAY".to_string(), "wayland-1".to_string()),
+            (
+                "DBUS_SESSION_BUS_ADDRESS".to_string(),
+                "unix:path=/run/user/1000/bus".to_string(),
+            ),
+            ("XDG_SESSION_TYPE".to_string(), "wayland".to_string()),
+        ]);
+        let blocked = HashSet::from(["WAYLAND_DISPLAY".to_string()]);
+
+        hydrate_desktop_env_from_map(&mut report, "active-session", &values, &blocked);
+
+        assert_eq!(std::env::var("DISPLAY").ok().as_deref(), Some(":90"));
+        assert_eq!(std::env::var("WAYLAND_DISPLAY").ok(), None);
+        assert_eq!(
+            std::env::var("DBUS_SESSION_BUS_ADDRESS").ok().as_deref(),
+            Some("unix:path=/tmp/dbus-isolated-test,guid=abc")
+        );
+        // Only XDG_SESSION_TYPE would be considered for overwrite but it's live (x11), so no repair
+        assert!(report.repaired.is_empty());
+        let _ = std::fs::remove_file("/tmp/dbus-isolated-test");
+    }
+
+    #[test]
+    #[serial]
+    fn hydrate_shared_detached_corrects_display_when_x0_dead() {
+        let _restore = EnvRestore::capture(&["DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE"]);
+        // Use high numbers not owned by host (X0/X1 are host sockets owned by root/bex)
+        let x99 = PathBuf::from("/tmp/.X11-unix/X99");
+        let x100 = PathBuf::from("/tmp/.X11-unix/X100");
+        let had_x99 = x99.exists();
+        let had_x100 = x100.exists();
+        if had_x99 {
+            let _ = std::fs::remove_file(&x99);
+        }
+        // X99 dead, X100 live
+        let _ = std::fs::File::create(&x100);
+        unsafe {
+            std::env::set_var("DISPLAY", ":99");
+            std::env::set_var("XDG_SESSION_TYPE", "wayland");
+            std::env::remove_var("WAYLAND_DISPLAY");
+        }
+        let mut report = DoctorSessionEnvReport::default();
+        let values = HashMap::from([
+            ("DISPLAY".to_string(), ":100".to_string()),
+            ("WAYLAND_DISPLAY".to_string(), "wayland-1".to_string()),
+        ]);
+        let blocked = HashSet::from(["DISPLAY".to_string(), "WAYLAND_DISPLAY".to_string()]);
+
+        hydrate_desktop_env_from_map(&mut report, "active-session", &values, &blocked);
+
+        // X99 dead → should correct to :100 even though blocked and present
+        assert_eq!(std::env::var("DISPLAY").ok().as_deref(), Some(":100"));
+        // WAYLAND_DISPLAY was missing but blocked; active-session fills it for shared (x11 guard not triggered because wayland)
+        assert_eq!(
+            std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+            Some("wayland-1")
+        );
+        assert!(report.repaired.iter().any(|r| r.key == "DISPLAY"));
+        // Cleanup
+        let _ = std::fs::remove_file(&x100);
+        if had_x99 {
+            let _ = std::fs::File::create(&x99);
+        }
+        if !had_x100 {
+            let _ = std::fs::remove_file(&x100);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn hydrate_shared_detached_keeps_display_when_x0_live() {
+        let _restore = EnvRestore::capture(&["DISPLAY"]);
+        let x99 = PathBuf::from("/tmp/.X11-unix/X99");
+        let had_x99 = x99.exists();
+        let _ = std::fs::File::create(&x99);
+        unsafe {
+            std::env::set_var("DISPLAY", ":99");
+        }
+        let mut report = DoctorSessionEnvReport::default();
+        let values = HashMap::from([("DISPLAY".to_string(), ":100".to_string())]);
+        let blocked = HashSet::from(["DISPLAY".to_string()]);
+
+        hydrate_desktop_env_from_map(&mut report, "active-session", &values, &blocked);
+
+        // X99 live → must not flip to :100 even though candidate differs
+        assert_eq!(std::env::var("DISPLAY").ok().as_deref(), Some(":99"));
+        assert!(report.repaired.is_empty());
+        if !had_x99 {
+            let _ = std::fs::remove_file(&x99);
+        }
     }
 }

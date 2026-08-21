@@ -78,9 +78,22 @@ pub use paths::{
 };
 pub use snapshot::new_snapshot_id;
 
+/// Parse an X11 display string like `:0`, `:0.0`, `unix/:1`, `unix:2`
+/// into its numeric part. Returns the number as a slice of the original
+/// input, or `None` if the display is not a local `:`/`unix:` form.
+pub fn x11_display_number(display: &str) -> Option<&str> {
+    let value = display.trim();
+    let value = value
+        .strip_prefix("unix/:")
+        .or_else(|| value.strip_prefix("unix:"))
+        .or_else(|| value.strip_prefix(':'))?;
+    let number = value.split('.').next()?;
+    (!number.is_empty() && number.chars().all(|c| c.is_ascii_digit())).then_some(number)
+}
+
 #[cfg(test)]
 mod env_key_tests {
-    use super::{DESKTOP_LAUNCH_ENV_KEYS, GRAPHICAL_SESSION_ENV_KEYS};
+    use super::{DESKTOP_LAUNCH_ENV_KEYS, GRAPHICAL_SESSION_ENV_KEYS, x11_display_number};
 
     #[test]
     fn graphical_session_keys_exclude_path() {
@@ -107,5 +120,17 @@ mod env_key_tests {
             DESKTOP_LAUNCH_ENV_KEYS.len(),
             GRAPHICAL_SESSION_ENV_KEYS.len() + 4
         );
+    }
+
+    #[test]
+    fn x11_display_number_parses_local_forms() {
+        assert_eq!(x11_display_number(":0"), Some("0"));
+        assert_eq!(x11_display_number(":0.0"), Some("0"));
+        assert_eq!(x11_display_number("unix/:1"), Some("1"));
+        assert_eq!(x11_display_number("unix:2"), Some("2"));
+        assert_eq!(x11_display_number(" :10 "), Some("10"));
+        assert_eq!(x11_display_number("localhost:10.0"), None);
+        assert_eq!(x11_display_number(":a"), None);
+        assert_eq!(x11_display_number(""), None);
     }
 }

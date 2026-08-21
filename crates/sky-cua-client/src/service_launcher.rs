@@ -226,11 +226,12 @@ impl ServiceClient {
             },
         )?;
         if let Err(error) = launch_environment.ensure_startup_health(&response, true) {
-            if reported_mode.is_some_and(persistent_browser_control_mode) && !self.is_isolated() {
-                return Err(anyhow!(SharedBrowserDaemonConflict {
-                    detail: error.to_string(),
-                }));
-            }
+            // Desktop session staleness (DISPLAY rotation, XDG_RUNTIME_DIR change, etc.)
+            // must self-heal via restart even for persistent browser daemons.
+            // The browser daemon is unusable with a stale display; leaving it
+            // running (SharedBrowserDaemonConflict) produces a permanent
+            // "server unavailable" instead of converging to the new session.
+            // Only browser-mode incompatibility stays fail-closed.
             return Err(anyhow!(StaleStartupService {
                 detail: error.to_string(),
                 owner_pid,

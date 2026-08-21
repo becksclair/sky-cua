@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 use sky_cua_platform::{
     BROWSER_ENV_HEALTH_KEYS, DESKTOP_LAUNCH_ENV_KEYS, GRAPHICAL_SESSION_ENV_KEYS,
-    model::ServiceResponse,
+    model::ServiceResponse, x11_display_number,
 };
 
 const DEFAULT_PATH_DIRS: &[&str] = &[
@@ -388,14 +388,7 @@ fn graphical_process_environment_rank(environment: &HashMap<String, String>) -> 
 }
 
 fn local_x11_display_number(display: &str) -> Option<&str> {
-    let value = display.trim();
-    let value = value
-        .strip_prefix("unix/:")
-        .or_else(|| value.strip_prefix("unix:"))
-        .or_else(|| value.strip_prefix(':'))?;
-    let number = value.split('.').next()?;
-    (!number.is_empty() && number.chars().all(|character| character.is_ascii_digit()))
-        .then_some(number)
+    x11_display_number(display)
 }
 
 fn apply_logind_session_metadata(
