@@ -523,30 +523,167 @@ def _skill_projection_roots(
     return tuple(roots)
 
 
+def _link_or_copy_directory(target: Path, link_path: Path) -> None:
+    """Symlink ``link_path`` -> ``target``, falling back to a directory copy."""
+    if link_path.is_symlink():
+        try:
+            if link_path.readlink() == target:
+                return
+        except OSError:
+            pass
+        link_path.unlink()
+    elif link_path.exists():
+        _remove_path(link_path)
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link_path.symlink_to(target, target_is_directory=target.is_dir())
+    except (OSError, NotImplementedError, FileExistsError):
+        _remove_path(link_path)
+        if not target.is_absolute():
+            target = (link_path.parent / target).resolve()
+        shutil.copytree(target, link_path, symlinks=False)
+
+
+def _toml_string(value: Path | str) -> str:
+    return json.dumps(str(value))
+
+
+def _upsert_toml_key(config_text: str, header: str, key: str, rendered_value: str) -> str:
+    import re
+
+    section_re = re.compile(
+        rf"(^\[{re.escape(header)}\]\r?\n)(.*?)(?=^\[|\Z)", re.MULTILINE | re.DOTALL
+    )
+    match = section_re.search(config_text)
+    line = f"{key} = {rendered_value}"
+    if match is None:
+        separator = "" if not config_text or config_text.endswith("\n") else "\n"
+        return f"{config_text}{separator}\n[{header}]\n{line}\n"
+    body = match.group(2)
+    key_re = re.compile(rf"^{re.escape(key)}\s*=.*$", re.MULTILINE)
+    if key_re.search(body):
+        new_body = key_re.sub(line, body, count=1)
+    else:
+        suffix = "" if body.endswith(("\n", "\r\n")) or body == "" else "\n"
+        new_body = f"{body}{suffix}{line}\n"
+    return config_text[: match.start(2)] + new_body + config_text[match.end(2) :]
+
+
+def _sync_codex_bundled_marketplace(install_root: Path, codex_home: Path) -> None:
+    """Project the standalone ``openai-bundled`` marketplace via the bundled-marketplace cache.
+
+    ``codex app-server`` now rejects ``plugin/install`` for the reserved
+    ``openai-bundled`` marketplace (0.149.0: ``reserved and cannot be loaded
+    from this source``). The supported override is the same filesystem
+    projection ``deploy_plugin.py``/``resources/chrome_preflight.py`` use:
+    copy the marketplace into
+    ``codex_home/.tmp/bundled-marketplaces/openai-bundled`` and link each
+    plugin directory there, then point ``config.toml`` at it. See
+    ``resources/chrome_preflight.py:sync_marketplace``.
+    """
+    source_root = install_root / "codex/openai-bundled"
+    source_marketplace = source_root / ".agents/plugins/marketplace.json"
+    if not source_marketplace.is_file():
+        return
+    dest_marketplace = (
+        codex_home / ".tmp/bundled-marketplaces/openai-bundled/.agents/plugins/marketplace.json"
+    )
+    dest_marketplace.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_marketplace, dest_marketplace)
+    try:
+        manifest = json.loads(dest_marketplace.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        manifest = None
+    if isinstance(manifest, dict):
+        plugins = manifest.get("plugins")
+        if isinstance(plugins, list):
+            existing = {p.get("name") for p in plugins if isinstance(p, dict)}
+            # Preserve chrome if the standalone marketplace does not ship it;
+            # Codex Desktop still expects chrome alongside our two plugins.
+            changed = False
+            for extra in ("chrome",):
+                if extra not in existing:
+                    plugins.append(
+                        {
+                            "name": extra,
+                            "source": {"source": "local", "path": f"./plugins/{extra}"},
+                            "policy": {
+                                "installation": "AVAILABLE",
+                                "authentication": "ON_INSTALL",
+                            },
+                            "category": "Engineering",
+                        }
+                    )
+                    changed = True
+            if changed:
+                dest_marketplace.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    for plugin_name in PLUGIN_NAMES:
+        source_plugin = source_root / "plugins" / plugin_name
+        if not source_plugin.is_dir():
+            continue
+        dest_link = codex_home / ".tmp/bundled-marketplaces/openai-bundled/plugins" / plugin_name
+        _link_or_copy_directory(source_plugin.resolve(), dest_link)
+
+
+def _update_codex_config_for_bundled(codex_home: Path) -> None:
+    from datetime import UTC, datetime
+
+    config_path = codex_home / "config.toml"
+    try:
+        config_text = config_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        config_text = ""
+    marketplace_root = codex_home / ".tmp/bundled-marketplaces/openai-bundled"
+    config_text = _upsert_toml_key(config_text, "features", "plugins", "true")
+    config_text = _upsert_toml_key(
+        config_text,
+        "marketplaces.openai-bundled",
+        "last_updated",
+        _toml_string(datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")),
+    )
+    config_text = _upsert_toml_key(
+        config_text,
+        "marketplaces.openai-bundled",
+        "source_type",
+        '"local"',
+    )
+    config_text = _upsert_toml_key(
+        config_text,
+        "marketplaces.openai-bundled",
+        "source",
+        _toml_string(marketplace_root),
+    )
+    for plugin_id in (f"{name}@openai-bundled" for name in PLUGIN_NAMES):
+        config_text = _upsert_toml_key(
+            config_text,
+            f'plugins."{plugin_id}"',
+            "enabled",
+            "true",
+        )
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(config_text, encoding="utf-8")
+
+
 def _install_codex_plugins(
     install_root: Path,
     *,
-    env: Mapping[str, str],
+    home: Path | None = None,
+    env: Mapping[str, str] | None = None,
     which: Callable[[str], str | None],
 ) -> tuple[str, ...]:
+    if env is None:
+        env = {}
     codex = which("codex")
     if codex is None:
         return ()
-    from _codex_app_server import CodexAppServerClient
-
-    marketplace = install_root / "codex/openai-bundled/.agents/plugins/marketplace.json"
-    client_env = os.environ.copy()
-    client_env.update(env)
-    client = CodexAppServerClient([codex, "app-server"], env=client_env, cwd=install_root)
-    try:
-        client.initialize(client_name="sky-cua-installer", client_version=PRODUCT_VERSION)
-        for plugin_name in PLUGIN_NAMES:
-            client.request(
-                "plugin/install",
-                {"marketplacePath": str(marketplace), "pluginName": plugin_name},
-            )
-    finally:
-        client.close()
+    # ``install_root`` is the physical fixed root (``XDG_DATA_HOME/sky-cua``);
+    # ``home`` is the user home that owns ``~/.codex``. Derive from ``env`` when
+    # not explicitly passed so tests that monkeypatch ``which`` keep working.
+    home_path = Path(env.get("HOME", str(Path.home()))).expanduser() if home is None else home
+    codex_home = home_path / ".codex"
+    # Filesystem projection replaces the 0.149.0-blocked ``plugin/install`` RPC.
+    _sync_codex_bundled_marketplace(install_root, codex_home)
+    _update_codex_config_for_bundled(codex_home)
     return PLUGIN_NAMES
 
 
@@ -876,7 +1013,9 @@ def install_payload(
                 home=install_home,
                 env=active_env,
             ).report()
-        plugins = _install_codex_plugins(public_root, env=active_env, which=which)
+        plugins = _install_codex_plugins(
+            public_root, home=install_home, env=active_env, which=which
+        )
         openclaw_bin = which("openclaw")
         if openclaw_bin is not None:
             openclaw_permission_configs = _configure_openclaw_no_prompt_permissions(
