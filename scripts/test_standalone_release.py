@@ -480,6 +480,31 @@ def test_install_refuses_to_replace_unmanaged_pi_extension(
         install_payload(payload, home=home, env={}, configure_hosts=False)
 
 
+def test_install_replaces_legacy_bex_pi_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    core, cua_node = _fixture_repo(repo)
+    monkeypatch.setattr(standalone_release, "REPO_ROOT", repo)
+    payload = tmp_path / "payload"
+    assemble_payload(payload, core_root=core, cua_node_root=cua_node)
+    home = tmp_path / "home"
+    # Legacy bex install left a dangling absolute symlink under the ubuntu
+    # home; the installer must treat it as managed and converge it.
+    extension = home / ".pi/agent/extensions/sky-cua-image-capability.ts"
+    extension.parent.mkdir(parents=True, exist_ok=True)
+    extension.symlink_to(
+        Path("/home/bex/.local/share/sky-cua/resources/pi/sky-cua-image-capability.ts")
+    )
+    assert extension.is_symlink()
+
+    report = install_payload(payload, home=home, env={}, configure_hosts=False)
+
+    public_root = Path(str(report["public_root"]))
+    assert extension.is_symlink()
+    assert extension.readlink() == public_root / "resources/pi/sky-cua-image-capability.ts"
+
+
 def test_install_preserves_unresolvable_user_node_symlink(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

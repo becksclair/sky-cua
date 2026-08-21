@@ -674,10 +674,39 @@ def _install_pi_mcp(
     extension_dir.mkdir(parents=True, exist_ok=True)
     extension_path = extension_dir / "sky-cua-image-capability.ts"
     if extension_path.exists() or extension_path.is_symlink():
-        if not extension_path.is_symlink() or extension_path.resolve(
-            strict=False
-        ) != extension_source.resolve(strict=False):
-            raise ValueError(f"refusing to replace an unmanaged Pi extension: {extension_path}")
+        if extension_path.is_symlink():
+            expected = extension_source.resolve(strict=False)
+            actual = extension_path.resolve(strict=False)
+            if actual != expected:
+                # Legacy installs under /home/bex and other prior fixed roots left
+                # dangling or absolute symlinks that still point at a sky-cua
+                # managed copy of this exact extension. Treat those as managed
+                # so host migrations (bex -> ubuntu) and reinstalls converge
+                # instead of failing the entire deploy.
+                try:
+                    raw_target = str(extension_path.readlink())
+                except OSError:
+                    raw_target = ""
+                is_legacy_managed = (
+                    raw_target.endswith("sky-cua-image-capability.ts") and "sky-cua" in raw_target
+                )
+                if not is_legacy_managed:
+                    raise ValueError(
+                        f"refusing to replace an unmanaged Pi extension: {extension_path}"
+                    )
+        else:
+            # Regular file at the extension path: only replace if it is
+            # byte-identical to the shipped source (e.g. a prior copy
+            # instead of a symlink). Otherwise preserve the user's file.
+            try:
+                if extension_path.read_bytes() != extension_source.read_bytes():
+                    raise ValueError(
+                        f"refusing to replace an unmanaged Pi extension: {extension_path}"
+                    )
+            except OSError as exc:
+                raise ValueError(
+                    f"refusing to replace an unmanaged Pi extension: {extension_path}"
+                ) from exc
         extension_path.unlink()
     extension_path.symlink_to(extension_source)
     config_path = agent_dir / "mcp.json"
