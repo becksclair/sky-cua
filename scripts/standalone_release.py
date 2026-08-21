@@ -35,7 +35,7 @@ from _standalone_topology import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TARGET = "linux-x64-glibc"
-PRODUCT_VERSION = "0.9.1"
+PRODUCT_VERSION = "0.9.2"
 ARCHIVE_NAME = f"sky-cua-{TARGET}.tar.gz"
 PAYLOAD_DIR_NAME = f"sky-cua-{TARGET}"
 SURFACE_SKILL_MAP = {
