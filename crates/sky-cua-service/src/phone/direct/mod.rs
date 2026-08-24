@@ -32,6 +32,7 @@ use tokio_tungstenite::{WebSocketStream, accept_async};
 use uuid::Uuid;
 
 mod content_transfer;
+pub(crate) mod lan;
 pub(crate) mod provider;
 use content_transfer::InboundContentStore;
 
@@ -873,36 +874,82 @@ pub(crate) fn decode_control_frame(
     Ok(frame)
 }
 
-/// Validate a configured listener address. Wildcard and unspecified binds are
-/// rejected so enabling direct mode cannot accidentally expose Saga publicly.
+pub(crate) fn is_private_ipv4(ipv4: std::net::Ipv4Addr) -> bool {
+    let o = ipv4.octets();
+    // 10.0.0.0/8
+    if o[0] == 10 {
+        return true;
+    }
+    // 172.16.0.0/12
+    if o[0] == 172 && (16..=31).contains(&o[1]) {
+        return true;
+    }
+    // 192.168.0.0/16 (incl. tether 192.168.42/49, hotspot 192.168.43/49)
+    if o[0] == 192 && o[1] == 168 {
+        return true;
+    }
+    // 169.254.0.0/16 link-local
+    if o[0] == 169 && o[1] == 254 {
+        return true;
+    }
+    // 100.64.0.0/10 CGNAT (Tailscale)
+    if o[0] == 100 && (64..=127).contains(&o[1]) {
+        return true;
+    }
+    false
+}
+
+pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ipv4) => ipv4.is_loopback() || is_private_ipv4(ipv4),
+        IpAddr::V6(ipv6) => {
+            if ipv6.is_loopback() {
+                return true;
+            }
+            // ::ffff:0:0/96 mapped IPv4 — evaluate inner IPv4.
+            if let Some(v4) = ipv6.to_ipv4_mapped() {
+                return v4.is_loopback() || is_private_ipv4(v4);
+            }
+            let o = ipv6.octets();
+            // fc00::/7 ULA (superset of fd7a:115c:a1e0::/48)
+            if o[0] == 0xfc || o[0] == 0xfd {
+                return true;
+            }
+            // fe80::/10 link-local (strip %zone already done by caller)
+            if o[0] == 0xfe && (o[1] & 0xc0) == 0x80 {
+                return true;
+            }
+            false
+        }
+    }
+}
+
+/// Validate a configured listener address. Wildcard binds (0.0.0.0 / ::) are
+/// allowed so one socket covers WiFi/ethernet/USB-tether, while public routable
+/// binds remain rejected for cleartext `ws://` listeners.
 pub(crate) fn validate_bind_addr(addr: SocketAddr) -> io::Result<()> {
     let ip = addr.ip();
-    let allowed = match ip {
-        IpAddr::V4(ipv4) => {
-            ipv4.is_loopback()
-                // Tailscale's CGNAT range.
-                || (ipv4.octets()[0] == 100 && (64..=127).contains(&ipv4.octets()[1]))
-        }
-        IpAddr::V6(ipv6) => {
-            ipv6.is_loopback()
-                // Tailscale's stable IPv6 prefix fd7a:115c:a1e0::/48.
-                || (ipv6.segments()[0] == 0xfd7a
-                    && ipv6.segments()[1] == 0x115c
-                    && ipv6.segments()[2] == 0xa1e0)
-        }
-    };
-    if ip.is_unspecified() || ip.is_multicast() || !allowed {
+    if ip.is_multicast() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "phone-control listener requires an explicit unicast Tailscale or loopback address",
+            "phone-control listener multicast address is not allowed",
         ));
     }
-    Ok(())
+    if ip.is_unspecified() {
+        return Ok(());
+    }
+    if is_private_ip(ip) {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "phone-control listener requires a private, Tailscale, or loopback address (or 0.0.0.0/:: for all interfaces)",
+    ))
 }
 
 /// Listener construction is disabled unless explicitly enabled by service
-/// configuration. The listener itself is intentionally not exposed on a public
-/// or wildcard address.
+/// configuration. Wildcard binds (0.0.0.0/::) are allowed for LAN/tether but
+/// public routable addresses remain rejected.
 pub(crate) struct DirectListener {
     listener: TcpListener,
 }
@@ -919,9 +966,47 @@ impl DirectListener {
                 "direct listener address is required when enabled",
             )
         })?;
-        let addr = raw
+        let addr: SocketAddr = raw
             .parse()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        // Wildcard `0.0.0.0/::` on a host with a public NIC would be reachable
+        // from the internet if the firewall is not configured. `docs/runtime/direct-lan.md:30`
+        // says public `ws://` is `InvalidInput` and `wss://` is the public escape.
+        // Enforce that: wildcard `ws://` with a public advertised host is rejected
+        // (require `wss://`), private/`*.ts.net` `ws://` is still `Ok`.
+        if addr.ip().is_unspecified() {
+            if let Some(advertised) = config.direct_advertised_endpoint.as_deref() {
+                let lower = advertised.to_ascii_lowercase();
+                if lower.starts_with("ws://") {
+                    // Extract host between ws:// and : or / or ?
+                    let after = &advertised[5..];
+                    let host_end = after.find([':', '/', '?', '#']).unwrap_or(after.len());
+                    let mut host = &after[..host_end];
+                    // Strip [] for IPv6 and %zone
+                    host = host.trim_matches(|c| c == '[' || c == ']');
+                    if let Some(p) = host.find('%') {
+                        host = &host[..p];
+                    }
+                    let is_private = if host.eq_ignore_ascii_case("localhost")
+                        || host == "127.0.0.1"
+                        || host == "::1"
+                        || host.to_ascii_lowercase().ends_with(".ts.net")
+                    {
+                        true
+                    } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                        is_private_ip(ip) || ip.is_loopback()
+                    } else {
+                        false
+                    };
+                    if !is_private {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "wildcard direct listener (0.0.0.0/::) with public ws:// advertised endpoint requires wss:// (or a private/ tailnet host); see docs/runtime/direct-lan.md:30",
+                        ));
+                    }
+                }
+            }
+        }
         Self::bind(true, addr).await
     }
 
@@ -2202,14 +2287,25 @@ mod tests {
 
     #[test]
     fn rejects_wildcard_binds() {
-        assert!(validate_bind_addr(SocketAddr::from(([0, 0, 0, 0], 1))).is_err());
+        // 0.0.0.0 / :: now allowed for LAN/tether (covers WiFi + rndis0/usb0 in one socket).
+        assert!(validate_bind_addr(SocketAddr::from(([0, 0, 0, 0], 1))).is_ok());
+        assert!(validate_bind_addr("[::]:1".parse().unwrap()).is_ok());
         assert!(validate_bind_addr(SocketAddr::from(([127, 0, 0, 1], 1))).is_ok());
         assert!(validate_bind_addr(SocketAddr::from((Ipv4Addr::new(100, 64, 0, 2), 1))).is_ok());
         assert!(validate_bind_addr(SocketAddr::from(([8, 8, 8, 8], 1))).is_err());
-        assert!(validate_bind_addr(SocketAddr::from(([192, 168, 1, 2], 1))).is_err());
-        assert!(validate_bind_addr(SocketAddr::from(([169, 254, 1, 2], 1))).is_err());
+        // RFC1918 + link-local + ULA now allowed (tether 192.168.42, hotspot, etc.)
+        assert!(validate_bind_addr(SocketAddr::from(([192, 168, 1, 2], 1))).is_ok());
+        assert!(validate_bind_addr(SocketAddr::from(([192, 168, 42, 10], 1))).is_ok());
+        assert!(validate_bind_addr(SocketAddr::from(([10, 0, 0, 5], 1))).is_ok());
+        assert!(validate_bind_addr(SocketAddr::from(([172, 16, 5, 5], 1))).is_ok());
+        assert!(validate_bind_addr(SocketAddr::from(([169, 254, 1, 2], 1))).is_ok());
         assert!(validate_bind_addr("[fd7a:115c:a1e0::2]:1".parse().unwrap()).is_ok());
-        assert!(validate_bind_addr("[fd00::2]:1".parse().unwrap()).is_err());
+        assert!(validate_bind_addr("[fd00::2]:1".parse().unwrap()).is_ok());
+        assert!(validate_bind_addr("[fe80::1]:1".parse().unwrap()).is_ok());
+        assert!(validate_bind_addr("[::ffff:192.168.1.1]:1".parse().unwrap()).is_ok());
+        // Public still rejected.
+        assert!(validate_bind_addr(SocketAddr::from(([203, 0, 113, 5], 1))).is_err());
+        assert!(validate_bind_addr("[2001:db8::1]:1".parse().unwrap()).is_err());
     }
 
     #[test]

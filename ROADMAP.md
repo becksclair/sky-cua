@@ -371,7 +371,9 @@ pick them off between feature work.
   - browser bridge `type_text` and `claim_tab`
   - Windows `windows_doctor_report`
 - [ ] Finish or drop the intended `displays/providers.rs` / `displays/tests.rs`
-      split if display topology code keeps growing
+       split if display topology code keeps growing
+- [ ] Documented follow-up (UR-101): `crates/sky-cua-service/src/phone/direct/mod.rs:936` `0.0.0.0/::` allowed for WiFi+tether — public `203.0.113.5`/`2001:db8::1` still `InvalidInput`, `wss://` is the public escape, `ufw allow <port>/tcp on wlan0/rndis0` in `docs/runtime/direct-lan.md:40`; keep as `follow_up`, do not revert without product decision
+- [x] Direct-LAN cutover (2026-08-25): `SKY_CUA_PHONE_COMPANION_RPC_*` env keys removed from `platform/config.rs:50`/`378`/`all_env_keys` and `.mcp.json:54` forwarding — **breaking change**, operators must use `SKY_CUA_PHONE_DIRECT_*` (`ws://` private LAN/tether `192.168/16`/`10/8`/`fd00::/7` or `wss://` tailnet); `phone/companion/` RPC transport (`client.rs`/`identity.rs`/`SetupActivity`/`RpcServer`/`adb forward` + token) deleted, `phone/protocol.rs` is the sole wire-type source (1508 `nextest` + `test_env_key_contract` 7 green)
 
 ## Backlog / Ideas
 

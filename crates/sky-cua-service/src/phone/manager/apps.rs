@@ -16,7 +16,7 @@ use sky_cua_platform::model::{
 
 use super::{PhoneManager, no_session_diagnostic, selector_ids};
 use crate::phone::adb;
-use crate::phone::companion::protocol::AppOp;
+use crate::phone::protocol::AppOp;
 
 impl PhoneManager {
     // ===================================================================

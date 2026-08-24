@@ -17,9 +17,7 @@ use sky_cua_platform::model::{
 };
 
 use super::{PhoneManager, no_session_diagnostic, selector_ids};
-use crate::phone::companion::protocol::{
-    NotificationOp, NotificationOpParams, NotificationRedactionDto,
-};
+use crate::phone::protocol::{NotificationOp, NotificationOpParams, NotificationRedactionDto};
 
 impl PhoneManager {
     // ===================================================================
@@ -347,7 +345,7 @@ fn bounds_to_rect(bounds: [i32; 4]) -> RectF {
 
 /// Map a companion notification DTO to the model notification event.
 fn notification_event(
-    dto: &crate::phone::companion::protocol::NotificationEventDto,
+    dto: &crate::phone::protocol::NotificationEventDto,
 ) -> PhoneNotificationEvent {
     let redaction = match dto.redaction {
         NotificationRedactionDto::None => PhoneNotificationRedaction::None,
@@ -429,7 +427,7 @@ fn notifications_unavailable(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::phone::companion::protocol::NotificationEventDto;
+    use crate::phone::protocol::NotificationEventDto;
 
     fn base_dto() -> NotificationEventDto {
         NotificationEventDto {

@@ -13,8 +13,6 @@
     <string name="companion_subtitle">Computer-use companion for sky-cua</string>
     <string name="section_connection">Connection</string>
     <string name="section_permissions">Permissions</string>
-    <string name="status_rpc_server">RPC server</string>
-    <string name="status_setup_token">Setup token</string>
     <string name="status_host_link">Host link</string>
     <string name="status_host_link_denied">Android blocked the background start. Retry while this screen is open.</string>
     <string name="status_host_link_stopped">The saved host link is stopped. Retry while this screen is open.</string>

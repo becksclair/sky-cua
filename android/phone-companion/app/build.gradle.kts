@@ -24,11 +24,10 @@ android {
         // Expose version metadata to runtime code explicitly. Newer AGP no
         // longer guarantees VERSION_CODE/VERSION_NAME in BuildConfig. Derive
         // these from the versionCode/versionName above so the runtime-reported
-        // version can never drift from the manifest (the companion RPC surfaces
+        // version can never drift from the manifest (the companion surfaces
         // BuildConfig.VERSION_NAME as its installed version).
         buildConfigField("int", "VERSION_CODE", "$versionCode")
         buildConfigField("String", "VERSION_NAME", "\"$versionName\"")
-        buildConfigField("int", "RPC_PORT", "47683")
     }
 
     buildTypes {

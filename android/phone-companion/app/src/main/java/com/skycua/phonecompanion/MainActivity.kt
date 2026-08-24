@@ -24,12 +24,11 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import com.skycua.phonecompanion.protocol.HealthState
 import com.skycua.phonecompanion.direct.AndroidCredentialStore
 import com.skycua.phonecompanion.direct.DirectLinkServiceOwner
 import com.skycua.phonecompanion.direct.directLinkNeedsUserRetry
+import com.skycua.phonecompanion.protocol.HealthState
 import com.skycua.phonecompanion.service.DeviceMethodHandler
-import com.skycua.phonecompanion.service.RpcController
 import com.skycua.phonecompanion.ui.PointerPlaygroundActivity
 
 /**
@@ -193,27 +192,6 @@ class MainActivity : AppCompatActivity() {
         statusBody.removeAllViews()
 
         statusBody.addView(sectionLabel(getString(R.string.section_connection)), marginParams(top = 14))
-        statusBody.addView(
-            statusRow(
-                getString(R.string.status_rpc_server),
-                if (RpcController.isRunning) {
-                    chip(getString(R.string.chip_running), ChipKind.OK)
-                } else {
-                    chip(getString(R.string.chip_idle), ChipKind.NEUTRAL)
-                },
-            ),
-        )
-        statusBody.addView(divider())
-        statusBody.addView(
-            statusRow(
-                getString(R.string.status_setup_token),
-                if (RpcController.tokenStore.hasToken) {
-                    chip(getString(R.string.chip_present), ChipKind.OK)
-                } else {
-                    chip(getString(R.string.chip_absent), ChipKind.NEUTRAL)
-                },
-            ),
-        )
         val linkAvailability = DirectLinkServiceOwner.availability()
         val directDesired = runCatching {
             val store = AndroidCredentialStore(applicationContext)
@@ -233,7 +211,6 @@ class MainActivity : AppCompatActivity() {
                         DirectLinkServiceOwner.Availability.TERMINAL -> getString(R.string.chip_attention)
                         DirectLinkServiceOwner.Availability.STOPPED ->
                             if (directDesired) getString(R.string.chip_retry_needed) else getString(R.string.chip_idle)
-                        else -> getString(R.string.chip_idle)
                     },
                     when {
                         linkAvailability == DirectLinkServiceOwner.Availability.RUNNING -> ChipKind.OK

@@ -21,9 +21,9 @@ use crate::phone::adb::{
     SecureServiceOutcome, SecureServiceState, ensure_notification_listener,
     ensure_secure_list_service, forward_tcp, install_replace, uninstall_package,
 };
-use crate::phone::companion;
-use crate::phone::companion::client::CompanionClient;
-use crate::phone::companion::identity::{
+use crate::phone::protocol;
+use crate::phone::protocol::client::CompanionClient;
+use crate::phone::protocol::identity::{
     self, CompanionBootstrapOptions, CompanionInstallDecision, ExpectedCompanion,
     InstalledCompanion,
 };
@@ -148,6 +148,24 @@ impl PhoneManager {
         now: u64,
         options: CompanionBootstrapOptions,
     ) -> (Option<CompanionRuntime>, Vec<DiagnosticEntry>) {
+        // Direct-only cut (2026-08-25): when direct is enabled, the legacy RPC
+        // transport (`adb forward` + `SetupActivity` token) is dead — Android has
+        // no `SetupActivity` and `CompanionClient` is a stub that always
+        // `rpc_reachable=false`. Fast-path to absent without the 2s retry.
+        if self.selection.direct_enabled {
+            let mut diagnostics = Vec::new();
+            diagnostics.push(DiagnosticEntry {
+                code: "PhoneCompanionRpcRemoved".to_string(),
+                message:
+                    "companion RPC bootstrap skipped: direct_enabled=true, use CompanionDirect"
+                        .to_string(),
+                details: None,
+            });
+            diagnostics.push(crate::phone::protocol::not_implemented_diagnostic());
+            profile.companion =
+                crate::phone::protocol::absent_companion(&self.selection.companion_package);
+            return (None, diagnostics);
+        }
         let package = self.selection.companion_package.clone();
         let allow_downgrade = options
             .allow_downgrade
@@ -182,7 +200,8 @@ impl PhoneManager {
         // Read installed identity (best-effort). A missing package yields the
         // default "absent" InstalledCompanion via None.
         let installed = self.read_installed_companion(serial, &package).await;
-        let mut decision = identity::decide_install(installed.as_ref(), &expected);
+        let mut decision =
+            identity::decide_install(installed.as_ref(), &expected, options.allow_downgrade);
         if options.force_reinstall && matches!(decision, CompanionInstallDecision::UpToDate) {
             decision = CompanionInstallDecision::Update {
                 reason: "explicit force_reinstall requested".to_string(),
@@ -274,7 +293,7 @@ impl PhoneManager {
                     .to_string(),
                 details: None,
             });
-            profile.companion = companion::capabilities_unreachable(
+            profile.companion = protocol::capabilities_unreachable(
                 &package,
                 installed.as_ref().unwrap_or(&InstalledCompanion::default()),
                 expected.cert_sha256.as_deref(),
@@ -299,7 +318,7 @@ impl PhoneManager {
 
         // Set up the forward through the shared ADB-lane primitive and deliver the
         // token through the setup intent.
-        let port = self.selection.companion_rpc_port;
+        let port = 47683_u16;
         match forward_tcp(
             self.runner.as_ref(),
             self.configured_adb_path(),
@@ -319,7 +338,7 @@ impl PhoneManager {
                     ),
                     details: None,
                 });
-                profile.companion = companion::absent_companion(&package);
+                profile.companion = protocol::absent_companion(&package);
                 return (None, diagnostics);
             }
             Err(error) => {
@@ -327,7 +346,7 @@ impl PhoneManager {
                     "adb forward",
                     &error,
                 ));
-                profile.companion = companion::absent_companion(&package);
+                profile.companion = protocol::absent_companion(&package);
                 return (None, diagnostics);
             }
         }
@@ -339,7 +358,7 @@ impl PhoneManager {
         // never started.) A failed `am start` means the token was not delivered,
         // so surface a distinct diagnostic rather than a confusing later
         // `unauthorized`. The token is never logged or echoed into any diagnostic.
-        let token = identity::generate_token(now, self.selection.companion_rpc_token_ttl_ms);
+        let token = identity::generate_token(now, 900_000);
         let setup_argv = identity::setup_intent_argv(serial, &package, &token);
         let setup_ref: Vec<&str> = setup_argv.iter().map(String::as_str).collect();
         let setup_intent_ok = match self.runner.run(&self.adb_program(), &setup_ref).await {
@@ -393,7 +412,7 @@ impl PhoneManager {
         }
         let runtime = match caps_result {
             Ok(caps) => {
-                profile.companion = companion::capabilities_from_response(
+                profile.companion = protocol::capabilities_from_response(
                     &caps,
                     Some(&token),
                     // The installed cert the host parsed during
@@ -422,7 +441,7 @@ impl PhoneManager {
                 });
                 match client.health().await {
                     Ok(health) => {
-                        profile.companion = companion::capabilities_from_health(
+                        profile.companion = protocol::capabilities_from_health(
                             &health,
                             installed.as_ref().and_then(|c| c.version_name.clone()),
                         );
@@ -434,7 +453,7 @@ impl PhoneManager {
                             message: format!("companion health probe failed: {health_error}"),
                             details: None,
                         });
-                        profile.companion = companion::capabilities_unreachable(
+                        profile.companion = protocol::capabilities_unreachable(
                             &package,
                             installed.as_ref().unwrap_or(&InstalledCompanion::default()),
                             expected.cert_sha256.as_deref(),
@@ -453,7 +472,7 @@ impl PhoneManager {
                     message: format!("companion capability probe failed: {error}"),
                     details: None,
                 });
-                profile.companion = companion::capabilities_unreachable(
+                profile.companion = protocol::capabilities_unreachable(
                     &package,
                     installed.as_ref().unwrap_or(&InstalledCompanion::default()),
                     self.selection.companion_expected_cert_sha256.as_deref(),
@@ -708,8 +727,8 @@ impl PhoneManager {
         PhoneCompanionStatusResponse {
             session_id,
             serial,
-            companion: companion::absent_companion(&self.selection.companion_package),
-            diagnostics: vec![companion::not_implemented_diagnostic()],
+            companion: protocol::absent_companion(&self.selection.companion_package),
+            diagnostics: vec![protocol::not_implemented_diagnostic()],
         }
     }
 

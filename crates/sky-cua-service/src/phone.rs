@@ -10,12 +10,12 @@
 
 mod adb;
 mod command;
-mod companion;
 mod cursor;
 mod device;
 mod direct;
 mod manager;
 mod mapping;
+mod protocol;
 mod scrcpy;
 mod snapshot;
 
