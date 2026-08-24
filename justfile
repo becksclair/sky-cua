@@ -18,13 +18,21 @@ verify-python-full:
     uv run basedpyright
     uv run pytest
 
-# Skips (exit 0 with a message) when no JDK is available.
+# Skips (exit 0 with a message) when no JDK is available. Prefers mise-pinned JDK (mise.toml) when available.
 verify-kotlin:
     #!/usr/bin/env bash
-    if [ -z "${JAVA_HOME:-}" ] && ! command -v java >/dev/null; then
-        echo "verify-kotlin: no JDK found, skipping companion unit tests"; exit 0
+    set -euo pipefail
+    if command -v mise >/dev/null 2>&1; then
+        if ! mise x -- java -version >/dev/null 2>&1; then
+            echo "verify-kotlin: no JDK found, skipping companion unit tests"; exit 0
+        fi
+        mise x -- ./android/phone-companion/gradlew -p android/phone-companion :app:testDebugUnitTest --console=plain
+    else
+        if [ -z "${JAVA_HOME:-}" ] && ! command -v java >/dev/null; then
+            echo "verify-kotlin: no JDK found, skipping companion unit tests"; exit 0
+        fi
+        ./android/phone-companion/gradlew -p android/phone-companion :app:testDebugUnitTest --console=plain
     fi
-    ./android/phone-companion/gradlew -p android/phone-companion :app:testDebugUnitTest --console=plain
 
 # Runs the COSMIC desktop smoke suite. Skips cleanly (exit 0) when no live
 # desktop session is available, so headless CI containers stay green.

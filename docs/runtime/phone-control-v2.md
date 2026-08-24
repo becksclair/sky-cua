@@ -53,9 +53,13 @@ then does Saga return `enrollment_ok`; this is the only frame that ever carries
 the durable secret. A consumed bootstrap is never restored or replayed, even
 when that response is lost.
 
-Android atomically stores the complete credential and endpoint in
+Android atomically stores each host's complete credential and endpoint in
 credential-protected storage, encrypted by an AES-GCM key held in Android
-Keystore. After that durable commit, it sends an idempotent `enrollment_ack`.
+Keystore; the phone may hold up to 8 simultaneously paired hosts (each with an
+independent `device_id`, secret, endpoint, and link epoch) and can be re-paired
+with additional hosts from the in-app **Manage hosts** screen, which also lists
+all paired hosts with per-host remove actions. After that durable commit, it
+sends an idempotent `enrollment_ack`.
 Saga verifies the acknowledgement and atomically promotes `Pending` to
 `Active`, then returns `enrollment_committed`. Pending devices cannot dispatch
 control operations. An expired pending device cannot acknowledge or reconnect
@@ -235,8 +239,11 @@ explicit host path removes the temporary lease.
 
 ## Reconnection and boot
 
-While its process is alive, the Companion reconnects with bounded exponential
-backoff and jitter across backgrounding, screen-off, and network changes. After
+While its process is alive, the Companion maintains one WebSocket per paired
+host and reconnects each independently with bounded exponential backoff and
+jitter across backgrounding, screen-off, and network changes. Removing a host
+from **Manage hosts** is local to the phone; Saga's enrollment for that
+`device_id` remains until revoked or expired. After
 whole-package process death, backoff resumes only once Android or the user
 recreates the process; the supported Galaxy recovery is to relaunch the
 Companion and use its visible Retry action. Capabilities therefore report

@@ -22,9 +22,23 @@ import com.skycua.phonecompanion.MainActivity
 import com.skycua.phonecompanion.service.DeviceMethodHandler
 
 internal object DirectLinkReplacementNotifier {
-    @Volatile private var callback: (() -> Unit)? = null
-    fun register(callback: (() -> Unit)?) { this.callback = callback }
-    fun notifyCommitted() { callback?.invoke() }
+    private val callbacks = mutableSetOf<() -> Unit>()
+    @Synchronized
+    fun register(callback: (() -> Unit)?) {
+        synchronized(callbacks) {
+            if (callback == null) callbacks.clear()
+            else callbacks.add(callback)
+        }
+    }
+    @Synchronized
+    fun unregister(callback: () -> Unit) {
+        synchronized(callbacks) { callbacks.remove(callback) }
+    }
+    fun notifyCommitted() {
+        val copy: List<() -> Unit>
+        synchronized(callbacks) { copy = callbacks.toList() }
+        copy.forEach { it.invoke() }
+    }
 }
 
 /** Persisted non-secret endpoint settings for the outbound link. */
@@ -58,133 +72,28 @@ internal fun directLinkNeedsUserRetry(availability: DirectLinkServiceOwner.Avail
     desired && availability == DirectLinkServiceOwner.Availability.STOPPED
 
 /** Process-safe lifecycle owner used by the accessibility service or explicit service start. */
-class AndroidDirectLinkOwner(
-    private val context: Context,
-    private val onTerminal: (LinkSnapshot) -> Unit = {},
-    private val onState: (LinkSnapshot) -> Unit = {},
-) : DirectLinkOwner {
-    private val credentials = AndroidCredentialStore(context.applicationContext)
-    private val contentReceiver = ContentTransferReceiver(context.applicationContext)
-    private val methodHandler = DeviceMethodHandler(context.applicationContext, contentReceiver)
-    private val controller: DirectLinkController by lazy {
-        DirectLinkController(
-            OkHttpDirectSocketFactory(),
-            credentials,
-            requestDispatcher = DirectRequestDispatcher.forHandler(
-                methodHandler,
-                { controller.contentSender() },
-                contentReceiver,
-            ),
-            contentReceiver = contentReceiver,
-        )
-    }
-    private val handler = Handler(Looper.getMainLooper())
-    private val lifecycleLock = Any()
-    private var started = false
-    private var lifecycleGeneration = 0L
-    private var terminalNotified = false
-    private var configuredDeviceId: String? = null
-    private var configuredEndpoint: String? = null
-    init { DirectLinkReplacementNotifier.register { restartForCredentialReplacement() } }
-    private fun restartForCredentialReplacement() {
-        synchronized(lifecycleLock) {
-            if (!started) return
-            configuredDeviceId = credentials.load()?.deviceId
-            configuredEndpoint = DirectLinkSettings.endpoint(context)
-            controller.reconnectForCredentialReplacement(configuredEndpoint)
-        }
-    }
-    private fun haltForTerminal(snapshot: LinkSnapshot) {
-        val notify = synchronized(lifecycleLock) {
-            if (!started || terminalNotified) return
-            terminalNotified = true
-            started = false
-            lifecycleGeneration++
-            handler.removeCallbacks(reconnect)
-            true
-        }
-        if (notify) {
-            runCatching { context.getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(networkCallback) }
-            // Terminal credential loss must fence and close the transport before
-            // handing control back to the service; no socket may survive solely
-            // because an accessibility lease is still held.
-            controller.close()
-            onTerminal(snapshot)
-        }
-    }
-    private val reconnect = object : Runnable {
-        override fun run() {
-            val generation = synchronized(lifecycleLock) { if (!started) return else lifecycleGeneration }
-            controller.tick()
-            val currentDeviceId = credentials.load()?.deviceId
-            val currentEndpoint = DirectLinkSettings.endpoint(context)
-            if (configuredDeviceId != currentDeviceId || configuredEndpoint != currentEndpoint) {
-                configuredDeviceId = currentDeviceId
-                configuredEndpoint = currentEndpoint
-                controller.close()
-                currentEndpoint?.let { controller.configure(it); controller.connect() }
-            }
-            val snapshot = controller.snapshot()
-            onState(snapshot)
-            if (snapshot.state == LinkState.REENROLL_REQUIRED || snapshot.state == LinkState.DISABLED ||
-                (credentials.load() == null && credentials.pendingEnrollment() == null)
-            ) {
-                haltForTerminal(snapshot.copy(state = if (snapshot.state == LinkState.DISABLED) LinkState.DISABLED else LinkState.REENROLL_REQUIRED))
-                return
-            }
-            if (snapshot.state == LinkState.BACKOFF) {
-                synchronized(lifecycleLock) { if (started && lifecycleGeneration == generation) controller.connect() }
-            }
-            controller.updateCapabilities(methodHandler.directCapabilityNames())
-            synchronized(lifecycleLock) {
-                if (started && lifecycleGeneration == generation) handler.postDelayed(this, 1_000L + (System.nanoTime().ushr(4) % 1_000L))
-            }
-        }
-    }
-    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) {
-            val generation = synchronized(lifecycleLock) { if (!started) return else lifecycleGeneration }
-            synchronized(lifecycleLock) { if (started && lifecycleGeneration == generation) controller.connect() }
-        }
-    }
-    override fun startDirectLink() {
-        synchronized(lifecycleLock) { started = true; terminalNotified = false; lifecycleGeneration++ }
-        val userManager = context.getSystemService(UserManager::class.java)
-        if (userManager?.isUserUnlocked != true) return
-        if (credentials.load() == null && credentials.pendingEnrollment() == null) {
-            haltForTerminal(controller.snapshot().copy(state = LinkState.REENROLL_REQUIRED))
-            return
-        }
-        configuredDeviceId = credentials.load()?.deviceId
-        configuredEndpoint = DirectLinkSettings.endpoint(context)
-        controller.updateCapabilities(methodHandler.directCapabilityNames())
-        configuredEndpoint?.let { controller.configure(it); controller.connect() }
-        handler.removeCallbacks(reconnect); handler.post(reconnect)
-        context.getSystemService(ConnectivityManager::class.java)?.registerDefaultNetworkCallback(networkCallback)
-    }
-    override fun stopDirectLink() {
-        synchronized(lifecycleLock) { started = false; lifecycleGeneration++ }
-        DirectLinkReplacementNotifier.register(null)
-        handler.removeCallbacks(reconnect)
-        runCatching { context.getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(networkCallback) }
-        controller.close()
-    }
-    override fun controller(): DirectLinkController = controller
-}
 
 /** Optional dedicated owner; it is started only after the first credential unlock. */
 class DirectLinkService : Service() {
-    private var owner: AndroidDirectLinkOwner? = null
+    private var pool: MultiHostDirectLinkPool? = null
     private var notificationState: LinkState? = null
+    private var notificationCount: Int? = null
     private var terminalState = false
     override fun onCreate() {
         super.onCreate()
         DirectLinkServiceOwner.onServiceCreated()
         startVisibleForeground()
-        owner = AndroidDirectLinkOwner(applicationContext, ::onTerminal, { updateNotification(it.state) }).also { it.startDirectLink() }
+        pool = MultiHostDirectLinkPool(
+            applicationContext,
+            onTerminal = ::onTerminal,
+            onState = { snaps -> updateNotification(pool?.aggregatedState(snaps) ?: LinkState.CONNECTING, snaps.size) },
+        ).also { it.start() }
+        // Initial state push — single decrypt via hostSnapshots
+        val snaps = pool?.hostSnapshots() ?: emptyList()
+        updateNotification(pool?.aggregatedState(snaps) ?: LinkState.CONNECTING, snaps.size)
     }
     override fun onDestroy() {
-        owner?.stopDirectLink(); owner = null
+        pool?.stop(); pool = null
         DirectLinkServiceOwner.onServiceDestroyed()
         super.onDestroy()
     }
@@ -194,7 +103,7 @@ class DirectLinkService : Service() {
             if (terminalState) {
                 terminalState = false
                 updateNotification(LinkState.CONNECTING)
-                owner?.startDirectLink()
+                pool?.start()
             }
         }
 
@@ -224,10 +133,14 @@ class DirectLinkService : Service() {
         updateNotification(LinkState.CONNECTING)
     }
 
-    private fun updateNotification(state: LinkState) {
-        if (notificationState == state) return
-        notificationState = state
-        val copy = DirectLinkNotificationText.forState(state)
+    private fun updateNotification(state: LinkState, count: Int? = null) {
+        if (notificationState == state && notificationCount == count) return
+        notificationState = state; notificationCount = count
+        val base = DirectLinkNotificationText.forState(state)
+        // Enrich title/body with paired count when known.
+        val copy = if (count != null && count > 0 && state != LinkState.REENROLL_REQUIRED && state != LinkState.DISABLED) {
+            base.copy(title = "${base.title} · $count paired", body = if (state == LinkState.CONNECTED) "Connected to $count host${if (count == 1) "" else "s"}" else base.body)
+        } else base
         val openIntent = PendingIntent.getActivity(
             this, 1, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -317,7 +230,8 @@ object DirectLinkServiceOwner {
     @Synchronized fun releaseAccessibility(context: Context) {
         if (accessibilityLeases == 0) return
         accessibilityLeases--
-        val pendingRecovery = AndroidCredentialStore(context.applicationContext).pendingEnrollment() != null
+        val store = AndroidCredentialStore(context.applicationContext)
+        val pendingRecovery = store.loadAll().any { it.pendingEnrollment != null } || store.pendingEnrollment() != null
         if (accessibilityLeases == 0 && !enrollmentLease && !pendingRecovery) context.stopService(Intent(context, DirectLinkService::class.java))
     }
     @Synchronized fun stopEnrollment(context: Context) { if (!enrollmentLease) return; enrollmentLease = false; if (accessibilityLeases == 0) context.stopService(Intent(context, DirectLinkService::class.java)) }
@@ -328,7 +242,8 @@ object DirectLinkServiceOwner {
         enrollmentLease = false
         accessibilityLeases = 0
         availability = Availability.TERMINAL
-        val pendingRecovery = AndroidCredentialStore(context.applicationContext).pendingEnrollment() != null
+        val store = AndroidCredentialStore(context.applicationContext)
+        val pendingRecovery = store.loadAll().any { it.pendingEnrollment != null } || store.pendingEnrollment() != null
         return accessibilityLeases > 0 || pendingRecovery
     }
     @Synchronized internal fun resetForTests() {

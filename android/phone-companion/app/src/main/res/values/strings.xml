@@ -93,4 +93,30 @@
     <string name="enrollment_cancel">Cancel</string>
     <string name="saf_grant_title">Choose a storage folder</string>
     <string name="saf_grant_body">Android will open its folder picker. Choose the folder Sky may read and write; the permission remains until you remove it.</string>
+
+    <!-- Host management -->
+    <string name="manage_hosts">Manage hosts</string>
+    <string name="manage_hosts_desc">View and remove paired hosts</string>
+    <string name="host_list_title">Paired hosts</string>
+    <string name="host_list_subtitle">Manage your Sky host connections</string>
+    <string name="host_list_intro">Each host has its own private pairing. Add more hosts from this screen or remove ones you no longer use.</string>
+    <string name="host_list_empty">No hosts paired yet. Add a host to start.</string>
+    <string name="host_remove">Remove</string>
+    <string name="host_remove_confirm_title">Remove this host?</string>
+    <string name="host_remove_confirm_body">Remove %1$s? This phone will stop connecting to that host. You can pair again later with a new enrollment link.</string>
+    <string name="host_remove_confirm_ok">Remove</string>
+    <string name="host_remove_confirm_cancel">Cancel</string>
+    <string name="host_add_new">Pair new host</string>
+    <plurals name="host_count">
+        <item quantity="one">%d host paired</item>
+        <item quantity="other">%d hosts paired</item>
+    </plurals>
+    <string name="host_chip_connected">Connected</string>
+    <string name="host_chip_connecting">Connecting</string>
+    <string name="host_chip_paused">Paused</string>
+    <string name="host_chip_attention">Attention</string>
+    <string name="host_status_paused">Waiting to reconnect</string>
+    <string name="host_status_no_host">No host</string>
+    <string name="open_host_management">Manage host pairings</string>
+    <string name="host_list_activity_label">Paired Hosts</string>
 </resources>

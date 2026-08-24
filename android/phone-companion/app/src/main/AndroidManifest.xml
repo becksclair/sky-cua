@@ -112,6 +112,12 @@
             android:label="Pointer Playground"
             android:theme="@style/Theme.SkyPhoneCompanion" />
 
+        <activity
+            android:name=".HostListActivity"
+            android:exported="false"
+            android:label="@string/host_list_activity_label"
+            android:theme="@style/Theme.SkyPhoneCompanion" />
+
         <service
             android:name=".service.SkyAccessibilityService"
             android:exported="false"

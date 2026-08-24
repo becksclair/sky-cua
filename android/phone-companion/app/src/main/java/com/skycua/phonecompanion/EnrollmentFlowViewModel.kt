@@ -62,6 +62,7 @@ internal class EnrollmentFlowViewModel(
     private val onConnected: () -> Unit,
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val dispatcher: EnrollmentUiDispatcher = MainThreadEnrollmentDispatcher(),
+    private val endpointExistsProvider: ((String) -> Boolean)? = null,
 ) : ViewModel() {
     private val lock = Any()
     private var observerGeneration = 0L
@@ -134,14 +135,14 @@ internal class EnrollmentFlowViewModel(
             }
         pending = parsed
         val fingerprint = fingerprintProvider()
-        val existing = fingerprint != null
-        stateMachine = EnrollmentUiStateMachine(existing, fingerprint).also { it.review() }
+        val resolvedExisting = endpointExistsProvider?.invoke(parsed.endpoint) ?: (fingerprint != null)
+        stateMachine = EnrollmentUiStateMachine(resolvedExisting, fingerprint).also { it.review() }
         publish(
             EnrollmentScreenState(
                 phase = EnrollmentScreenPhase.REVIEW,
                 endpoint = parsed.endpoint,
                 notice =
-                    if (existing) {
+                    if (resolvedExisting) {
                         EnrollmentNotice.REVIEW_EXISTING
                     } else {
                         EnrollmentNotice.REVIEW_READY
@@ -311,6 +312,7 @@ internal class EnrollmentFlowViewModel(
                     },
                 fingerprintProvider = { credentialFingerprint(appContext) },
                 onConnected = starter,
+                endpointExistsProvider = { endpoint -> AndroidCredentialStore(appContext).loadAll().any { it.endpoint == endpoint } },
             ) as T
         }
     }

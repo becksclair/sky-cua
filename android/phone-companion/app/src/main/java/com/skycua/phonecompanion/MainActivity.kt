@@ -154,9 +154,15 @@ class MainActivity : AppCompatActivity() {
                 setPadding(dp(BTN_SIDE_INSET_DP), 0, dp(BTN_SIDE_INSET_DP), 0)
             }
         container.addView(
-            filledButton(getString(R.string.open_pointer_playground)) {
+            filledButton(getString(R.string.open_host_management)) {
+                startActivity(Intent(this, HostListActivity::class.java))
+            },
+        )
+        container.addView(
+            tonalButton(getString(R.string.open_pointer_playground)) {
                 startActivity(Intent(this, PointerPlaygroundActivity::class.java))
             },
+            marginParams(top = 10),
         )
         container.addView(
             tonalButton(getString(R.string.open_accessibility_settings)) {
@@ -211,7 +217,8 @@ class MainActivity : AppCompatActivity() {
         val linkAvailability = DirectLinkServiceOwner.availability()
         val directDesired = runCatching {
             val store = AndroidCredentialStore(applicationContext)
-            store.load() != null || store.pendingEnrollment() != null
+            val hosts = store.loadAll()
+            hosts.isNotEmpty() || hosts.any { it.pendingEnrollment != null } || store.pendingEnrollment() != null
         }.getOrDefault(false)
         val needsUserRetry = directLinkNeedsUserRetry(linkAvailability, directDesired)
         statusBody.addView(divider())
@@ -228,7 +235,12 @@ class MainActivity : AppCompatActivity() {
                             if (directDesired) getString(R.string.chip_retry_needed) else getString(R.string.chip_idle)
                         else -> getString(R.string.chip_idle)
                     },
-                    if (linkAvailability == DirectLinkServiceOwner.Availability.START_DENIED || needsUserRetry) ChipKind.OFF else ChipKind.NEUTRAL,
+                    when {
+                        linkAvailability == DirectLinkServiceOwner.Availability.RUNNING -> ChipKind.OK
+                        linkAvailability == DirectLinkServiceOwner.Availability.START_DENIED || needsUserRetry -> ChipKind.OFF
+                        linkAvailability == DirectLinkServiceOwner.Availability.TERMINAL -> ChipKind.OFF
+                        else -> ChipKind.NEUTRAL
+                    },
                 ),
             ),
         )
