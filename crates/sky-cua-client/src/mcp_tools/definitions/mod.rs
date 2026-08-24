@@ -772,7 +772,7 @@ fn build_grouped_tool_definitions(
             "Tap or swipe on a connected phone. Use phone_snapshot_id for screenshot pixels or use_device_coordinates for raw pixels.",
             LOCAL_DESTRUCTIVE_ACTION,
             phone_pointer_properties(),
-            json!(["operation", "appshot_id"]),
+            json!(["operation"]),
             phone_pointer_constraints()
         ),
         grouped_tool_with_constraints(
@@ -780,7 +780,7 @@ fn build_grouped_tool_definitions(
             "Type text or press a key on a connected phone. Focus first; press_key accepts KEYCODE_* names, aliases, or numeric keycodes.",
             LOCAL_DESTRUCTIVE_ACTION,
             phone_keyboard_properties(),
-            json!(["operation", "appshot_id"]),
+            json!(["operation"]),
             phone_keyboard_constraints()
         ),
         grouped_tool_with_constraints(
@@ -788,7 +788,7 @@ fn build_grouped_tool_definitions(
             "Open, dismiss, or run an action on a connected-phone notification.",
             LOCAL_DESTRUCTIVE_ACTION,
             phone_notification_action_properties(),
-            json!(["operation", "appshot_id"]),
+            json!(["operation"]),
             phone_notification_action_constraints()
         ),
         grouped_tool(
@@ -814,7 +814,7 @@ fn build_grouped_tool_definitions(
                     "description": "Reply text."
                 }
             })),
-            json!(["session_id", "appshot_id", "event_id", "action_id", "text"])
+            json!(["session_id", "event_id", "action_id", "text"])
         ),
         grouped_tool_with_constraints(
             "phone_app_action",
@@ -829,7 +829,7 @@ fn build_grouped_tool_definitions(
             "Install an APK on a connected phone.",
             LOCAL_DESTRUCTIVE_ACTION,
             phone_app_install_properties(),
-            json!(["appshot_id"]),
+            json!([]),
             phone_app_install_constraints()
         ),
         grouped_tool_with_constraints(
