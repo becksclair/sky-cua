@@ -133,7 +133,12 @@ impl DirectRuntimeHandle {
                 peer_addr: link.peer_addr,
             })
             .collect();
-        out.sort_by_key(|snap| score_direct_peer_ip(snap.peer_addr));
+        out.sort_by(|a, b| {
+            score_direct_peer_ip(a.peer_addr)
+                .cmp(&score_direct_peer_ip(b.peer_addr))
+                .then_with(|| a.device_id.cmp(&b.device_id))
+                .then_with(|| a.peer_addr.cmp(&b.peer_addr))
+        });
         out
     }
 
@@ -961,7 +966,7 @@ pub(crate) fn is_tailscale_ip(ip: IpAddr) -> bool {
 /// so they do not outrank a real LAN link.
 pub(crate) fn score_direct_peer_ip(peer: Option<SocketAddr>) -> u8 {
     let Some(addr) = peer else {
-        return 1;
+        return 2;
     };
     let ip = addr.ip();
     if ip.is_loopback() {

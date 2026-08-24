@@ -1,9 +1,14 @@
 #![allow(dead_code)]
 
 use std::net::IpAddr;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 #[allow(unused_imports)]
 use super::{is_private_ip, validate_bind_addr};
+
+const LAN_CACHE_TTL: Duration = Duration::from_secs(5);
+static LAN_CACHE: OnceLock<Mutex<(Option<Instant>, Vec<LanCandidate>)>> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LanCandidate {
@@ -54,6 +59,34 @@ pub fn enumerate_lan_candidates() -> Vec<LanCandidate> {
     }
     sort_candidates(&mut out);
     out
+}
+
+/// Cached wrapper for `enumerate_lan_candidates` with a short TTL to avoid
+/// re-reading `/proc/net` on every `PhoneManager::status` call (hot path).
+pub fn cached_enumerate_lan_candidates() -> Vec<LanCandidate> {
+    let cache = LAN_CACHE.get_or_init(|| Mutex::new((None, Vec::new())));
+    {
+        let guard = cache.lock().expect("lan cache poisoned");
+        if let Some(instant) = guard.0 {
+            if instant.elapsed() < LAN_CACHE_TTL && !guard.1.is_empty() {
+                return guard.1.clone();
+            }
+        }
+    }
+    let fresh = enumerate_lan_candidates();
+    let mut guard = cache.lock().expect("lan cache poisoned");
+    guard.0 = Some(Instant::now());
+    guard.1.clone_from(&fresh);
+    fresh
+}
+
+#[cfg(test)]
+pub(crate) fn clear_lan_cache_for_tests() {
+    if let Some(cache) = LAN_CACHE.get() {
+        let mut guard = cache.lock().expect("lan cache poisoned");
+        guard.0 = None;
+        guard.1.clear();
+    }
 }
 
 fn score_ip(ip: &IpAddr) -> u8 {

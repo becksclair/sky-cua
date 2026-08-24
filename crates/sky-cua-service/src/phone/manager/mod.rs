@@ -760,7 +760,7 @@ impl PhoneManager {
             report.diagnostics.extend(devices.diagnostics);
         }
         if self.selection.direct_enabled {
-            let candidates = crate::phone::direct::lan::enumerate_lan_candidates();
+            let candidates = crate::phone::direct::lan::cached_enumerate_lan_candidates();
             let listen = self
                 .selection
                 .direct_listen_addr
