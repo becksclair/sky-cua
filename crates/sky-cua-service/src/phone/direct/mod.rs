@@ -974,36 +974,36 @@ impl DirectListener {
         // says public `ws://` is `InvalidInput` and `wss://` is the public escape.
         // Enforce that: wildcard `ws://` with a public advertised host is rejected
         // (require `wss://`), private/`*.ts.net` `ws://` is still `Ok`.
-        if addr.ip().is_unspecified() {
-            if let Some(advertised) = config.direct_advertised_endpoint.as_deref() {
-                let lower = advertised.to_ascii_lowercase();
-                if lower.starts_with("ws://") {
-                    // Extract host between ws:// and : or / or ?
-                    let after = &advertised[5..];
-                    let host_end = after.find([':', '/', '?', '#']).unwrap_or(after.len());
-                    let mut host = &after[..host_end];
-                    // Strip [] for IPv6 and %zone
-                    host = host.trim_matches(|c| c == '[' || c == ']');
-                    if let Some(p) = host.find('%') {
-                        host = &host[..p];
-                    }
-                    let is_private = if host.eq_ignore_ascii_case("localhost")
-                        || host == "127.0.0.1"
-                        || host == "::1"
-                        || host.to_ascii_lowercase().ends_with(".ts.net")
-                    {
-                        true
-                    } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-                        is_private_ip(ip) || ip.is_loopback()
-                    } else {
-                        false
-                    };
-                    if !is_private {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            "wildcard direct listener (0.0.0.0/::) with public ws:// advertised endpoint requires wss:// (or a private/ tailnet host); see docs/runtime/direct-lan.md:30",
-                        ));
-                    }
+        if addr.ip().is_unspecified()
+            && let Some(advertised) = config.direct_advertised_endpoint.as_deref()
+        {
+            let lower = advertised.to_ascii_lowercase();
+            if lower.starts_with("ws://") {
+                // Extract host between ws:// and : or / or ?
+                let after = &advertised[5..];
+                let host_end = after.find([':', '/', '?', '#']).unwrap_or(after.len());
+                let mut host = &after[..host_end];
+                // Strip [] for IPv6 and %zone
+                host = host.trim_matches(|c| c == '[' || c == ']');
+                if let Some(p) = host.find('%') {
+                    host = &host[..p];
+                }
+                let is_private = if host.eq_ignore_ascii_case("localhost")
+                    || host == "127.0.0.1"
+                    || host == "::1"
+                    || host.to_ascii_lowercase().ends_with(".ts.net")
+                {
+                    true
+                } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                    is_private_ip(ip) || ip.is_loopback()
+                } else {
+                    false
+                };
+                if !is_private {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "wildcard direct listener (0.0.0.0/::) with public ws:// advertised endpoint requires wss:// (or a private/ tailnet host); see docs/runtime/direct-lan.md:30",
+                    ));
                 }
             }
         }

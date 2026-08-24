@@ -18,7 +18,7 @@
 //! referenced from the client/tests. The module-level expectation keeps non-test
 //! builds clean and matches the spine's `expect(dead_code)` idiom; it becomes
 //! unfulfilled (and self-removing) once routing references the types.
-#![cfg_attr(not(test), expect(dead_code))]
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 

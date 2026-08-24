@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::net::IpAddr;
 
 #[allow(unused_imports)]

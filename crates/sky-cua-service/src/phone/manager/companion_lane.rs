@@ -153,15 +153,16 @@ impl PhoneManager {
         // no `SetupActivity` and `CompanionClient` is a stub that always
         // `rpc_reachable=false`. Fast-path to absent without the 2s retry.
         if self.selection.direct_enabled {
-            let mut diagnostics = Vec::new();
-            diagnostics.push(DiagnosticEntry {
-                code: "PhoneCompanionRpcRemoved".to_string(),
-                message:
-                    "companion RPC bootstrap skipped: direct_enabled=true, use CompanionDirect"
-                        .to_string(),
-                details: None,
-            });
-            diagnostics.push(crate::phone::protocol::not_implemented_diagnostic());
+            let diagnostics = vec![
+                DiagnosticEntry {
+                    code: "PhoneCompanionRpcRemoved".to_string(),
+                    message:
+                        "companion RPC bootstrap skipped: direct_enabled=true, use CompanionDirect"
+                            .to_string(),
+                    details: None,
+                },
+                crate::phone::protocol::not_implemented_diagnostic(),
+            ];
             profile.companion =
                 crate::phone::protocol::absent_companion(&self.selection.companion_package);
             return (None, diagnostics);

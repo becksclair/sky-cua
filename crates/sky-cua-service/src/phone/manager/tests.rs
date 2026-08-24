@@ -3,6 +3,10 @@
 //! all driven through a scripted [`FakeCommandRunner`] so no real device is
 //! touched.
 
+#![allow(dead_code)]
+#![allow(clippy::empty_line_after_outer_attr)]
+#![allow(clippy::empty_line_after_doc_comments)]
+
 use std::sync::Arc;
 
 use chrono::Utc;
