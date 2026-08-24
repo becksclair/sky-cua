@@ -841,7 +841,7 @@ impl PhoneManager {
                         device_id: direct.device_id,
                         link_epoch: direct.link_epoch,
                         name: None,
-                        endpoint: None,
+                        endpoint: direct.peer_addr.map(|addr| addr.to_string()),
                     }),
                     state: PhoneDeviceState::Device,
                     connection_kind: PhoneConnectionKind::CompanionDirect,

@@ -57,6 +57,7 @@ pub(crate) struct DirectDeviceSnapshot {
     pub(crate) link_epoch: u64,
     pub(crate) connected: bool,
     pub(crate) capabilities: BTreeSet<String>,
+    pub(crate) peer_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,6 +84,7 @@ struct DirectLink {
     pending: Mutex<HashMap<String, PendingRequest>>,
     content: Mutex<InboundContentStore>,
     capabilities: Mutex<BTreeSet<String>>,
+    peer_addr: Option<SocketAddr>,
 }
 
 /// Cloneable service-internal handle used by phone providers.  It is
@@ -114,7 +116,8 @@ impl DirectRuntimeHandle {
     }
 
     pub(crate) fn snapshots(&self) -> Vec<DirectDeviceSnapshot> {
-        self.links
+        let mut out: Vec<DirectDeviceSnapshot> = self
+            .links
             .lock()
             .expect("direct link mutex poisoned")
             .iter()
@@ -127,8 +130,11 @@ impl DirectRuntimeHandle {
                     .lock()
                     .expect("capabilities mutex poisoned")
                     .clone(),
+                peer_addr: link.peer_addr,
             })
-            .collect()
+            .collect();
+        out.sort_by_key(|snap| score_direct_peer_ip(snap.peer_addr));
+        out
     }
 
     pub(crate) fn snapshot(&self, device_id: &str) -> Option<DirectDeviceSnapshot> {
@@ -145,6 +151,7 @@ impl DirectRuntimeHandle {
                     .lock()
                     .expect("capabilities mutex poisoned")
                     .clone(),
+                peer_addr: link.peer_addr,
             })
     }
 
@@ -252,6 +259,7 @@ impl DirectRuntimeHandle {
                 pending: Mutex::new(HashMap::new()),
                 content: Mutex::new(InboundContentStore::default()),
                 capabilities: Mutex::new(BTreeSet::new()),
+                peer_addr: None,
             }),
         );
         (control_rx, bulk_rx)
@@ -596,10 +604,12 @@ impl DirectRuntimeHandle {
     async fn serve_socket(
         &self,
         mut socket: WebSocketStream<TcpStream>,
+        peer: SocketAddr,
         device_id: String,
         epoch: u64,
         mut cancel: tokio::sync::oneshot::Receiver<()>,
     ) -> io::Result<()> {
+        tracing::info!(%peer, %device_id, epoch, "Direct link established");
         let (control_tx, mut control_rx) = mpsc::channel(64);
         let (bulk_tx, mut bulk_rx) = mpsc::channel(32);
         let link = Arc::new(DirectLink {
@@ -609,6 +619,7 @@ impl DirectRuntimeHandle {
             pending: Mutex::new(HashMap::new()),
             content: Mutex::new(InboundContentStore::default()),
             capabilities: Mutex::new(BTreeSet::new()),
+            peer_addr: Some(peer),
         });
         self.links
             .lock()
@@ -924,6 +935,47 @@ pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
     }
 }
 
+pub(crate) fn is_tailscale_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ipv4) => {
+            let o = ipv4.octets();
+            o[0] == 100 && (64..=127).contains(&o[1])
+        }
+        IpAddr::V6(ipv6) => {
+            // Tailscale's ULA is fd7a:115c:a1e0::/48 — detect that prefix.
+            let o = ipv6.octets();
+            o[0] == 0xfd
+                && o[1] == 0x7a
+                && o[2] == 0x11
+                && o[3] == 0x5c
+                && o[4] == 0xa1
+                && o[5] == 0xe0
+        }
+    }
+}
+
+/// Score a direct peer address for routing preference: LAN (0) is preferred
+/// over Tailscale CGNAT (1), which is preferred over unknown/public (2).
+/// Loopback (127.0.0.1 via `adb reverse`) is treated as LAN (0) — it is
+/// direct and not via Tailscale. `None` (synthetic/test links) scores 1
+/// so they do not outrank a real LAN link.
+pub(crate) fn score_direct_peer_ip(peer: Option<SocketAddr>) -> u8 {
+    let Some(addr) = peer else {
+        return 1;
+    };
+    let ip = addr.ip();
+    if ip.is_loopback() {
+        return 0;
+    }
+    if is_tailscale_ip(ip) {
+        return 1;
+    }
+    if is_private_ip(ip) {
+        return 0;
+    }
+    2
+}
+
 /// Validate a configured listener address. Wildcard binds (0.0.0.0 / ::) are
 /// allowed so one socket covers WiFi/ethernet/USB-tether, while public routable
 /// binds remain rejected for cleartext `ws://` listeners.
@@ -1167,7 +1219,7 @@ async fn run_accept_loop(
                 let registry = registry.clone();
                 let enrollments = enrollments.clone();
                 children.spawn(async move {
-                    if let Err(error) = accept_socket(socket, store, &registry, &enrollments).await {
+                    if let Err(error) = accept_socket(socket, peer, store, &registry, &enrollments).await {
                         tracing::warn!(%peer, %error, "CompanionDirect connection rejected");
                     }
                 });
@@ -1178,6 +1230,7 @@ async fn run_accept_loop(
 
 async fn accept_socket(
     mut socket: WebSocketStream<TcpStream>,
+    peer: SocketAddr,
     store: Arc<dyn DirectStateStore>,
     registry: &LinkRegistry,
     enrollments: &EnrollmentRegistry,
@@ -1247,7 +1300,7 @@ async fn accept_socket(
     if let PhoneDirectControlFrame::EnrollmentAck(ack) = frame {
         return process_enrollment_ack(socket, store, ack).await;
     }
-    authenticate_socket_after_hello(socket, frame, store, registry).await
+    authenticate_socket_after_hello(socket, peer, frame, store, registry).await
 }
 
 fn rollback_device(store: &dyn DirectStateStore, device_id: &str) -> io::Result<()> {
@@ -1396,6 +1449,7 @@ fn valid_nonce(value: &str) -> bool {
 
 async fn authenticate_socket_after_hello(
     socket: WebSocketStream<TcpStream>,
+    peer: SocketAddr,
     frame: PhoneDirectControlFrame,
     store: Arc<dyn DirectStateStore>,
     registry: &LinkRegistry,
@@ -1408,7 +1462,7 @@ async fn authenticate_socket_after_hello(
             "application frame before auth",
         ));
     };
-    authenticate_with_hello(socket, hello, store, registry).await
+    authenticate_with_hello(socket, peer, hello, store, registry).await
 }
 
 #[cfg_attr(not(test), expect(dead_code))]
@@ -1417,6 +1471,10 @@ async fn authenticate_socket(
     store: Arc<dyn DirectStateStore>,
     registry: &LinkRegistry,
 ) -> io::Result<()> {
+    let peer = socket
+        .get_ref()
+        .peer_addr()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
     let text = recv_auth_text(&mut socket)
         .await?
         .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "missing auth hello"))?;
@@ -1428,11 +1486,12 @@ async fn authenticate_socket(
             "application frame before auth",
         ));
     };
-    authenticate_with_hello(socket, hello, store, registry).await
+    authenticate_with_hello(socket, peer, hello, store, registry).await
 }
 
 async fn authenticate_with_hello(
     mut socket: WebSocketStream<TcpStream>,
+    peer: SocketAddr,
     hello: sky_cua_platform::model::PhoneAuthHello,
     store: Arc<dyn DirectStateStore>,
     registry: &LinkRegistry,
@@ -1584,7 +1643,7 @@ async fn authenticate_with_hello(
     let mut cancel = registry.finalize(reservation);
     if let Some(handle) = registry.handle.clone() {
         return handle
-            .serve_socket(socket, hello.device_id, epoch, cancel)
+            .serve_socket(socket, peer, hello.device_id, epoch, cancel)
             .await;
     }
     // Hold the authenticated link until peer close. Application dispatch is
@@ -2363,7 +2422,14 @@ mod tests {
         let task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let socket = accept_async(stream).await.unwrap();
-            accept_socket(socket, task_store, &LinkRegistry::default(), &task_registry).await
+            accept_socket(
+                socket,
+                "127.0.0.1:0".parse().unwrap(),
+                task_store,
+                &LinkRegistry::default(),
+                &task_registry,
+            )
+            .await
         });
         let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}"))
             .await
@@ -2513,6 +2579,7 @@ mod tests {
             let socket = accept_async(stream).await.unwrap();
             accept_socket(
                 socket,
+                "127.0.0.1:0".parse().unwrap(),
                 Arc::new(FailingStore),
                 &LinkRegistry::default(),
                 &task_registry,
@@ -2582,7 +2649,14 @@ mod tests {
             let task = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.unwrap();
                 let socket = accept_async(stream).await.unwrap();
-                accept_socket(socket, task_store, &LinkRegistry::default(), &task_registry).await
+                accept_socket(
+                    socket,
+                    "127.0.0.1:0".parse().unwrap(),
+                    task_store,
+                    &LinkRegistry::default(),
+                    &task_registry,
+                )
+                .await
             });
             let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}"))
                 .await
@@ -2921,6 +2995,7 @@ mod tests {
                 link_epoch: 4,
                 connected: true,
                 capabilities: BTreeSet::new(),
+                peer_addr: None,
             }]
         );
     }
@@ -3025,7 +3100,13 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
             server_handle
-                .serve_socket(socket, "device-a".into(), 1, cancel_rx)
+                .serve_socket(
+                    socket,
+                    "127.0.0.1:0".parse().unwrap(),
+                    "device-a".into(),
+                    1,
+                    cancel_rx,
+                )
                 .await
                 .unwrap();
         });
@@ -3061,7 +3142,13 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
             server_handle
-                .serve_socket(socket, "device-a".into(), 1, cancel_rx)
+                .serve_socket(
+                    socket,
+                    "127.0.0.1:0".parse().unwrap(),
+                    "device-a".into(),
+                    1,
+                    cancel_rx,
+                )
                 .await
                 .unwrap();
         });
@@ -3158,7 +3245,13 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
             server_handle
-                .serve_socket(socket, "device-a".into(), 1, cancel_rx)
+                .serve_socket(
+                    socket,
+                    "127.0.0.1:0".parse().unwrap(),
+                    "device-a".into(),
+                    1,
+                    cancel_rx,
+                )
                 .await
                 .unwrap();
         });
@@ -3246,7 +3339,13 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
             server_handle
-                .serve_socket(socket, "malformed".into(), 7, cancel_rx)
+                .serve_socket(
+                    socket,
+                    "127.0.0.1:0".parse().unwrap(),
+                    "malformed".into(),
+                    7,
+                    cancel_rx,
+                )
                 .await
                 .unwrap();
         });
