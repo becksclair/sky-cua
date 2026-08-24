@@ -67,10 +67,11 @@ pub fn cached_enumerate_lan_candidates() -> Vec<LanCandidate> {
     let cache = LAN_CACHE.get_or_init(|| Mutex::new((None, Vec::new())));
     {
         let guard = cache.lock().expect("lan cache poisoned");
-        if let Some(instant) = guard.0 {
-            if instant.elapsed() < LAN_CACHE_TTL && !guard.1.is_empty() {
-                return guard.1.clone();
-            }
+        if let Some(instant) = guard.0
+            && instant.elapsed() < LAN_CACHE_TTL
+            && !guard.1.is_empty()
+        {
+            return guard.1.clone();
         }
     }
     let fresh = enumerate_lan_candidates();

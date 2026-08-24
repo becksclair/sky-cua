@@ -1476,10 +1476,7 @@ async fn authenticate_socket(
     store: Arc<dyn DirectStateStore>,
     registry: &LinkRegistry,
 ) -> io::Result<()> {
-    let peer = socket
-        .get_ref()
-        .peer_addr()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let peer = socket.get_ref().peer_addr().map_err(io::Error::other)?;
     let text = recv_auth_text(&mut socket)
         .await?
         .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "missing auth hello"))?;
