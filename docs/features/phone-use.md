@@ -75,9 +75,11 @@ environment overrides, all allowlisted in `.mcp.json`:
 `SKY_CUA_PHONE_COMPANION_OPERATOR_MODE`, `SKY_CUA_PHONE_COMPANION_PACKAGE`,
 `SKY_CUA_PHONE_COMPANION_APK`, `SKY_CUA_PHONE_COMPANION_CERT_SHA256`,
 `SKY_CUA_PHONE_COMPANION_ALLOW_DOWNGRADE`,
-`SKY_CUA_PHONE_COMPANION_RPC_PORT`,
-`SKY_CUA_PHONE_COMPANION_RPC_TOKEN_TTL_MS`,
-`SKY_CUA_PHONE_CAPABILITY_CACHE_TTL_MS`, `SKY_CUA_PHONE_TARGET_MODELS`.
+`SKY_CUA_PHONE_DIRECT`, `SKY_CUA_PHONE_DIRECT_LISTEN_ADDR`,
+`SKY_CUA_PHONE_DIRECT_ADVERTISED_ENDPOINT`,
+`SKY_CUA_PHONE_DIRECT_ENROLLMENT_TTL_MS`, `SKY_CUA_PHONE_DIRECT_STATE_PATH`,
+`SKY_CUA_PHONE_CAPABILITY_CACHE_TTL_MS`, `SKY_CUA_PHONE_TARGET_MODELS`
+(legacy `SKY_CUA_PHONE_COMPANION_RPC_*` removed 2026-08-25 — **breaking change**, use `SKY_CUA_PHONE_DIRECT_*` `ws://` private LAN/tether or `wss://` tailnet).
 
 Intentionally not stable: the action affordance lists vary by device and
 session; the companion APK and its identity sidecar are optional packaging
@@ -143,11 +145,10 @@ Three backends, deterministically routed from the cached profile:
   input, app inventory/management, companion install/update primitives, and all
   recovery flows. Missing `adb` disables phone-use with a structured
   diagnostic.
-- Companion (preferred when enabled and healthy): native gesture dispatch,
+- CompanionDirect (preferred when enabled and healthy, since 2026-08-24): native gesture dispatch,
   accessibility window tree, on-device screenshots, notification events and
-  actions, and the phone-native agent overlay (animated cursor plus the
-  leased "agent in control" edge glow), reached over a localhost-only RPC through
-  a host-managed ADB forward with an ephemeral session token.
+  actions, and the phone-native agent overlay, reached over a persistent
+  `ws://`/`wss://` direct link (`phone-control.v2`, HMAC + epoch-fenced) on private LAN/tether (`192.168/16`, `10/8`, `172.16/12`, `fd00::/7`, `fe80::/10`) or Tailscale. The legacy localhost-only `POST /rpc` via `adb forward` + ephemeral token (`SetupActivity`/`RpcController`/`RpcServer`) was removed 2026-08-24; `status(component="phone")` now surfaces `DirectLanCandidates` for QR generation.
 - scrcpy (optional acceleration): host-rendered mirror/control window with
   host-visible overlay support and codec-failure retry. When `[phone] max_size`
   is unset, the mirror is capped to a phone-scale size derived from the host
@@ -468,13 +469,7 @@ content base64-free, and neither client disconnected the retained session.
   companion unusable on every current device while detecting no real impostor.
   The host proceeds in that case and reports `signature_matches_expected=false`
   honestly. Validated live on the API-36 emulator 2026-06-20.
-- The companion session token is delivered as an `am start` intent string extra
-  (`--es sky_cua_rpc_token`), not a pushed file: Android 11+ per-app storage
-  mount-namespace isolation makes a host-written file under
-  `/sdcard/Android/data/<pkg>/` unreadable by the app, which silently broke the
-  RPC bootstrap. The argv exposure is bounded (`hidepid`, ephemeral 15-min token,
-  localhost-only, ADB-gated); the logcat-readback handshake remains the future
-  hardening. See `docs/runtime/phone-companion-protocol.md`.
+- Legacy RPC token delivery (`am start --es sky_cua_rpc_token`) and the `SetupActivity`/`RpcServer` were removed 2026-08-24. CompanionDirect now uses a persistent HMAC device secret + epoch (enrolled via QR `skycua://enroll`, stored in `CredentialStore` per-host) over `ws://`/`wss://`; no `am start` token is used. See `docs/runtime/direct-lan.md` and `docs/runtime/phone-companion-protocol.md` (now direct-only).
 - Coordinate input is companion-only: normal tap/swipe requests fail with
   `PhoneCompanionRequired` when the companion gesture lane is not fresh,
   reachable, and gesture-capable. ADB `input tap`/`swipe` is no longer used as

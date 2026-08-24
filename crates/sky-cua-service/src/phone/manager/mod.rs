@@ -51,13 +51,13 @@ use sky_cua_platform::model::{
 
 use super::adb;
 use super::command::{CommandRunner, RealCommandRunner};
-use super::companion;
-use super::companion::client::CompanionClient;
-use super::companion::identity::CompanionBootstrapOptions;
 use super::cursor::PhoneCursorTracker;
 use super::device;
 use super::direct::provider::CompanionDirectProvider;
 use super::direct::{DirectRuntimeError, DirectRuntimeHandle};
+use super::protocol;
+use super::protocol::client::CompanionClient;
+use super::protocol::identity::CompanionBootstrapOptions;
 use super::scrcpy;
 use super::snapshot::{DEFAULT_SNAPSHOT_CAPACITY, PhoneSnapshotRegistry};
 
@@ -759,6 +759,42 @@ impl PhoneManager {
             report.devices = devices.devices;
             report.diagnostics.extend(devices.diagnostics);
         }
+        if self.selection.direct_enabled {
+            let candidates = crate::phone::direct::lan::cached_enumerate_lan_candidates();
+            let listen = self
+                .selection
+                .direct_listen_addr
+                .clone()
+                .unwrap_or_else(|| "0.0.0.0:0 (wildcard)".to_string());
+            let advertised = self
+                .selection
+                .direct_advertised_endpoint
+                .clone()
+                .unwrap_or_else(|| "(not set)".to_string());
+            let cand_str = if candidates.is_empty() {
+                "none".to_string()
+            } else {
+                candidates
+                    .iter()
+                    .map(|c| format!("{}:{}", c.iface, c.ip))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let details = serde_json::json!({
+                "direct_listen_addr": self.selection.direct_listen_addr,
+                "direct_advertised_endpoint": self.selection.direct_advertised_endpoint,
+                "candidates": candidates.iter().map(|c| serde_json::json!({"iface": c.iface, "ip": c.ip.to_string()})).collect::<Vec<_>>(),
+            })
+            .to_string();
+            report.diagnostics.push(sky_cua_platform::model::DiagnosticEntry {
+                code: "DirectLanCandidates".to_string(),
+                message: format!(
+                    "direct listen={} advertised={} candidates=[{}] (use ws://<lan-ip>:<port>/phone/control; tether is rndis0/usb0 192.168.42.x)",
+                    listen, advertised, cand_str
+                ),
+                details: Some(details),
+            });
+        }
         report
     }
 
@@ -805,7 +841,7 @@ impl PhoneManager {
                         device_id: direct.device_id,
                         link_epoch: direct.link_epoch,
                         name: None,
-                        endpoint: None,
+                        endpoint: direct.peer_addr.map(|addr| addr.to_string()),
                     }),
                     state: PhoneDeviceState::Device,
                     connection_kind: PhoneConnectionKind::CompanionDirect,
@@ -1830,7 +1866,7 @@ impl PhoneManager {
         profile.detected_at_ms = now;
         profile.refresh_state = PhoneCapabilityRefreshState::Reused;
         profile.stale = false;
-        profile.companion = companion::capabilities_from_response(
+        profile.companion = protocol::capabilities_from_response(
             &caps,
             None,
             previous.installed_cert_sha256.as_deref(),
@@ -2052,7 +2088,7 @@ pub(super) fn phone_disabled_diagnostic() -> DiagnosticEntry {
 /// companion runtime for the session.
 pub(super) fn no_companion_diagnostic() -> DiagnosticEntry {
     DiagnosticEntry {
-        code: super::companion::protocol::error_codes::DISABLED_SERVICE.to_string(),
+        code: super::protocol::error_codes::DISABLED_SERVICE.to_string(),
         message: "no reachable companion for this session".to_string(),
         details: None,
     }

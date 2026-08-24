@@ -14,7 +14,7 @@ use sky_cua_platform::model::{
 
 use super::command::{CommandRunner, FakeCommandRunner, RealCommandRunner};
 use super::manager::PhoneManager;
-use super::{adb, companion, cursor, device, mapping, scrcpy};
+use super::{adb, cursor, device, mapping, scrcpy};
 
 fn manager_with(runner: Arc<dyn CommandRunner>) -> PhoneManager {
     let selection = resolve_phone_selection(&PhoneConfig::default());
@@ -263,7 +263,7 @@ fn stub_backend_constructors_report_nothing_available() {
     let caps = device::empty_backend_capabilities();
     assert!(!caps.adb && !caps.companion && !caps.scrcpy);
 
-    let companion = companion::absent_companion("com.skycua.phonecompanion");
+    let companion = crate::phone::protocol::absent_companion("com.skycua.phonecompanion");
     assert!(!companion.installed);
     assert_eq!(companion.package_name, "com.skycua.phonecompanion");
 

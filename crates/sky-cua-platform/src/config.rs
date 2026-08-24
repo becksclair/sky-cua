@@ -47,8 +47,6 @@ pub const PHONE_COMPANION_APK_ENV: &str = "SKY_CUA_PHONE_COMPANION_APK";
 pub const PHONE_COMPANION_CERT_SHA256_ENV: &str = "SKY_CUA_PHONE_COMPANION_CERT_SHA256";
 pub const PHONE_COMPANION_APK_SHA256_ENV: &str = "SKY_CUA_PHONE_COMPANION_APK_SHA256";
 pub const PHONE_COMPANION_ALLOW_DOWNGRADE_ENV: &str = "SKY_CUA_PHONE_COMPANION_ALLOW_DOWNGRADE";
-pub const PHONE_COMPANION_RPC_PORT_ENV: &str = "SKY_CUA_PHONE_COMPANION_RPC_PORT";
-pub const PHONE_COMPANION_RPC_TOKEN_TTL_MS_ENV: &str = "SKY_CUA_PHONE_COMPANION_RPC_TOKEN_TTL_MS";
 pub const PHONE_CAPABILITY_CACHE_TTL_MS_ENV: &str = "SKY_CUA_PHONE_CAPABILITY_CACHE_TTL_MS";
 pub const PHONE_TARGET_MODELS_ENV: &str = "SKY_CUA_PHONE_TARGET_MODELS";
 pub const PHONE_DIRECT_ENABLED_ENV: &str = "SKY_CUA_PHONE_DIRECT";
@@ -190,8 +188,6 @@ pub struct PhoneConfig {
     pub companion_expected_cert_sha256: Option<String>,
     pub companion_apk_sha256: Option<String>,
     pub companion_allow_downgrade: Option<bool>,
-    pub companion_rpc_port: Option<u16>,
-    pub companion_rpc_token_ttl_ms: Option<u64>,
     pub capability_cache_ttl_ms: Option<u64>,
     pub direct_enabled: Option<bool>,
     pub direct_listen_addr: Option<String>,
@@ -224,10 +220,6 @@ pub struct PhoneProfileConfig {
 pub const PHONE_DEFAULT_COMPANION_PACKAGE: &str = "com.skycua.phonecompanion";
 /// Default companion APK path relative to the repo/payload root.
 pub const PHONE_DEFAULT_COMPANION_APK_PATH: &str = "resources/android/phone-companion.apk";
-/// Default companion RPC port reached through host-managed `adb forward`.
-pub const PHONE_DEFAULT_COMPANION_RPC_PORT: u16 = 47683;
-/// Default ephemeral RPC token lifetime (15 minutes).
-pub const PHONE_DEFAULT_COMPANION_RPC_TOKEN_TTL_MS: u64 = 900_000;
 /// Default capability-cache soft refresh hint (30 seconds).
 pub const PHONE_DEFAULT_CAPABILITY_CACHE_TTL_MS: u64 = 30_000;
 /// Direct enrollment codes are single-use and expire after five minutes.
@@ -336,8 +328,6 @@ pub struct ResolvedPhoneSelection {
     /// installed package for defense-in-depth alongside the signing cert.
     pub companion_apk_sha256: Option<String>,
     pub companion_allow_downgrade: bool,
-    pub companion_rpc_port: u16,
-    pub companion_rpc_token_ttl_ms: u64,
     pub capability_cache_ttl_ms: u64,
     pub primary_target_models: Vec<String>,
     /// Explicit opt-in for the phone-initiated `phone-control.v2` listener.
@@ -385,8 +375,6 @@ pub fn all_env_keys() -> &'static [&'static str] {
         PHONE_COMPANION_CERT_SHA256_ENV,
         PHONE_COMPANION_APK_SHA256_ENV,
         PHONE_COMPANION_ALLOW_DOWNGRADE_ENV,
-        PHONE_COMPANION_RPC_PORT_ENV,
-        PHONE_COMPANION_RPC_TOKEN_TTL_MS_ENV,
         PHONE_CAPABILITY_CACHE_TTL_MS_ENV,
         PHONE_TARGET_MODELS_ENV,
         PHONE_DIRECT_ENABLED_ENV,
@@ -649,6 +637,7 @@ fn env_bool(key: &str) -> Option<bool> {
     }
 }
 
+#[allow(dead_code)]
 fn env_u16(key: &str) -> Option<u16> {
     env_string(key).and_then(|value| value.parse().ok())
 }
@@ -728,12 +717,6 @@ pub fn resolve_phone_selection(phone: &PhoneConfig) -> ResolvedPhoneSelection {
         companion_allow_downgrade: env_bool(PHONE_COMPANION_ALLOW_DOWNGRADE_ENV)
             .or(phone.companion_allow_downgrade)
             .unwrap_or(false),
-        companion_rpc_port: env_u16(PHONE_COMPANION_RPC_PORT_ENV)
-            .or(phone.companion_rpc_port)
-            .unwrap_or(PHONE_DEFAULT_COMPANION_RPC_PORT),
-        companion_rpc_token_ttl_ms: env_u64(PHONE_COMPANION_RPC_TOKEN_TTL_MS_ENV)
-            .or(phone.companion_rpc_token_ttl_ms)
-            .unwrap_or(PHONE_DEFAULT_COMPANION_RPC_TOKEN_TTL_MS),
         capability_cache_ttl_ms: env_u64(PHONE_CAPABILITY_CACHE_TTL_MS_ENV)
             .or(phone.capability_cache_ttl_ms)
             .unwrap_or(PHONE_DEFAULT_CAPABILITY_CACHE_TTL_MS),
@@ -1074,8 +1057,6 @@ companion_package = "com.skycua.phonecompanion"
 companion_apk_path = "resources/android/phone-companion.apk"
 companion_expected_cert_sha256 = "deadbeef"
 companion_allow_downgrade = false
-companion_rpc_port = 47683
-companion_rpc_token_ttl_ms = 900000
 capability_cache_ttl_ms = 30000
 direct_enabled = true
 direct_listen_addr = "100.64.0.10:47684"
@@ -1098,7 +1079,6 @@ required_capabilities = ["sms.read"]
         assert_eq!(phone.enabled, Some(true));
         assert_eq!(phone.adb_path.as_deref(), Some("/opt/adb"));
         assert_eq!(phone.default_backend.as_deref(), Some("companion"));
-        assert_eq!(phone.companion_rpc_port, Some(47683));
         assert_eq!(phone.capability_cache_ttl_ms, Some(30000));
         assert_eq!(phone.direct_enabled, Some(true));
         assert_eq!(
@@ -1135,7 +1115,6 @@ required_capabilities = ["sms.read"]
             PHONE_COMPANION_ENV,
             PHONE_COMPANION_PACKAGE_ENV,
             PHONE_COMPANION_APK_ENV,
-            PHONE_COMPANION_RPC_PORT_ENV,
             PHONE_CAPABILITY_CACHE_TTL_MS_ENV,
             PHONE_ADB_ENV,
             PHONE_TARGET_MODELS_ENV,
@@ -1156,10 +1135,6 @@ required_capabilities = ["sms.read"]
         assert_eq!(
             resolved.companion_apk_path,
             PHONE_DEFAULT_COMPANION_APK_PATH
-        );
-        assert_eq!(
-            resolved.companion_rpc_port,
-            PHONE_DEFAULT_COMPANION_RPC_PORT
         );
         assert_eq!(
             resolved.capability_cache_ttl_ms,
@@ -1224,7 +1199,6 @@ required_capabilities = ["sms.read"]
             PHONE_BACKEND_ENV,
             PHONE_ADB_ENV,
             PHONE_COMPANION_ENV,
-            PHONE_COMPANION_RPC_PORT_ENV,
             PHONE_TARGET_MODELS_ENV,
             PHONE_DIRECT_ENABLED_ENV,
             PHONE_DIRECT_LISTEN_ADDR_ENV,
@@ -1240,7 +1214,6 @@ required_capabilities = ["sms.read"]
         assert_eq!(resolved.default_serial.as_deref(), Some("ABC123"));
         assert_eq!(resolved.default_backend.as_deref(), Some("companion"));
         assert!(resolved.wireless_auto_connect);
-        assert_eq!(resolved.companion_rpc_port, 47683);
         assert_eq!(resolved.primary_target_models.len(), 2);
         assert!(resolved.direct_enabled);
         assert_eq!(
@@ -1277,7 +1250,6 @@ required_capabilities = ["sms.read"]
         let _guard = EnvGuard::set(&[
             (PHONE_SERIAL_ENV, "10.0.0.5:5555"),
             (PHONE_BACKEND_ENV, "adb"),
-            (PHONE_COMPANION_RPC_PORT_ENV, "50000"),
             (PHONE_COMPANION_ENV, "false"),
             (PHONE_TARGET_MODELS_ENV, "Pixel 9, Galaxy S26 Ultra"),
         ]);
@@ -1287,7 +1259,6 @@ required_capabilities = ["sms.read"]
         let resolved = resolve_phone_selection(&phone);
         assert_eq!(resolved.default_serial.as_deref(), Some("10.0.0.5:5555"));
         assert_eq!(resolved.default_backend.as_deref(), Some("adb"));
-        assert_eq!(resolved.companion_rpc_port, 50000);
         assert!(!resolved.companion_enabled);
         assert_eq!(
             resolved.primary_target_models,

@@ -335,6 +335,27 @@ def companion_native_overlay(result: dict[str, Any]) -> bool | None:
     return None
 
 
+def extract_appshot_id(result: dict[str, Any]) -> str | None:
+    """Return the canonical AppShot id from an observe result, if present.
+
+    CompanionDirect sessions return ``structured.appshot.appshot_id`` (and also
+    ``phone_snapshot_id`` == ``appshot_id``). ADB fallback returns only
+    ``phone_snapshot_id`` with ``appshot`` absent — the caller must tolerate
+    ``None`` and let the service enforce fencing only for direct sessions.
+    """
+    payload = structured(result)
+    appshot = payload.get("appshot")
+    if isinstance(appshot, dict):
+        appshot_id = appshot.get("appshot_id")
+        if isinstance(appshot_id, str) and appshot_id.strip():
+            return appshot_id
+    # Some envelopes also surface the id at top-level for convenience.
+    top = payload.get("appshot_id")
+    if isinstance(top, str) and top.strip():
+        return top
+    return None
+
+
 def notification_events(result: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the structured notification event maps, or an empty list."""
     events = structured(result).get("events")
@@ -580,6 +601,7 @@ class PhoneSmoke:
         y: float,
         *,
         use_device_coordinates: bool = False,
+        appshot_id: str | None = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {"x": x, "y": y}
         if use_device_coordinates:
@@ -588,6 +610,8 @@ class PhoneSmoke:
             arguments["session_id"] = session_id
         if snapshot_id:
             arguments["phone_snapshot_id"] = snapshot_id
+        if appshot_id:
+            arguments["appshot_id"] = appshot_id
         return self.call("phone_tap", arguments)
 
     def swipe(
@@ -600,6 +624,7 @@ class PhoneSmoke:
         end_y: float,
         *,
         use_device_coordinates: bool = False,
+        appshot_id: str | None = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {
             "start_x": start_x,
@@ -613,7 +638,37 @@ class PhoneSmoke:
             arguments["session_id"] = session_id
         if snapshot_id:
             arguments["phone_snapshot_id"] = snapshot_id
+        if appshot_id:
+            arguments["appshot_id"] = appshot_id
         return self.call("phone_swipe", arguments)
+
+    def type_text(
+        self,
+        session_id: str | None,
+        text: str,
+        *,
+        appshot_id: str | None = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"text": text}
+        if session_id:
+            arguments["session_id"] = session_id
+        if appshot_id:
+            arguments["appshot_id"] = appshot_id
+        return self.call("phone_type_text", arguments)
+
+    def press_key(
+        self,
+        session_id: str | None,
+        key: str,
+        *,
+        appshot_id: str | None = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"key": key}
+        if session_id:
+            arguments["session_id"] = session_id
+        if appshot_id:
+            arguments["appshot_id"] = appshot_id
+        return self.call("phone_press_key", arguments)
 
     def app_current(self, session_id: str | None) -> dict[str, Any]:
         arguments: dict[str, Any] = {}
@@ -645,28 +700,49 @@ class PhoneSmoke:
             arguments["session_id"] = session_id
         return self.call("phone_notifications", arguments)
 
-    def notification_open(self, session_id: str | None, event_id: str) -> dict[str, Any]:
+    def notification_open(
+        self, session_id: str | None, event_id: str, *, appshot_id: str | None = None
+    ) -> dict[str, Any]:
         arguments: dict[str, Any] = {"event_id": event_id}
         if session_id:
             arguments["session_id"] = session_id
+        if appshot_id:
+            arguments["appshot_id"] = appshot_id
         return self.call("phone_notification_open", arguments)
 
-    def notification_dismiss(self, session_id: str | None, event_id: str) -> dict[str, Any]:
+    def notification_dismiss(
+        self, session_id: str | None, event_id: str, *, appshot_id: str | None = None
+    ) -> dict[str, Any]:
         arguments: dict[str, Any] = {"event_id": event_id}
         if session_id:
             arguments["session_id"] = session_id
+        if appshot_id:
+            arguments["appshot_id"] = appshot_id
         return self.call("phone_notification_dismiss", arguments)
 
     def notification_action(
-        self, session_id: str | None, event_id: str, action_id: str
+        self,
+        session_id: str | None,
+        event_id: str,
+        action_id: str,
+        *,
+        appshot_id: str | None = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {"event_id": event_id, "action_id": action_id}
         if session_id:
             arguments["session_id"] = session_id
+        if appshot_id:
+            arguments["appshot_id"] = appshot_id
         return self.call("phone_notification_action", arguments)
 
     def notification_reply(
-        self, session_id: str | None, event_id: str, action_id: str, reply_text: str
+        self,
+        session_id: str | None,
+        event_id: str,
+        action_id: str,
+        reply_text: str,
+        *,
+        appshot_id: str | None = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {
             "event_id": event_id,
@@ -675,6 +751,8 @@ class PhoneSmoke:
         }
         if session_id:
             arguments["session_id"] = session_id
+        if appshot_id:
+            arguments["appshot_id"] = appshot_id
         return self.call("phone_notification_reply", arguments)
 
 
@@ -769,11 +847,13 @@ def profile_adb_usb(smoke: PhoneSmoke, options: PhoneSmokeOptions) -> list[StepR
     if result_is_error(observe):
         raise SmokeFailure(f"phone_observe failed: {first_diagnostic_message(observe)}")
     observe_structured = structured(observe)
+    appshot_id = extract_appshot_id(observe)
     steps.append(
         step_pass(
             "phone_observe",
             f"profile={bounded_metadata(observe_structured.get('capability_profile_id'))} "
-            f"actions={bounded_metadata(len(observe_structured.get('available_actions', [])))}",
+            f"actions={bounded_metadata(len(observe_structured.get('available_actions', [])))} "
+            f"appshot={bounded_metadata(appshot_id)}",
         )
     )
 
@@ -792,7 +872,7 @@ def profile_adb_usb(smoke: PhoneSmoke, options: PhoneSmokeOptions) -> list[StepR
     )
 
     if isinstance(snapshot_id, str) and snapshot_id:
-        tap = smoke.tap(session_id, snapshot_id, 1.0, 1.0)
+        tap = smoke.tap(session_id, snapshot_id, 1.0, 1.0, appshot_id=appshot_id)
         if result_is_error(tap):
             steps.append(
                 step_skip(
@@ -934,6 +1014,11 @@ def overlay_step(smoke: PhoneSmoke, session_id: str, companion_caps: dict[str, A
     if companion_native_overlay({"structuredContent": {"companion": companion_caps}}) is not True:
         raise SmokeSkip("companion does not advertise the native overlay plane")
 
+    # Fresh AppShot for CompanionDirect fencing (direct sessions require appshot_id).
+    observe = smoke.observe(session_id)
+    if result_is_error(observe):
+        raise SmokeSkip(f"phone_observe failed: {first_diagnostic_message(observe)}")
+    appshot_id = extract_appshot_id(observe)
     shot = smoke.screenshot(session_id)
     if result_is_error(shot):
         raise SmokeSkip(f"phone_screenshot failed: {first_diagnostic_message(shot)}")
@@ -947,7 +1032,10 @@ def overlay_step(smoke: PhoneSmoke, session_id: str, companion_caps: dict[str, A
     # Benign device-space tap at (1, 1): dispatches through the companion and fires
     # the host's overlay_gesture(tap) ripple animation. Device coordinates avoid
     # any snapshot-mapping rejection unrelated to the overlay path.
-    tap = smoke.tap(session_id, snapshot_id, 1.0, 1.0, use_device_coordinates=True)
+    # Include appshot_id when direct so AppShotRequired fencing is satisfied.
+    tap = smoke.tap(
+        session_id, snapshot_id, 1.0, 1.0, use_device_coordinates=True, appshot_id=appshot_id
+    )
     if result_is_error(tap):
         raise SmokeSkip(f"overlay tap rejected: {first_diagnostic_message(tap) or 'no diagnostic'}")
     tap_backend = bounded_metadata(structured(tap).get("backend"))
@@ -963,6 +1051,7 @@ def overlay_step(smoke: PhoneSmoke, session_id: str, companion_caps: dict[str, A
         1.0,
         2.0,
         use_device_coordinates=True,
+        appshot_id=appshot_id,
     )
     if result_is_error(swipe):
         raise SmokeSkip(
@@ -1150,22 +1239,46 @@ def profile_adversarial(smoke: PhoneSmoke, options: PhoneSmokeOptions) -> list[S
         except SmokeFailure as failure:
             return step_fail("stale_snapshot_rejected", str(failure))
         try:
-            stale = smoke.tap(session_id, STALE_SNAPSHOT_ID, 1.0, 1.0)
+            # Acquire a fresh AppShot so CompanionDirect sessions satisfy the
+            # appshot fence and reach the snapshot check.
+            observe = smoke.observe(session_id)
+            appshot_id = extract_appshot_id(observe) if not result_is_error(observe) else None
+            stale = smoke.tap(session_id, STALE_SNAPSHOT_ID, 1.0, 1.0, appshot_id=appshot_id)
             codes = diagnostic_codes(stale)
             snapshot_codes = [
                 code
                 for code in codes
                 if code.startswith("PhoneSnapshot") and code != "PhoneSnapshotRequired"
             ]
-            if result_is_error(stale) and snapshot_codes:
+            # CompanionDirect fencing returns AppShot* instead.
+            appshot_codes = [code for code in codes if code.startswith("AppShot")]
+            if result_is_error(stale) and (snapshot_codes or appshot_codes):
+                chosen = (snapshot_codes or appshot_codes)[0]
                 return step_pass(
                     "stale_snapshot_rejected",
-                    f"code={bounded_metadata(snapshot_codes[0])}",
+                    f"code={bounded_metadata(chosen)}",
                 )
+            # For direct links, a stale/fake appshot must also be rejected.
+            if appshot_id is not None:
+                stale_appshot = smoke.tap(
+                    session_id,
+                    STALE_SNAPSHOT_ID,
+                    1.0,
+                    1.0,
+                    appshot_id="00000000-0000-4000-a000-000000000000",
+                )
+                appshot_codes2 = [
+                    c for c in diagnostic_codes(stale_appshot) if c.startswith("AppShot")
+                ]
+                if result_is_error(stale_appshot) and appshot_codes2:
+                    return step_pass(
+                        "stale_snapshot_rejected",
+                        f"code={bounded_metadata(appshot_codes2[0])}",
+                    )
             if result_is_error(stale):
                 return step_fail(
                     "stale_snapshot_rejected",
-                    f"phone_tap rejected with {','.join(codes) or 'no code'}; expected PhoneSnapshot*",
+                    f"phone_tap rejected with {','.join(codes) or 'no code'}; expected PhoneSnapshot* or AppShot*",
                 )
             return step_fail(
                 "stale_snapshot_rejected",
@@ -1234,13 +1347,17 @@ def _snapshot_drift_step(
     serial = choose_serial(options, devices, wireless=False)
     session_id, _ = connect_session(smoke, serial)
     try:
+        observe = smoke.observe(session_id)
+        if result_is_error(observe):
+            raise SmokeSkip(f"phone_observe failed: {first_diagnostic_message(observe)}")
+        appshot_id = extract_appshot_id(observe)
         shot = smoke.screenshot(session_id)
         if result_is_error(shot):
             raise SmokeSkip(f"phone_screenshot failed: {first_diagnostic_message(shot)}")
         snapshot_id = structured(shot).get("phone_snapshot_id")
         if not isinstance(snapshot_id, str) or not snapshot_id:
             raise SmokeSkip("phone_screenshot returned no snapshot id to drift")
-        tap = smoke.tap(session_id, snapshot_id, 1.0, 1.0)
+        tap = smoke.tap(session_id, snapshot_id, 1.0, 1.0, appshot_id=appshot_id)
         codes = diagnostic_codes(tap)
         if result_is_error(tap) and expected_code in codes:
             return step_pass(step_name, f"code={expected_code}")

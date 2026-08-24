@@ -287,7 +287,7 @@ pub(super) fn phone_pointer_constraints() -> Value {
         exact_branch_schema_with_constraints(
             &properties,
             &[("operation", "tap")],
-            &["session_id", "appshot_id", "x", "y"],
+            &["session_id", "x", "y"],
             &[
                 "operation",
                 "session_id",
@@ -307,14 +307,7 @@ pub(super) fn phone_pointer_constraints() -> Value {
         exact_branch_schema_with_constraints(
             &properties,
             &[("operation", "swipe")],
-            &[
-                "session_id",
-                "appshot_id",
-                "start_x",
-                "start_y",
-                "end_x",
-                "end_y",
-            ],
+            &["session_id", "start_x", "start_y", "end_x", "end_y"],
             &[
                 "operation",
                 "session_id",
@@ -355,12 +348,12 @@ pub(super) fn phone_keyboard_constraints() -> Value {
         &[
             (
                 "type_text",
-                &["session_id", "appshot_id", "text"][..],
+                &["session_id", "text"][..],
                 &["operation", "session_id", "device_id", "appshot_id", "text"][..],
             ),
             (
                 "press_key",
-                &["session_id", "appshot_id", "key"][..],
+                &["session_id", "key"][..],
                 &["operation", "session_id", "device_id", "appshot_id", "key"][..],
             ),
         ],
@@ -392,7 +385,7 @@ pub(super) fn phone_notification_action_constraints() -> Value {
         &[
             (
                 "open",
-                &["session_id", "appshot_id", "event_id"][..],
+                &["session_id", "event_id"][..],
                 &[
                     "operation",
                     "session_id",
@@ -403,7 +396,7 @@ pub(super) fn phone_notification_action_constraints() -> Value {
             ),
             (
                 "dismiss",
-                &["session_id", "appshot_id", "event_id"][..],
+                &["session_id", "event_id"][..],
                 &[
                     "operation",
                     "session_id",
@@ -414,7 +407,7 @@ pub(super) fn phone_notification_action_constraints() -> Value {
             ),
             (
                 "action",
-                &["session_id", "appshot_id", "event_id", "action_id"][..],
+                &["session_id", "event_id", "action_id"][..],
                 &[
                     "operation",
                     "session_id",
@@ -497,7 +490,7 @@ pub(super) fn phone_app_install_properties() -> Value {
 
 pub(super) fn phone_app_install_constraints() -> Value {
     phone_selector_alternatives(json!({
-        "required": ["session_id", "appshot_id", "apk_paths"]
+        "required": ["session_id", "apk_paths"]
     }))
 }
 

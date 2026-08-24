@@ -6,7 +6,7 @@
       "can_receive_images": false,
       "description_bytes": 5200,
       "largest_schema_bytes": 3613,
-      "serialized_bytes": 64826,
+      "serialized_bytes": 64762,
       "surface": "grouped",
       "tool_count": 40,
       "tools_list": {
@@ -2815,8 +2815,7 @@
                 }
               },
               "required": [
-                "operation",
-                "appshot_id"
+                "operation"
               ],
               "type": "object"
             },
@@ -2887,8 +2886,7 @@
                 }
               },
               "required": [
-                "operation",
-                "appshot_id"
+                "operation"
               ],
               "type": "object"
             },
@@ -2963,8 +2961,7 @@
                 }
               },
               "required": [
-                "operation",
-                "appshot_id"
+                "operation"
               ],
               "type": "object"
             },
@@ -3054,7 +3051,6 @@
               },
               "required": [
                 "session_id",
-                "appshot_id",
                 "event_id",
                 "action_id",
                 "text"
@@ -3247,9 +3243,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "appshot_id"
-              ],
+              "required": [],
               "type": "object"
             },
             "name": "phone_app_install"
@@ -5200,7 +5194,7 @@
       "can_receive_images": false,
       "description_bytes": 5303,
       "largest_schema_bytes": 3613,
-      "serialized_bytes": 65697,
+      "serialized_bytes": 65633,
       "surface": "grouped",
       "tool_count": 41,
       "tools_list": {
@@ -8009,8 +8003,7 @@
                 }
               },
               "required": [
-                "operation",
-                "appshot_id"
+                "operation"
               ],
               "type": "object"
             },
@@ -8081,8 +8074,7 @@
                 }
               },
               "required": [
-                "operation",
-                "appshot_id"
+                "operation"
               ],
               "type": "object"
             },
@@ -8157,8 +8149,7 @@
                 }
               },
               "required": [
-                "operation",
-                "appshot_id"
+                "operation"
               ],
               "type": "object"
             },
@@ -8248,7 +8239,6 @@
               },
               "required": [
                 "session_id",
-                "appshot_id",
                 "event_id",
                 "action_id",
                 "text"
@@ -8441,9 +8431,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "appshot_id"
-              ],
+              "required": [],
               "type": "object"
             },
             "name": "phone_app_install"
@@ -10448,7 +10436,7 @@
       "can_receive_images": true,
       "description_bytes": 5200,
       "largest_schema_bytes": 3613,
-      "serialized_bytes": 65037,
+      "serialized_bytes": 64973,
       "surface": "grouped",
       "tool_count": 40,
       "tools_list": {
@@ -13272,8 +13260,7 @@
                 }
               },
               "required": [
-                "operation",
-                "appshot_id"
+                "operation"
               ],
               "type": "object"
             },
@@ -13344,8 +13331,7 @@
                 }
               },
               "required": [
-                "operation",
-                "appshot_id"
+                "operation"
               ],
               "type": "object"
             },
@@ -13420,8 +13406,7 @@
                 }
               },
               "required": [
-                "operation",
-                "appshot_id"
+                "operation"
               ],
               "type": "object"
             },
@@ -13511,7 +13496,6 @@
               },
               "required": [
                 "session_id",
-                "appshot_id",
                 "event_id",
                 "action_id",
                 "text"
@@ -13704,9 +13688,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "appshot_id"
-              ],
+              "required": [],
               "type": "object"
             },
             "name": "phone_app_install"
@@ -15657,7 +15639,7 @@
       "can_receive_images": true,
       "description_bytes": 5303,
       "largest_schema_bytes": 3613,
-      "serialized_bytes": 65908,
+      "serialized_bytes": 65844,
       "surface": "grouped",
       "tool_count": 41,
       "tools_list": {
@@ -18481,8 +18463,7 @@
                 }
               },
               "required": [
-                "operation",
-                "appshot_id"
+                "operation"
               ],
               "type": "object"
             },
@@ -18553,8 +18534,7 @@
                 }
               },
               "required": [
-                "operation",
-                "appshot_id"
+                "operation"
               ],
               "type": "object"
             },
@@ -18629,8 +18609,7 @@
                 }
               },
               "required": [
-                "operation",
-                "appshot_id"
+                "operation"
               ],
               "type": "object"
             },
@@ -18720,7 +18699,6 @@
               },
               "required": [
                 "session_id",
-                "appshot_id",
                 "event_id",
                 "action_id",
                 "text"
@@ -18913,9 +18891,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "appshot_id"
-              ],
+              "required": [],
               "type": "object"
             },
             "name": "phone_app_install"

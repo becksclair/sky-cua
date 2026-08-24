@@ -221,10 +221,7 @@ fn phone_action_schemas_pin_required_fields() {
     };
 
     let pointer = find_tool(&definitions, "phone_pointer");
-    assert_eq!(
-        pointer["inputSchema"]["required"],
-        json!(["operation", "appshot_id"])
-    );
+    assert_eq!(pointer["inputSchema"]["required"], json!(["operation"]));
     assert!(
         pointer["inputSchema"]["properties"]
             .get("phone_snapshot_id")
@@ -234,11 +231,12 @@ fn phone_action_schemas_pin_required_fields() {
     let tap_branch = operation_branch(&pointer["inputSchema"], "tap");
     assert!(tap_branch["required"].is_null());
     assert!(tap_branch["oneOf"].as_array().is_some_and(|selectors| {
-        selectors.iter().any(|branch| {
-            branch["required"] == json!(["session_id", "operation", "appshot_id", "x", "y"])
-        }) && selectors.iter().any(|branch| {
-            branch["required"] == json!(["device_id", "operation", "appshot_id", "x", "y"])
-        })
+        selectors
+            .iter()
+            .any(|branch| branch["required"] == json!(["session_id", "operation", "x", "y"]))
+            && selectors
+                .iter()
+                .any(|branch| branch["required"] == json!(["device_id", "operation", "x", "y"]))
     }));
     assert_eq!(tap_branch["additionalProperties"], json!(false));
     assert!(
@@ -255,20 +253,18 @@ fn phone_action_schemas_pin_required_fields() {
     );
 
     let keyboard = find_tool(&definitions, "phone_keyboard");
-    assert_eq!(
-        keyboard["inputSchema"]["required"],
-        json!(["operation", "appshot_id"])
-    );
+    assert_eq!(keyboard["inputSchema"]["required"], json!(["operation"]));
     let type_text_branch = operation_branch(&keyboard["inputSchema"], "type_text");
     assert!(
         type_text_branch["oneOf"]
             .as_array()
             .is_some_and(|selectors| {
-                selectors.iter().any(|branch| {
-                    branch["required"] == json!(["session_id", "operation", "appshot_id", "text"])
-                }) && selectors.iter().any(|branch| {
-                    branch["required"] == json!(["device_id", "operation", "appshot_id", "text"])
-                })
+                selectors
+                    .iter()
+                    .any(|branch| branch["required"] == json!(["session_id", "operation", "text"]))
+                    && selectors.iter().any(|branch| {
+                        branch["required"] == json!(["device_id", "operation", "text"])
+                    })
             })
     );
     assert_eq!(type_text_branch["additionalProperties"], json!(false));
@@ -293,11 +289,12 @@ fn phone_action_schemas_pin_required_fields() {
             .and_then(|all_of| all_of.first())
             .and_then(|branch| branch["oneOf"].as_array())
             .is_some_and(|selectors| {
-                selectors.iter().any(|branch| {
-                    branch["required"] == json!(["session_id", "appshot_id", "apk_paths"])
-                }) && selectors.iter().any(|branch| {
-                    branch["required"] == json!(["device_id", "appshot_id", "apk_paths"])
-                })
+                selectors
+                    .iter()
+                    .any(|branch| branch["required"] == json!(["session_id", "apk_paths"]))
+                    && selectors
+                        .iter()
+                        .any(|branch| branch["required"] == json!(["device_id", "apk_paths"]))
             })
     );
     assert!(

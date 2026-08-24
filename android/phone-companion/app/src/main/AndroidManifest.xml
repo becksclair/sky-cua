@@ -5,8 +5,8 @@
     <!--
       Package inventory for app_list. QUERY_ALL_PACKAGES is the operator-mode
       visibility path; the host acknowledges a pm-list fallback for apps that
-      remain hidden. INTERNET is required only to bind the loopback RPC socket;
-      the server binds 127.0.0.1 and never accepts off-device connections.
+      remain hidden. INTERNET is required for the direct WebSocket link
+      (ws:// private LAN/tether or wss:// tailnet) — no public cleartext.
     -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
@@ -73,19 +73,6 @@
             android:authorities="com.skycua.phonecompanion.content"
             android:exported="false"
             android:grantUriPermissions="true" />
-
-        <!--
-          ADB-reachable setup endpoint for the host bootstrap. The shell UID can
-          start it by explicit component; ordinary co-resident apps lack the
-          platform DUMP permission and cannot use it to replace the RPC token.
-        -->
-        <activity
-            android:name=".SetupActivity"
-            android:exported="true"
-            android:permission="android.permission.DUMP"
-            android:excludeFromRecents="true"
-            android:noHistory="true"
-            android:theme="@android:style/Theme.NoDisplay" />
 
         <!--
           Neutral white+grid canvas for exercising the agent overlay (cursor

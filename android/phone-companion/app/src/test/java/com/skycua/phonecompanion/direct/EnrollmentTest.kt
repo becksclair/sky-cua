@@ -25,6 +25,23 @@ class EnrollmentTest {
         expectIllegal { EnrollmentCodec.validate(payload().copy(endpoint = "ws://public.example/control")) }
         EnrollmentCodec.validate(payload().copy(endpoint = "ws://node.tailnet.ts.net/control"))
         EnrollmentCodec.validate(payload().copy(endpoint = "wss://public.example/control"))
+        // Private LAN + tether now allowed for ws:// (same as Rust is_private_ip)
+        EnrollmentCodec.validate(payload().copy(endpoint = "ws://192.168.1.10:47683/phone/control"))
+        EnrollmentCodec.validate(payload().copy(endpoint = "ws://192.168.42.10:47683/phone/control"))
+        EnrollmentCodec.validate(payload().copy(endpoint = "ws://10.0.0.5:47683/phone/control"))
+        EnrollmentCodec.validate(payload().copy(endpoint = "ws://172.16.5.5:47683/phone/control"))
+        EnrollmentCodec.validate(payload().copy(endpoint = "ws://169.254.1.1:47683/phone/control"))
+        EnrollmentCodec.validate(payload().copy(endpoint = "ws://[fd12:3456::1]:47683/phone/control"))
+        EnrollmentCodec.validate(payload().copy(endpoint = "ws://[fe80::1]:47683/phone/control"))
+        EnrollmentCodec.validate(payload().copy(endpoint = "ws://[fe80::1%wlan0]:47683/phone/control"))
+        EnrollmentCodec.validate(payload().copy(endpoint = "ws://[fe80::1%rndis0]:47683/phone/control"))
+        EnrollmentCodec.validate(payload().copy(endpoint = "ws://100.64.1.1:47683/phone/control"))
+        expectIllegal { EnrollmentCodec.validate(payload().copy(endpoint = "ws://203.0.113.5:47683/phone/control")) }
+        expectIllegal { EnrollmentCodec.validate(payload().copy(endpoint = "ws://172.15.0.1:47683/phone/control")) }
+        expectIllegal { EnrollmentCodec.validate(payload().copy(endpoint = "ws://example.com:47683/phone/control")) }
+        // wss allows public (TLS)
+        EnrollmentCodec.validate(payload().copy(endpoint = "wss://203.0.113.5:47683/phone/control"))
+        EnrollmentCodec.validate(payload().copy(endpoint = "wss://example.com:47683/phone/control"))
     }
 
     @Test fun redeemsExactlyOnceAndPersistsOnlyMatchingResult() {

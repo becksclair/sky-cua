@@ -24,9 +24,9 @@ use sky_cua_platform::model::{
 
 use super::{ActionContext, PhoneManager, no_companion_diagnostic, now_ms, selector_ids};
 use crate::phone::adb;
-use crate::phone::companion::protocol::{GestureKind, GesturePoint};
 use crate::phone::direct::DirectRuntimeError;
 use crate::phone::mapping;
+use crate::phone::protocol::{GestureKind, GesturePoint};
 use crate::phone::snapshot;
 use crate::phone::{cursor, scrcpy};
 

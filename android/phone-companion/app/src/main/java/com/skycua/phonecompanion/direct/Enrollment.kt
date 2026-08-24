@@ -90,13 +90,122 @@ object EndpointValidator {
     fun requireAllowed(value: String) {
         val endpoint = URI(value)
         require(endpoint.scheme == "ws" || endpoint.scheme == "wss") { "endpoint must be a websocket URL" }
-        require(!endpoint.host.isNullOrBlank() && endpoint.userInfo == null && endpoint.fragment == null) { "invalid endpoint" }
-        if (endpoint.scheme == "ws") require(cleartextHostAllowed(endpoint.host.lowercase())) { "cleartext websocket host is not allowed" }
+        // java.net.URI.getHost() returns null for ws://[fe80::1%wlan0]:port (zone not RFC 3986 unless %25)
+        // and for some JDKs returns null for link-local with zone. Extract raw host from authority
+        // so that `cleartextHostAllowed` can strip %zone/[] itself, matching Rust's SocketAddr zone stripping.
+        val rawHost = extractRawHost(endpoint, value)
+        require(!rawHost.isNullOrBlank() && endpoint.userInfo == null && endpoint.fragment == null) { "invalid endpoint" }
+        if (endpoint.scheme == "ws") require(cleartextHostAllowed(rawHost)) { "cleartext websocket host is not allowed" }
     }
-    private fun cleartextHostAllowed(host: String): Boolean {
-        if (host == "localhost" || host == "127.0.0.1" || host == "::1" || host.startsWith("fd7a:115c:a1e0:") || host.endsWith(".ts.net")) return true
-        val octets = host.split('.').mapNotNull { it.toIntOrNull() }
-        return octets.size == 4 && octets[0] == 100 && octets[1] in 64..127
+
+    private fun extractRawHost(uri: URI, rawValue: String): String? {
+        uri.host?.let { return it }
+        // Fallback: parse authority manually for zone-containing hosts where URI.getHost() is null.
+        // rawValue is like ws://[fe80::1%wlan0]:47683/phone/control or ws://10.33.239.222:47683/...
+        val authority = uri.rawAuthority ?: uri.authority ?: return null
+        // Authority may be userInfo@host:port — we already checked userInfo==null, so just host:port
+        // Strip port: host is up to ':' or '/' or '?' or '#', but for IPv6 it's [...]:port
+        val withoutUserInfo = authority.substringAfterLast('@')
+        if (withoutUserInfo.startsWith("[")) {
+            val end = withoutUserInfo.indexOf(']')
+            if (end != -1) return withoutUserInfo.substring(1, end)
+        }
+        // For non-bracketed, host is up to ':' or end
+        return withoutUserInfo.substringBefore(':').substringBefore('/').substringBefore('?').substringBefore('#')
+    }
+
+    private fun cleartextHostAllowed(rawHost: String): Boolean {
+        // Strip IPv6 zone %wlan0 / %rndis0 and brackets.
+        val withoutZone = rawHost.substringBefore('%')
+        val bare = withoutZone.removePrefix("[").removeSuffix("]")
+        val host = bare.lowercase()
+        if (host == "localhost" || host == "127.0.0.1" || host == "::1") return true
+        if (host.endsWith(".ts.net")) return true
+        // Only raw IP literals may be used for cleartext; DNS names (except localhost/.ts.net) require wss.
+        val isIpLiteral = host.contains('.') || host.contains(':')
+        if (!isIpLiteral) return false
+        // No DNS — parse literals only. InetAddress.getByName would block on DNS and is not needed here.
+        // IPv4-mapped IPv6 like ::ffff:192.168.1.1 contains '.' — check inner IPv4 first.
+        if (host.contains(':') && host.contains('.')) {
+            val v4Part = host.substringAfterLast(':')
+            val v4Octets = v4Part.split('.').mapNotNull { it.toIntOrNull() }
+            if (v4Octets.size == 4 && v4Octets.all { it in 0..255 }) {
+                val o0 = v4Octets[0]; val o1 = v4Octets[1]
+                if (o0 == 10 || (o0 == 172 && o1 in 16..31) || (o0 == 192 && v4Octets[1] == 168) || (o0 == 169 && o1 == 254) || (o0 == 100 && o1 in 64..127)) return true
+                if (o0 == 127) return true
+            }
+            // Fall through to IPv6 ULA/link-local check below as well.
+        }
+        // IPv4 literal.
+        if (!host.contains(':')) {
+            val octets = host.split('.').mapNotNull { it.toIntOrNull() }
+            if (octets.size == 4 && octets.all { it in 0..255 }) {
+                val o0 = octets[0]; val o1 = octets[1]
+                return o0 == 127 || o0 == 10 || (o0 == 172 && o1 in 16..31) || (o0 == 192 && o1 == 168) || (o0 == 169 && o1 == 254) || (o0 == 100 && o1 in 64..127)
+            }
+            return false
+        }
+        // IPv6 literal — parse without DNS.
+        val bytes = parseIpv6WithoutDns(host) ?: return false
+        // Loopback ::1 already handled, but also covers ::ffff:127.0.0.1 etc. which we handled above.
+        // fc00::/7 ULA
+        val b0 = bytes[0].toInt() and 0xff
+        if (b0 == 0xfc || b0 == 0xfd) return true
+        // fe80::/10 link-local
+        if (b0 == 0xfe && (bytes[1].toInt() and 0xc0) == 0x80) return true
+        return false
+    }
+
+    // Parse an IPv6 literal (with optional ::) into 16 bytes without any DNS lookup.
+    // Returns null if the string is not a valid IPv6 literal. Handles ::ffff: + IPv4 tail already stripped above.
+    private fun parseIpv6WithoutDns(host: String): ByteArray? {
+        // Reject if it still contains '.' (already handled as mapped) or illegal chars.
+        if (host.contains('.')) return null
+        // Must be hex digits and ':' only.
+        if (host.any { it !in "0123456789abcdefABCDEF:" }) return null
+        val parts = host.split("::", limit = 2)
+        if (parts.size == 2 && host.indexOf("::") != host.lastIndexOf("::")) return null
+        return try {
+            if (parts.size == 1) {
+                // No :: — exactly 8 hextets.
+                val hextets = host.split(':')
+                if (hextets.size != 8) return null
+                val out = ByteArray(16)
+                for (i in hextets.indices) {
+                    val v = hextets[i].toIntOrNull(16) ?: return null
+                    if (v !in 0..0xffff || hextets[i].isEmpty()) return null
+                    out[i * 2] = (v shr 8).toByte()
+                    out[i * 2 + 1] = (v and 0xff).toByte()
+                }
+                out
+            } else {
+                val left = if (parts[0].isEmpty()) emptyList() else parts[0].split(':')
+                val right = if (parts[1].isEmpty()) emptyList() else parts[1].split(':')
+                if (left.any { it.isEmpty() } || right.any { it.isEmpty() }) return null
+                if (left.size + right.size > 7) return null
+                val out = ByteArray(16)
+                var idx = 0
+                for (h in left) {
+                    val v = h.toIntOrNull(16) ?: return null
+                    if (v !in 0..0xffff) return null
+                    out[idx * 2] = (v shr 8).toByte()
+                    out[idx * 2 + 1] = (v and 0xff).toByte()
+                    idx++
+                }
+                val zeros = 8 - left.size - right.size
+                idx += zeros
+                for (h in right) {
+                    val v = h.toIntOrNull(16) ?: return null
+                    if (v !in 0..0xffff) return null
+                    out[idx * 2] = (v shr 8).toByte()
+                    out[idx * 2 + 1] = (v and 0xff).toByte()
+                    idx++
+                }
+                out
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 }
 

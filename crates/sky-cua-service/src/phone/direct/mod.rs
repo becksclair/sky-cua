@@ -32,6 +32,7 @@ use tokio_tungstenite::{WebSocketStream, accept_async};
 use uuid::Uuid;
 
 mod content_transfer;
+pub(crate) mod lan;
 pub(crate) mod provider;
 use content_transfer::InboundContentStore;
 
@@ -56,6 +57,7 @@ pub(crate) struct DirectDeviceSnapshot {
     pub(crate) link_epoch: u64,
     pub(crate) connected: bool,
     pub(crate) capabilities: BTreeSet<String>,
+    pub(crate) peer_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -82,6 +84,7 @@ struct DirectLink {
     pending: Mutex<HashMap<String, PendingRequest>>,
     content: Mutex<InboundContentStore>,
     capabilities: Mutex<BTreeSet<String>>,
+    peer_addr: Option<SocketAddr>,
 }
 
 /// Cloneable service-internal handle used by phone providers.  It is
@@ -113,7 +116,8 @@ impl DirectRuntimeHandle {
     }
 
     pub(crate) fn snapshots(&self) -> Vec<DirectDeviceSnapshot> {
-        self.links
+        let mut out: Vec<DirectDeviceSnapshot> = self
+            .links
             .lock()
             .expect("direct link mutex poisoned")
             .iter()
@@ -126,8 +130,16 @@ impl DirectRuntimeHandle {
                     .lock()
                     .expect("capabilities mutex poisoned")
                     .clone(),
+                peer_addr: link.peer_addr,
             })
-            .collect()
+            .collect();
+        out.sort_by(|a, b| {
+            score_direct_peer_ip(a.peer_addr)
+                .cmp(&score_direct_peer_ip(b.peer_addr))
+                .then_with(|| a.device_id.cmp(&b.device_id))
+                .then_with(|| a.peer_addr.cmp(&b.peer_addr))
+        });
+        out
     }
 
     pub(crate) fn snapshot(&self, device_id: &str) -> Option<DirectDeviceSnapshot> {
@@ -144,6 +156,7 @@ impl DirectRuntimeHandle {
                     .lock()
                     .expect("capabilities mutex poisoned")
                     .clone(),
+                peer_addr: link.peer_addr,
             })
     }
 
@@ -251,6 +264,7 @@ impl DirectRuntimeHandle {
                 pending: Mutex::new(HashMap::new()),
                 content: Mutex::new(InboundContentStore::default()),
                 capabilities: Mutex::new(BTreeSet::new()),
+                peer_addr: None,
             }),
         );
         (control_rx, bulk_rx)
@@ -595,10 +609,12 @@ impl DirectRuntimeHandle {
     async fn serve_socket(
         &self,
         mut socket: WebSocketStream<TcpStream>,
+        peer: SocketAddr,
         device_id: String,
         epoch: u64,
         mut cancel: tokio::sync::oneshot::Receiver<()>,
     ) -> io::Result<()> {
+        tracing::info!(%peer, %device_id, epoch, "Direct link established");
         let (control_tx, mut control_rx) = mpsc::channel(64);
         let (bulk_tx, mut bulk_rx) = mpsc::channel(32);
         let link = Arc::new(DirectLink {
@@ -608,6 +624,7 @@ impl DirectRuntimeHandle {
             pending: Mutex::new(HashMap::new()),
             content: Mutex::new(InboundContentStore::default()),
             capabilities: Mutex::new(BTreeSet::new()),
+            peer_addr: Some(peer),
         });
         self.links
             .lock()
@@ -873,36 +890,123 @@ pub(crate) fn decode_control_frame(
     Ok(frame)
 }
 
-/// Validate a configured listener address. Wildcard and unspecified binds are
-/// rejected so enabling direct mode cannot accidentally expose Saga publicly.
-pub(crate) fn validate_bind_addr(addr: SocketAddr) -> io::Result<()> {
-    let ip = addr.ip();
-    let allowed = match ip {
+pub(crate) fn is_private_ipv4(ipv4: std::net::Ipv4Addr) -> bool {
+    let o = ipv4.octets();
+    // 10.0.0.0/8
+    if o[0] == 10 {
+        return true;
+    }
+    // 172.16.0.0/12
+    if o[0] == 172 && (16..=31).contains(&o[1]) {
+        return true;
+    }
+    // 192.168.0.0/16 (incl. tether 192.168.42/49, hotspot 192.168.43/49)
+    if o[0] == 192 && o[1] == 168 {
+        return true;
+    }
+    // 169.254.0.0/16 link-local
+    if o[0] == 169 && o[1] == 254 {
+        return true;
+    }
+    // 100.64.0.0/10 CGNAT (Tailscale)
+    if o[0] == 100 && (64..=127).contains(&o[1]) {
+        return true;
+    }
+    false
+}
+
+pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ipv4) => ipv4.is_loopback() || is_private_ipv4(ipv4),
+        IpAddr::V6(ipv6) => {
+            if ipv6.is_loopback() {
+                return true;
+            }
+            // ::ffff:0:0/96 mapped IPv4 — evaluate inner IPv4.
+            if let Some(v4) = ipv6.to_ipv4_mapped() {
+                return v4.is_loopback() || is_private_ipv4(v4);
+            }
+            let o = ipv6.octets();
+            // fc00::/7 ULA (superset of fd7a:115c:a1e0::/48)
+            if o[0] == 0xfc || o[0] == 0xfd {
+                return true;
+            }
+            // fe80::/10 link-local (strip %zone already done by caller)
+            if o[0] == 0xfe && (o[1] & 0xc0) == 0x80 {
+                return true;
+            }
+            false
+        }
+    }
+}
+
+pub(crate) fn is_tailscale_ip(ip: IpAddr) -> bool {
+    match ip {
         IpAddr::V4(ipv4) => {
-            ipv4.is_loopback()
-                // Tailscale's CGNAT range.
-                || (ipv4.octets()[0] == 100 && (64..=127).contains(&ipv4.octets()[1]))
+            let o = ipv4.octets();
+            o[0] == 100 && (64..=127).contains(&o[1])
         }
         IpAddr::V6(ipv6) => {
-            ipv6.is_loopback()
-                // Tailscale's stable IPv6 prefix fd7a:115c:a1e0::/48.
-                || (ipv6.segments()[0] == 0xfd7a
-                    && ipv6.segments()[1] == 0x115c
-                    && ipv6.segments()[2] == 0xa1e0)
+            // Tailscale's ULA is fd7a:115c:a1e0::/48 — detect that prefix.
+            let o = ipv6.octets();
+            o[0] == 0xfd
+                && o[1] == 0x7a
+                && o[2] == 0x11
+                && o[3] == 0x5c
+                && o[4] == 0xa1
+                && o[5] == 0xe0
         }
+    }
+}
+
+/// Score a direct peer address for routing preference: LAN (0) is preferred
+/// over Tailscale CGNAT (1), which is preferred over unknown/public (2).
+/// Loopback (127.0.0.1 via `adb reverse`) is treated as LAN (0) — it is
+/// direct and not via Tailscale. `None` (synthetic/test links) scores 1
+/// so they do not outrank a real LAN link.
+pub(crate) fn score_direct_peer_ip(peer: Option<SocketAddr>) -> u8 {
+    let Some(addr) = peer else {
+        return 2;
     };
-    if ip.is_unspecified() || ip.is_multicast() || !allowed {
+    let ip = addr.ip();
+    if ip.is_loopback() {
+        return 0;
+    }
+    if is_tailscale_ip(ip) {
+        return 1;
+    }
+    if is_private_ip(ip) {
+        return 0;
+    }
+    2
+}
+
+/// Validate a configured listener address. Wildcard binds (0.0.0.0 / ::) are
+/// allowed so one socket covers WiFi/ethernet/USB-tether, while public routable
+/// binds remain rejected for cleartext `ws://` listeners.
+pub(crate) fn validate_bind_addr(addr: SocketAddr) -> io::Result<()> {
+    let ip = addr.ip();
+    if ip.is_multicast() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "phone-control listener requires an explicit unicast Tailscale or loopback address",
+            "phone-control listener multicast address is not allowed",
         ));
     }
-    Ok(())
+    if ip.is_unspecified() {
+        return Ok(());
+    }
+    if is_private_ip(ip) {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "phone-control listener requires a private, Tailscale, or loopback address (or 0.0.0.0/:: for all interfaces)",
+    ))
 }
 
 /// Listener construction is disabled unless explicitly enabled by service
-/// configuration. The listener itself is intentionally not exposed on a public
-/// or wildcard address.
+/// configuration. Wildcard binds (0.0.0.0/::) are allowed for LAN/tether but
+/// public routable addresses remain rejected.
 pub(crate) struct DirectListener {
     listener: TcpListener,
 }
@@ -919,9 +1023,47 @@ impl DirectListener {
                 "direct listener address is required when enabled",
             )
         })?;
-        let addr = raw
+        let addr: SocketAddr = raw
             .parse()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        // Wildcard `0.0.0.0/::` on a host with a public NIC would be reachable
+        // from the internet if the firewall is not configured. `docs/runtime/direct-lan.md:30`
+        // says public `ws://` is `InvalidInput` and `wss://` is the public escape.
+        // Enforce that: wildcard `ws://` with a public advertised host is rejected
+        // (require `wss://`), private/`*.ts.net` `ws://` is still `Ok`.
+        if addr.ip().is_unspecified()
+            && let Some(advertised) = config.direct_advertised_endpoint.as_deref()
+        {
+            let lower = advertised.to_ascii_lowercase();
+            if lower.starts_with("ws://") {
+                // Extract host between ws:// and : or / or ?
+                let after = &advertised[5..];
+                let host_end = after.find([':', '/', '?', '#']).unwrap_or(after.len());
+                let mut host = &after[..host_end];
+                // Strip [] for IPv6 and %zone
+                host = host.trim_matches(|c| c == '[' || c == ']');
+                if let Some(p) = host.find('%') {
+                    host = &host[..p];
+                }
+                let is_private = if host.eq_ignore_ascii_case("localhost")
+                    || host == "127.0.0.1"
+                    || host == "::1"
+                    || host.to_ascii_lowercase().ends_with(".ts.net")
+                {
+                    true
+                } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                    is_private_ip(ip) || ip.is_loopback()
+                } else {
+                    false
+                };
+                if !is_private {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "wildcard direct listener (0.0.0.0/::) with public ws:// advertised endpoint requires wss:// (or a private/ tailnet host); see docs/runtime/direct-lan.md:30",
+                    ));
+                }
+            }
+        }
         Self::bind(true, addr).await
     }
 
@@ -1082,7 +1224,7 @@ async fn run_accept_loop(
                 let registry = registry.clone();
                 let enrollments = enrollments.clone();
                 children.spawn(async move {
-                    if let Err(error) = accept_socket(socket, store, &registry, &enrollments).await {
+                    if let Err(error) = accept_socket(socket, peer, store, &registry, &enrollments).await {
                         tracing::warn!(%peer, %error, "CompanionDirect connection rejected");
                     }
                 });
@@ -1093,6 +1235,7 @@ async fn run_accept_loop(
 
 async fn accept_socket(
     mut socket: WebSocketStream<TcpStream>,
+    peer: SocketAddr,
     store: Arc<dyn DirectStateStore>,
     registry: &LinkRegistry,
     enrollments: &EnrollmentRegistry,
@@ -1162,7 +1305,7 @@ async fn accept_socket(
     if let PhoneDirectControlFrame::EnrollmentAck(ack) = frame {
         return process_enrollment_ack(socket, store, ack).await;
     }
-    authenticate_socket_after_hello(socket, frame, store, registry).await
+    authenticate_socket_after_hello(socket, peer, frame, store, registry).await
 }
 
 fn rollback_device(store: &dyn DirectStateStore, device_id: &str) -> io::Result<()> {
@@ -1311,6 +1454,7 @@ fn valid_nonce(value: &str) -> bool {
 
 async fn authenticate_socket_after_hello(
     socket: WebSocketStream<TcpStream>,
+    peer: SocketAddr,
     frame: PhoneDirectControlFrame,
     store: Arc<dyn DirectStateStore>,
     registry: &LinkRegistry,
@@ -1323,7 +1467,7 @@ async fn authenticate_socket_after_hello(
             "application frame before auth",
         ));
     };
-    authenticate_with_hello(socket, hello, store, registry).await
+    authenticate_with_hello(socket, peer, hello, store, registry).await
 }
 
 #[cfg_attr(not(test), expect(dead_code))]
@@ -1332,6 +1476,10 @@ async fn authenticate_socket(
     store: Arc<dyn DirectStateStore>,
     registry: &LinkRegistry,
 ) -> io::Result<()> {
+    let peer = socket
+        .get_ref()
+        .peer_addr()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
     let text = recv_auth_text(&mut socket)
         .await?
         .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "missing auth hello"))?;
@@ -1343,11 +1491,12 @@ async fn authenticate_socket(
             "application frame before auth",
         ));
     };
-    authenticate_with_hello(socket, hello, store, registry).await
+    authenticate_with_hello(socket, peer, hello, store, registry).await
 }
 
 async fn authenticate_with_hello(
     mut socket: WebSocketStream<TcpStream>,
+    peer: SocketAddr,
     hello: sky_cua_platform::model::PhoneAuthHello,
     store: Arc<dyn DirectStateStore>,
     registry: &LinkRegistry,
@@ -1499,7 +1648,7 @@ async fn authenticate_with_hello(
     let mut cancel = registry.finalize(reservation);
     if let Some(handle) = registry.handle.clone() {
         return handle
-            .serve_socket(socket, hello.device_id, epoch, cancel)
+            .serve_socket(socket, peer, hello.device_id, epoch, cancel)
             .await;
     }
     // Hold the authenticated link until peer close. Application dispatch is
@@ -2202,14 +2351,25 @@ mod tests {
 
     #[test]
     fn rejects_wildcard_binds() {
-        assert!(validate_bind_addr(SocketAddr::from(([0, 0, 0, 0], 1))).is_err());
+        // 0.0.0.0 / :: now allowed for LAN/tether (covers WiFi + rndis0/usb0 in one socket).
+        assert!(validate_bind_addr(SocketAddr::from(([0, 0, 0, 0], 1))).is_ok());
+        assert!(validate_bind_addr("[::]:1".parse().unwrap()).is_ok());
         assert!(validate_bind_addr(SocketAddr::from(([127, 0, 0, 1], 1))).is_ok());
         assert!(validate_bind_addr(SocketAddr::from((Ipv4Addr::new(100, 64, 0, 2), 1))).is_ok());
         assert!(validate_bind_addr(SocketAddr::from(([8, 8, 8, 8], 1))).is_err());
-        assert!(validate_bind_addr(SocketAddr::from(([192, 168, 1, 2], 1))).is_err());
-        assert!(validate_bind_addr(SocketAddr::from(([169, 254, 1, 2], 1))).is_err());
+        // RFC1918 + link-local + ULA now allowed (tether 192.168.42, hotspot, etc.)
+        assert!(validate_bind_addr(SocketAddr::from(([192, 168, 1, 2], 1))).is_ok());
+        assert!(validate_bind_addr(SocketAddr::from(([192, 168, 42, 10], 1))).is_ok());
+        assert!(validate_bind_addr(SocketAddr::from(([10, 0, 0, 5], 1))).is_ok());
+        assert!(validate_bind_addr(SocketAddr::from(([172, 16, 5, 5], 1))).is_ok());
+        assert!(validate_bind_addr(SocketAddr::from(([169, 254, 1, 2], 1))).is_ok());
         assert!(validate_bind_addr("[fd7a:115c:a1e0::2]:1".parse().unwrap()).is_ok());
-        assert!(validate_bind_addr("[fd00::2]:1".parse().unwrap()).is_err());
+        assert!(validate_bind_addr("[fd00::2]:1".parse().unwrap()).is_ok());
+        assert!(validate_bind_addr("[fe80::1]:1".parse().unwrap()).is_ok());
+        assert!(validate_bind_addr("[::ffff:192.168.1.1]:1".parse().unwrap()).is_ok());
+        // Public still rejected.
+        assert!(validate_bind_addr(SocketAddr::from(([203, 0, 113, 5], 1))).is_err());
+        assert!(validate_bind_addr("[2001:db8::1]:1".parse().unwrap()).is_err());
     }
 
     #[test]
@@ -2267,7 +2427,14 @@ mod tests {
         let task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let socket = accept_async(stream).await.unwrap();
-            accept_socket(socket, task_store, &LinkRegistry::default(), &task_registry).await
+            accept_socket(
+                socket,
+                "127.0.0.1:0".parse().unwrap(),
+                task_store,
+                &LinkRegistry::default(),
+                &task_registry,
+            )
+            .await
         });
         let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}"))
             .await
@@ -2417,6 +2584,7 @@ mod tests {
             let socket = accept_async(stream).await.unwrap();
             accept_socket(
                 socket,
+                "127.0.0.1:0".parse().unwrap(),
                 Arc::new(FailingStore),
                 &LinkRegistry::default(),
                 &task_registry,
@@ -2486,7 +2654,14 @@ mod tests {
             let task = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.unwrap();
                 let socket = accept_async(stream).await.unwrap();
-                accept_socket(socket, task_store, &LinkRegistry::default(), &task_registry).await
+                accept_socket(
+                    socket,
+                    "127.0.0.1:0".parse().unwrap(),
+                    task_store,
+                    &LinkRegistry::default(),
+                    &task_registry,
+                )
+                .await
             });
             let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}"))
                 .await
@@ -2825,6 +3000,7 @@ mod tests {
                 link_epoch: 4,
                 connected: true,
                 capabilities: BTreeSet::new(),
+                peer_addr: None,
             }]
         );
     }
@@ -2929,7 +3105,13 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
             server_handle
-                .serve_socket(socket, "device-a".into(), 1, cancel_rx)
+                .serve_socket(
+                    socket,
+                    "127.0.0.1:0".parse().unwrap(),
+                    "device-a".into(),
+                    1,
+                    cancel_rx,
+                )
                 .await
                 .unwrap();
         });
@@ -2965,7 +3147,13 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
             server_handle
-                .serve_socket(socket, "device-a".into(), 1, cancel_rx)
+                .serve_socket(
+                    socket,
+                    "127.0.0.1:0".parse().unwrap(),
+                    "device-a".into(),
+                    1,
+                    cancel_rx,
+                )
                 .await
                 .unwrap();
         });
@@ -3062,7 +3250,13 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
             server_handle
-                .serve_socket(socket, "device-a".into(), 1, cancel_rx)
+                .serve_socket(
+                    socket,
+                    "127.0.0.1:0".parse().unwrap(),
+                    "device-a".into(),
+                    1,
+                    cancel_rx,
+                )
                 .await
                 .unwrap();
         });
@@ -3150,7 +3344,13 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
             server_handle
-                .serve_socket(socket, "malformed".into(), 7, cancel_rx)
+                .serve_socket(
+                    socket,
+                    "127.0.0.1:0".parse().unwrap(),
+                    "malformed".into(),
+                    7,
+                    cancel_rx,
+                )
                 .await
                 .unwrap();
         });

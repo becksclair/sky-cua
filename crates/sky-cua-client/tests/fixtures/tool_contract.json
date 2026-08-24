@@ -9369,8 +9369,7 @@
           }
         },
         "required": [
-          "operation",
-          "appshot_id"
+          "operation"
         ],
         "type": "object"
       },
@@ -9406,7 +9405,6 @@
                 "oneOf": [
                   {
                     "properties": {
-                      "appshot_id": {},
                       "operation": {},
                       "session_id": {},
                       "x": {},
@@ -9415,14 +9413,12 @@
                     "required": [
                       "session_id",
                       "operation",
-                      "appshot_id",
                       "x",
                       "y"
                     ]
                   },
                   {
                     "properties": {
-                      "appshot_id": {},
                       "device_id": {},
                       "operation": {},
                       "x": {},
@@ -9431,7 +9427,6 @@
                     "required": [
                       "device_id",
                       "operation",
-                      "appshot_id",
                       "x",
                       "y"
                     ]
@@ -9521,7 +9516,6 @@
                 "oneOf": [
                   {
                     "properties": {
-                      "appshot_id": {},
                       "end_x": {},
                       "end_y": {},
                       "operation": {},
@@ -9532,7 +9526,6 @@
                     "required": [
                       "session_id",
                       "operation",
-                      "appshot_id",
                       "start_x",
                       "start_y",
                       "end_x",
@@ -9541,7 +9534,6 @@
                   },
                   {
                     "properties": {
-                      "appshot_id": {},
                       "device_id": {},
                       "end_x": {},
                       "end_y": {},
@@ -9552,7 +9544,6 @@
                     "required": [
                       "device_id",
                       "operation",
-                      "appshot_id",
                       "start_x",
                       "start_y",
                       "end_x",
@@ -9747,8 +9738,7 @@
           }
         },
         "required": [
-          "operation",
-          "appshot_id"
+          "operation"
         ],
         "type": "object"
       }
@@ -9850,8 +9840,7 @@
           }
         },
         "required": [
-          "operation",
-          "appshot_id"
+          "operation"
         ],
         "type": "object"
       },
@@ -9867,7 +9856,6 @@
                 "oneOf": [
                   {
                     "properties": {
-                      "appshot_id": {},
                       "operation": {},
                       "session_id": {},
                       "text": {}
@@ -9875,13 +9863,11 @@
                     "required": [
                       "session_id",
                       "operation",
-                      "appshot_id",
                       "text"
                     ]
                   },
                   {
                     "properties": {
-                      "appshot_id": {},
                       "device_id": {},
                       "operation": {},
                       "text": {}
@@ -9889,7 +9875,6 @@
                     "required": [
                       "device_id",
                       "operation",
-                      "appshot_id",
                       "text"
                     ]
                   }
@@ -9935,7 +9920,6 @@
                 "oneOf": [
                   {
                     "properties": {
-                      "appshot_id": {},
                       "key": {},
                       "operation": {},
                       "session_id": {}
@@ -9943,13 +9927,11 @@
                     "required": [
                       "session_id",
                       "operation",
-                      "appshot_id",
                       "key"
                     ]
                   },
                   {
                     "properties": {
-                      "appshot_id": {},
                       "device_id": {},
                       "key": {},
                       "operation": {}
@@ -9957,7 +9939,6 @@
                     "required": [
                       "device_id",
                       "operation",
-                      "appshot_id",
                       "key"
                     ]
                   }
@@ -10057,8 +10038,7 @@
           }
         },
         "required": [
-          "operation",
-          "appshot_id"
+          "operation"
         ],
         "type": "object"
       }
@@ -10180,8 +10160,7 @@
           }
         },
         "required": [
-          "operation",
-          "appshot_id"
+          "operation"
         ],
         "type": "object"
       },
@@ -10197,7 +10176,6 @@
                 "oneOf": [
                   {
                     "properties": {
-                      "appshot_id": {},
                       "event_id": {},
                       "operation": {},
                       "session_id": {}
@@ -10205,13 +10183,11 @@
                     "required": [
                       "session_id",
                       "operation",
-                      "appshot_id",
                       "event_id"
                     ]
                   },
                   {
                     "properties": {
-                      "appshot_id": {},
                       "device_id": {},
                       "event_id": {},
                       "operation": {}
@@ -10219,7 +10195,6 @@
                     "required": [
                       "device_id",
                       "operation",
-                      "appshot_id",
                       "event_id"
                     ]
                   }
@@ -10267,7 +10242,6 @@
                 "oneOf": [
                   {
                     "properties": {
-                      "appshot_id": {},
                       "event_id": {},
                       "operation": {},
                       "session_id": {}
@@ -10275,13 +10249,11 @@
                     "required": [
                       "session_id",
                       "operation",
-                      "appshot_id",
                       "event_id"
                     ]
                   },
                   {
                     "properties": {
-                      "appshot_id": {},
                       "device_id": {},
                       "event_id": {},
                       "operation": {}
@@ -10289,7 +10261,6 @@
                     "required": [
                       "device_id",
                       "operation",
-                      "appshot_id",
                       "event_id"
                     ]
                   }
@@ -10338,7 +10309,6 @@
                   {
                     "properties": {
                       "action_id": {},
-                      "appshot_id": {},
                       "event_id": {},
                       "operation": {},
                       "session_id": {}
@@ -10346,7 +10316,6 @@
                     "required": [
                       "session_id",
                       "operation",
-                      "appshot_id",
                       "event_id",
                       "action_id"
                     ]
@@ -10354,7 +10323,6 @@
                   {
                     "properties": {
                       "action_id": {},
-                      "appshot_id": {},
                       "device_id": {},
                       "event_id": {},
                       "operation": {}
@@ -10362,7 +10330,6 @@
                     "required": [
                       "device_id",
                       "operation",
-                      "appshot_id",
                       "event_id",
                       "action_id"
                     ]
@@ -10474,8 +10441,7 @@
           }
         },
         "required": [
-          "operation",
-          "appshot_id"
+          "operation"
         ],
         "type": "object"
       }
@@ -10582,7 +10548,6 @@
         },
         "required": [
           "session_id",
-          "appshot_id",
           "event_id",
           "action_id",
           "text"
@@ -10667,7 +10632,6 @@
         },
         "required": [
           "session_id",
-          "appshot_id",
           "event_id",
           "action_id",
           "text"
@@ -11093,9 +11057,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "appshot_id"
-        ],
+        "required": [],
         "type": "object"
       },
       "name": "phone_app_install",
@@ -11108,12 +11070,10 @@
               {
                 "properties": {
                   "apk_paths": {},
-                  "appshot_id": {},
                   "session_id": {}
                 },
                 "required": [
                   "session_id",
-                  "appshot_id",
                   "apk_paths"
                 ],
                 "type": "object"
@@ -11121,12 +11081,10 @@
               {
                 "properties": {
                   "apk_paths": {},
-                  "appshot_id": {},
                   "device_id": {}
                 },
                 "required": [
                   "device_id",
-                  "appshot_id",
                   "apk_paths"
                 ],
                 "type": "object"
@@ -11238,9 +11196,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "appshot_id"
-        ],
+        "required": [],
         "type": "object"
       }
     },

@@ -720,11 +720,12 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
     let tap = exact_branch(phone_pointer_schema, "operation", "tap");
     assert!(
         tap["oneOf"].as_array().is_some_and(|selectors| {
-            selectors.iter().any(|branch| {
-                branch["required"] == json!(["session_id", "operation", "appshot_id", "x", "y"])
-            }) && selectors.iter().any(|branch| {
-                branch["required"] == json!(["device_id", "operation", "appshot_id", "x", "y"])
-            })
+            selectors
+                .iter()
+                .any(|branch| branch["required"] == json!(["session_id", "operation", "x", "y"]))
+                && selectors
+                    .iter()
+                    .any(|branch| branch["required"] == json!(["device_id", "operation", "x", "y"]))
         }) && tap["additionalProperties"] == json!(false),
         "phone_pointer tap branch must require coordinates and a typed selector"
     );
@@ -736,7 +737,6 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
                     == json!([
                         "session_id",
                         "operation",
-                        "appshot_id",
                         "start_x",
                         "start_y",
                         "end_x",
@@ -747,7 +747,6 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
                     == json!([
                         "device_id",
                         "operation",
-                        "appshot_id",
                         "start_x",
                         "start_y",
                         "end_x",
@@ -770,11 +769,12 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
     let type_text = exact_branch(phone_keyboard_schema, "operation", "type_text");
     assert!(
         type_text["oneOf"].as_array().is_some_and(|selectors| {
-            selectors.iter().any(|branch| {
-                branch["required"] == json!(["session_id", "operation", "appshot_id", "text"])
-            }) && selectors.iter().any(|branch| {
-                branch["required"] == json!(["device_id", "operation", "appshot_id", "text"])
-            })
+            selectors
+                .iter()
+                .any(|branch| branch["required"] == json!(["session_id", "operation", "text"]))
+                && selectors
+                    .iter()
+                    .any(|branch| branch["required"] == json!(["device_id", "operation", "text"]))
         }) && type_text["additionalProperties"] == json!(false),
         "phone_keyboard type_text branch must require text and a typed selector"
     );
@@ -795,22 +795,9 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
             .is_some_and(|selectors| {
                 selectors.iter().any(|branch| {
                     branch["required"]
-                        == json!([
-                            "session_id",
-                            "operation",
-                            "appshot_id",
-                            "event_id",
-                            "action_id"
-                        ])
+                        == json!(["session_id", "operation", "event_id", "action_id"])
                 }) && selectors.iter().any(|branch| {
-                    branch["required"]
-                        == json!([
-                            "device_id",
-                            "operation",
-                            "appshot_id",
-                            "event_id",
-                            "action_id"
-                        ])
+                    branch["required"] == json!(["device_id", "operation", "event_id", "action_id"])
                 })
             })
             && notification_action["additionalProperties"] == json!(false),
@@ -828,11 +815,12 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
             .and_then(|all_of| all_of.first())
             .and_then(|branch| branch["oneOf"].as_array())
             .is_some_and(|selectors| {
-                selectors.iter().any(|branch| {
-                    branch["required"] == json!(["session_id", "appshot_id", "apk_paths"])
-                }) && selectors.iter().any(|branch| {
-                    branch["required"] == json!(["device_id", "appshot_id", "apk_paths"])
-                })
+                selectors
+                    .iter()
+                    .any(|branch| branch["required"] == json!(["session_id", "apk_paths"]))
+                    && selectors
+                        .iter()
+                        .any(|branch| branch["required"] == json!(["device_id", "apk_paths"]))
             }),
         "phone_app_install must require apk_paths and a typed selector"
     );
