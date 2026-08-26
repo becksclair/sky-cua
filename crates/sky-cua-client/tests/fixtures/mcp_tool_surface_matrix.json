@@ -4,9 +4,9 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": false,
-      "description_bytes": 5200,
+      "description_bytes": 5404,
       "largest_schema_bytes": 3846,
-      "serialized_bytes": 68956,
+      "serialized_bytes": 69140,
       "surface": "grouped",
       "tool_count": 40,
       "tools_list": {
@@ -656,7 +656,7 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "Read the connected phone accessibility tree, optionally bounded by node_limit.",
+            "description": "Read the connected phone accessibility tree, optionally bounded by node_limit. Uses an alias from [phone.aliases] (e.g. \"phone\", \"tablet\"), a direct device_id, or an existing session_id — never combine them.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -710,9 +710,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "session_id"
-              ],
+              "required": [],
               "type": "object"
             },
             "name": "phone_accessibility_tree"
@@ -724,7 +722,7 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "Read recent connected-phone notifications.",
+            "description": "Read recent connected-phone notifications. Uses an alias from [phone.aliases], a direct device_id, or a session_id.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -778,9 +776,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "session_id"
-              ],
+              "required": [],
               "type": "object"
             },
             "name": "phone_notifications"
@@ -5498,9 +5494,9 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": false,
-      "description_bytes": 5303,
+      "description_bytes": 5507,
       "largest_schema_bytes": 3846,
-      "serialized_bytes": 69827,
+      "serialized_bytes": 70011,
       "surface": "grouped",
       "tool_count": 41,
       "tools_list": {
@@ -6150,7 +6146,7 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "Read the connected phone accessibility tree, optionally bounded by node_limit.",
+            "description": "Read the connected phone accessibility tree, optionally bounded by node_limit. Uses an alias from [phone.aliases] (e.g. \"phone\", \"tablet\"), a direct device_id, or an existing session_id — never combine them.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -6204,9 +6200,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "session_id"
-              ],
+              "required": [],
               "type": "object"
             },
             "name": "phone_accessibility_tree"
@@ -6218,7 +6212,7 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "Read recent connected-phone notifications.",
+            "description": "Read recent connected-phone notifications. Uses an alias from [phone.aliases], a direct device_id, or a session_id.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -6272,9 +6266,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "session_id"
-              ],
+              "required": [],
               "type": "object"
             },
             "name": "phone_notifications"
@@ -11046,9 +11038,9 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": true,
-      "description_bytes": 5200,
+      "description_bytes": 5404,
       "largest_schema_bytes": 3846,
-      "serialized_bytes": 69167,
+      "serialized_bytes": 69351,
       "surface": "grouped",
       "tool_count": 40,
       "tools_list": {
@@ -11698,7 +11690,7 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "Read the connected phone accessibility tree, optionally bounded by node_limit.",
+            "description": "Read the connected phone accessibility tree, optionally bounded by node_limit. Uses an alias from [phone.aliases] (e.g. \"phone\", \"tablet\"), a direct device_id, or an existing session_id — never combine them.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -11752,9 +11744,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "session_id"
-              ],
+              "required": [],
               "type": "object"
             },
             "name": "phone_accessibility_tree"
@@ -11766,7 +11756,7 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "Read recent connected-phone notifications.",
+            "description": "Read recent connected-phone notifications. Uses an alias from [phone.aliases], a direct device_id, or a session_id.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -11820,9 +11810,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "session_id"
-              ],
+              "required": [],
               "type": "object"
             },
             "name": "phone_notifications"
@@ -16555,9 +16543,9 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": true,
-      "description_bytes": 5303,
+      "description_bytes": 5507,
       "largest_schema_bytes": 3846,
-      "serialized_bytes": 70038,
+      "serialized_bytes": 70222,
       "surface": "grouped",
       "tool_count": 41,
       "tools_list": {
@@ -17207,7 +17195,7 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "Read the connected phone accessibility tree, optionally bounded by node_limit.",
+            "description": "Read the connected phone accessibility tree, optionally bounded by node_limit. Uses an alias from [phone.aliases] (e.g. \"phone\", \"tablet\"), a direct device_id, or an existing session_id — never combine them.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -17261,9 +17249,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "session_id"
-              ],
+              "required": [],
               "type": "object"
             },
             "name": "phone_accessibility_tree"
@@ -17275,7 +17261,7 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "Read recent connected-phone notifications.",
+            "description": "Read recent connected-phone notifications. Uses an alias from [phone.aliases], a direct device_id, or a session_id.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -17329,9 +17315,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "session_id"
-              ],
+              "required": [],
               "type": "object"
             },
             "name": "phone_notifications"

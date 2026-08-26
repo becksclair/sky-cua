@@ -42,7 +42,7 @@ pub(super) fn phone_alias_schema() -> Value {
 /// Replace post-connect `session_id` requirements with typed selector
 /// alternatives: `session_id` (active session), `device_id` (direct id), or
 /// human `alias` mapped in `[phone.aliases]`.
-fn phone_selector_alternatives(mut schema: Value) -> Value {
+pub(crate) fn phone_selector_alternatives(mut schema: Value) -> Value {
     let device_schema = schema
         .get("properties")
         .and_then(|properties| properties.get("device_id"))

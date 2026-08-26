@@ -1494,7 +1494,45 @@
               },
               {
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "session_id": {},
+                      "surface": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "surface"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "device_id": {},
+                      "surface": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "surface"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "surface": {}
+                    },
+                    "required": [
+                      "alias",
+                      "surface"
+                    ]
+                  }
+                ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "backend": {
                     "anyOf": [
                       {
@@ -1514,6 +1552,11 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
                   },
                   "include_accessibility": {
                     "anyOf": [
@@ -1546,10 +1589,6 @@
                     "const": "phone"
                   }
                 },
-                "required": [
-                  "surface",
-                  "session_id"
-                ],
                 "type": "object"
               }
             ]
@@ -2085,7 +2124,45 @@
               },
               {
                 "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "properties": {
+                      "session_id": {},
+                      "surface": {}
+                    },
+                    "required": [
+                      "session_id",
+                      "surface"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "device_id": {},
+                      "surface": {}
+                    },
+                    "required": [
+                      "device_id",
+                      "surface"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "surface": {}
+                    },
+                    "required": [
+                      "alias",
+                      "surface"
+                    ]
+                  }
+                ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "backend": {
                     "anyOf": [
                       {
@@ -2106,6 +2183,11 @@
                       }
                     ]
                   },
+                  "device_id": {
+                    "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "session_id": {
                     "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
                     "minLength": 1,
@@ -2115,10 +2197,6 @@
                     "const": "phone"
                   }
                 },
-                "required": [
-                  "surface",
-                  "session_id"
-                ],
                 "type": "object"
               }
             ]
@@ -2296,15 +2374,46 @@
             "type": "string"
           }
         },
-        "required": [
-          "session_id"
-        ],
+        "required": [],
         "type": "object"
       },
       "name": "phone_accessibility_tree",
       "structured_policy": "grouped_envelope",
       "validation_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "session_id": {}
+                },
+                "required": [
+                  "session_id"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "device_id": {}
+                },
+                "required": [
+                  "device_id"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "alias": {}
+                },
+                "required": [
+                  "alias"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        ],
         "properties": {
           "alias": {
             "anyOf": [
@@ -2356,9 +2465,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "session_id"
-        ],
+        "required": [],
         "type": "object"
       }
     },
@@ -2437,15 +2544,46 @@
             "type": "string"
           }
         },
-        "required": [
-          "session_id"
-        ],
+        "required": [],
         "type": "object"
       },
       "name": "phone_notifications",
       "structured_policy": "grouped_envelope",
       "validation_schema": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "session_id": {}
+                },
+                "required": [
+                  "session_id"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "device_id": {}
+                },
+                "required": [
+                  "device_id"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "alias": {}
+                },
+                "required": [
+                  "alias"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        ],
         "properties": {
           "alias": {
             "anyOf": [
@@ -2497,9 +2635,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "session_id"
-        ],
+        "required": [],
         "type": "object"
       }
     },

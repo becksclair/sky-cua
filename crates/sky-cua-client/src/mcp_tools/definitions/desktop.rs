@@ -146,13 +146,15 @@ pub(super) fn observe_constraints(can_receive_images: bool, surfaces: AgentSurfa
             &[
                 "surface",
                 "session_id",
+                "device_id",
+                "alias",
                 "include_accessibility",
                 "include_notifications",
                 "backend",
             ],
         ));
     }
-    json!({"oneOf": branches})
+    phone_selector_alternatives(json!({"oneOf": branches}))
 }
 
 pub(super) fn capture_screen_properties(surfaces: AgentSurfacePolicy) -> Value {
@@ -201,10 +203,10 @@ pub(super) fn capture_screen_constraints(surfaces: AgentSurfacePolicy) -> Value 
             &properties,
             &[("surface", "phone")],
             &["session_id"],
-            &["surface", "session_id", "backend"],
+            &["surface", "session_id", "device_id", "alias", "backend"],
         ));
     }
-    json!({"oneOf": branches})
+    phone_selector_alternatives(json!({"oneOf": branches}))
 }
 
 pub(super) fn desktop_semantic_properties(properties: Value) -> Value {

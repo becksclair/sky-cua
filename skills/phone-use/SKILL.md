@@ -14,9 +14,9 @@ requires a disabled surface.
 
 Every phone plan and execution must name this chain explicitly:
 
-1. Call `status(component="phone")` and discover devices without a session selector. Direct Companion devices use `device_id`; ADB devices use `serial`.
-2. Connect, retain the returned exact `session_id`, and pass it on every device-bound call.
-3. Call `observe(surface="phone", session_id=...)` immediately after connect and retain its exact `appshot_id`. If `profile_refresh_state=stale`, refresh and re-observe.
+1. Call `status(component="phone")` and discover devices without a session selector. Direct Companion devices expose `device_id` and, when configured in `[phone.aliases]`, a human `alias` (e.g. `phone`, `tablet`); ADB devices use `serial` and also support `alias`. Prefer `alias` when present.
+2. Connect via `alias`, `device_id`, or `serial` (exactly one — never combine `alias`/`device_id`/`serial`/`session_id`), retain the returned exact `session_id`, and pass one selector (`session_id`, `device_id`, or `alias`) on every device-bound call — never combine them. `alias` is the ergonomic shorthand for `[phone.aliases]`.
+3. Call `observe(surface="phone", session_id=...)` (or `alias`/`device_id`) immediately after connect and retain its exact `appshot_id`. If `profile_refresh_state=stale`, refresh and re-observe.
 4. Use only `available_actions`, and pass the current `appshot_id` to every state-changing call. For pointer work, also specify either screenshot-local x/y with the exact producing `phone_snapshot_id`, or accessibility/device x/y with `use_device_coordinates=true`; never pre-scale.
 5. Inspect the operation's structured result: app management requires `success=true`; other operations require a real `backend`, and `backend=none` means no operation occurred. Preserve diagnostics when reporting refusal or failure.
 6. Re-observe after the operation and prove the requested final state.
@@ -29,18 +29,18 @@ For notifications, also check `can_open` and `can_dismiss`, use current event/ac
 - Check host status with `status(component="phone")`.
 - Group connect, disconnect, and refresh under `phone_connection`, setup under `phone_setup`, and app launch/intents under `phone_app_action`.
 - Call neither discovery nor status with a session or serial selector.
-- Use the discovered `device_id` for Companion Direct or `serial` for ADB; never invent one from the other.
+- Use the discovered `device_id`/`alias` for Companion Direct or `serial`/`alias` for ADB (`alias` from `[phone.aliases]` maps to the underlying id); never invent one from the other.
 - Drive only Android devices in `device` state.
 - Treat `unauthorized` as requiring the on-device USB-debugging prompt.
 - Treat `offline`, `connecting`, `bootloader`, and `recovery` as undrivable.
 - Pair Android 11+ wireless devices with the Wireless debugging host:port and single-use pairing code.
 - Connect the serial resolved by pairing.
 - Connect before every observation or action.
-- Carry the exact `session_id` minted by connect on every device-bound call.
-- Use raw `serial` only for discovery and connect.
+- Carry one selector (`session_id`, `device_id`, or `alias` — never combine them) from connect on every device-bound call; `session_id` is the canonical post-connect handle, `alias` is the ergonomic short form.
+- Use `serial`/`device_id`/`alias` only for discovery and connect; afterwards prefer `session_id` (or a single `alias`/`device_id`) — never combine selectors.
 - Treat disconnect as invalidating the session.
-- Resolve connect targets as explicit serial, configured default, or the single authorized attached device.
-- Treat an ambiguous, missing, or unusable target as host status with `PhoneDeviceUnavailable` and no session.
+- Resolve connect targets as explicit `alias`/`device_id`/`serial`, configured default, or the single authorized attached device.
+- Treat an ambiguous, missing, or unusable target (including `PhoneAliasNotFound`) as host status with `PhoneDeviceUnavailable` and no session.
 - Confirm that a session id exists before acting.
 - Reconnect an already-connected serial to refresh its session in place and re-probe its profile and companion bootstrap.
 - Missing `adb` disables only ADB sessions. An authenticated Companion Direct device remains fully usable through its advertised capability routes.
@@ -48,7 +48,7 @@ For notifications, also check `can_open` and `can_dismiss`, use current event/ac
 
 ## Perception, profile, and routing
 
-Use `observe(surface="phone", session_id=...)` as the default perception call.
+Use `observe(surface="phone", session_id=...)` (or `alias`/`device_id`) as the default perception call.
 It returns a canonical AppShot containing a clean screenshot, foreground app,
 interactive accessibility windows/tree, consistency and coverage state, fresh
 `phone_snapshot_id`, current app, cursor state,

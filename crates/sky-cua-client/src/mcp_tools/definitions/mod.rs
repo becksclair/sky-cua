@@ -121,7 +121,7 @@ fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> 
         "observe" => Some(
             "`observe` expects one surface branch: desktop uses desktop observation \
              fields, browser requires top-level `tab_id`, and phone requires \
-             top-level `session_id`; do not mix fields from another surface. The \
+             `session_id`, `device_id`, or `alias` (alias from [phone.aliases], e.g. \"phone\", \"tablet\") — never combine them; do not mix fields from another surface. The \
              browser branch accepts only `surface`, `tab_id`, `target`, `text_limit`, \
              `element_query`, `element_offset`, `element_limit`, and `capture_timeout_ms`. \
              Every successful \
@@ -131,7 +131,7 @@ fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> 
         "capture_screen" => Some(
             "`capture_screen` is only for browser or phone. Browser capture requires \
              top-level `surface=\"browser\"` and `tab_id`; phone capture requires \
-             `surface=\"phone\"` and `session_id`. Use `capture_desktop` for \
+             `surface=\"phone\"` and `session_id`, `device_id`, or `alias`. Use `capture_desktop` for \
              desktop screenshots.",
         ),
         "phone_pointer" if phone_snapshot_id_contains_embedded_fields(arguments) => Some(
@@ -141,7 +141,7 @@ fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> 
         ),
         "phone_pointer" => Some(
             "`phone_pointer` expects one flat JSON object. For tap, provide top-level \
-             `operation`, `session_id`, `x`, `y`, and either `phone_snapshot_id` or \
+             `operation`, `session_id` (or `device_id`/`alias` from [phone.aliases] — never combine), `x`, `y`, and either `phone_snapshot_id` or \
              `use_device_coordinates=true`.",
         ),
         "browser_scroll" => Some(
@@ -226,8 +226,8 @@ fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> 
         ),
         "phone_connection" => Some(
             "`phone_connection` expects top-level `operation`. `connect` may use \
-             top-level `serial`, `backend`, `install_companion`, and `start_scrcpy`; \
-             `disconnect`/`refresh` require top-level `session_id` and do not accept \
+             one of `serial`, `device_id`, or `alias` (alias from [phone.aliases], e.g. \"phone\", \"tablet\") as mutually exclusive target, plus `backend`, `install_companion`, and `start_scrcpy`; \
+             `disconnect`/`refresh` require `session_id`, `device_id`, or `alias` and do not accept \
              connect-only fields.",
         ),
         "phone_setup" => Some(
@@ -237,32 +237,31 @@ fn schema_rejection_hint(name: &str, arguments: &Value) -> Option<&'static str> 
              `package_name`.",
         ),
         "phone_accessibility_tree" | "phone_notifications" | "phone_app_force_stop" => Some(
-            "This phone tool requires top-level `session_id` from \
-             `phone_connection(operation=\"connect\")`; app force-stop also requires \
+            "This phone tool requires `session_id`, `device_id`, or `alias` (alias from [phone.aliases]) from \
+             `phone_connection(operation=\"connect\")` — never combine them; app force-stop also requires \
              top-level `package_name`.",
         ),
         "phone_keyboard" => Some(
-            "`phone_keyboard` expects top-level `operation` and `session_id`; \
-             `type_text` uses top-level `text`, while `press_key` uses top-level \
-             `key`.",
+            "`phone_keyboard` expects `operation` and `session_id`, `device_id`, or `alias` (mutually exclusive); \
+             `type_text` uses `text`, while `press_key` uses `key`.",
         ),
         "phone_notification_action" => Some(
-            "`phone_notification_action` expects top-level `operation`, `session_id`, \
-             and `event_id`; only `operation=\"action\"` also accepts top-level \
+            "`phone_notification_action` expects `operation`, `session_id`/`device_id`/`alias`, \
+             and `event_id` (never combine session selectors); only `operation=\"action\"` also accepts \
              `action_id` from the same fresh notification event.",
         ),
         "phone_notification_reply" => Some(
-            "`phone_notification_reply` expects top-level `session_id`, `event_id`, \
+            "`phone_notification_reply` expects `session_id`/`device_id`/`alias`, `event_id`, \
              inline-reply `action_id`, and non-empty `text` from the same fresh \
              notification event.",
         ),
         "phone_app_action" => Some(
-            "`phone_app_action` expects top-level `operation` and `session_id`; \
+            "`phone_app_action` expects `operation` and `session_id`, `device_id`, or `alias`; \
              `launch` requires `package_name`, while `open_intent` requires \
              `intent_uri` and may include `package_name`.",
         ),
         "phone_app_install" => Some(
-            "`phone_app_install` expects top-level `session_id` and non-empty \
+            "`phone_app_install` expects `session_id`, `device_id`, or `alias` and non-empty \
              `apk_paths` array of host paths; there is no `apk_path` singular field.",
         ),
         "phone_pair_wireless" => Some(
@@ -532,19 +531,21 @@ fn build_grouped_tool_definitions(
             json!(["surface"]),
             capture_screen_constraints(surfaces)
         ),
-        grouped_tool(
+        grouped_tool_with_constraints(
             "phone_accessibility_tree",
-            "Read the connected phone accessibility tree, optionally bounded by node_limit.",
+            "Read the connected phone accessibility tree, optionally bounded by node_limit. Uses an alias from [phone.aliases] (e.g. \"phone\", \"tablet\"), a direct device_id, or an existing session_id — never combine them.",
             READ_ONLY_TOOL,
             with_phone_session(json!({"node_limit": optional_limit_schema()})),
-            json!(["session_id"])
+            json!([]),
+            phone_selector_alternatives(json!({"required": ["session_id"]}))
         ),
-        grouped_tool(
+        grouped_tool_with_constraints(
             "phone_notifications",
-            "Read recent connected-phone notifications.",
+            "Read recent connected-phone notifications. Uses an alias from [phone.aliases], a direct device_id, or a session_id.",
             READ_ONLY_TOOL,
             with_phone_session(json!({"limit": optional_limit_schema()})),
-            json!(["session_id"])
+            json!([]),
+            phone_selector_alternatives(json!({"required": ["session_id"]}))
         ),
         grouped_tool_with_constraints(
             "capture_desktop",
