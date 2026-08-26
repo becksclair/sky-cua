@@ -450,6 +450,7 @@ fn phone_response_variants_preserve_type_tags() {
                     device: None,
                     transport_id: Some("3".to_string()),
                     primary: false,
+                    alias: None,
                 }],
                 adb_path: Some("/usr/bin/adb".to_string()),
                 adb_version: None,

@@ -26,6 +26,7 @@ fn selector() -> PhoneSessionSelector {
         session_id: Some("sess-1".to_string()),
         serial: Some("emulator-5554".to_string()),
         device_id: None,
+        alias: None,
         appshot_id: None,
     }
 }

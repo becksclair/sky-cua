@@ -820,6 +820,23 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "app_id": {
             "anyOf": [
               {
@@ -1539,6 +1556,23 @@
           }
         ],
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "app_id": {
             "anyOf": [
               {
@@ -1910,6 +1944,23 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "backend": {
             "anyOf": [
               {
@@ -2074,6 +2125,23 @@
           }
         ],
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "backend": {
             "anyOf": [
               {
@@ -2178,6 +2246,23 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "device_id": {
             "anyOf": [
               {
@@ -2221,6 +2306,23 @@
       "validation_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "device_id": {
             "anyOf": [
               {
@@ -2285,6 +2387,23 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "device_id": {
             "anyOf": [
               {
@@ -2328,6 +2447,23 @@
       "validation_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "device_id": {
             "anyOf": [
               {
@@ -4326,6 +4462,23 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "appshot_id": {
             "anyOf": [
               {
@@ -4454,6 +4607,23 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "alias": {
+                    "anyOf": [
+                      {
+                        "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                        "minLength": 1,
+                        "pattern": ".*\\S.*",
+                        "type": "string"
+                      },
+                      {
+                        "const": "",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "backend": {
                     "anyOf": [
                       {
@@ -4558,9 +4728,25 @@
                       "device_id",
                       "operation"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation"
+                    ]
                   }
                 ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "device_id": {
                     "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
                     "minLength": 1,
@@ -4609,9 +4795,25 @@
                       "device_id",
                       "operation"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation"
+                    ]
                   }
                 ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "device_id": {
                     "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
                     "minLength": 1,
@@ -4632,6 +4834,23 @@
           }
         ],
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "appshot_id": {
             "anyOf": [
               {
@@ -4857,6 +5076,23 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "allow_downgrade": {
             "anyOf": [
               {
@@ -4980,9 +5216,25 @@
                       "device_id",
                       "operation"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation"
+                    ]
                   }
                 ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "allow_downgrade": {
                     "anyOf": [
                       {
@@ -5045,9 +5297,27 @@
                       "operation",
                       "screen"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "operation": {},
+                      "screen": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation",
+                      "screen"
+                    ]
                   }
                 ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "device_id": {
                     "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
                     "minLength": 1,
@@ -5123,6 +5393,23 @@
           }
         ],
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "allow_downgrade": {
             "anyOf": [
               {
@@ -5233,6 +5520,23 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "appshot_id": {
             "anyOf": [
               {
@@ -5304,6 +5608,23 @@
       "validation_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "appshot_id": {
             "anyOf": [
               {
@@ -9266,6 +9587,23 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "appshot_id": {
             "anyOf": [
               {
@@ -9430,9 +9768,29 @@
                       "x",
                       "y"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "operation": {},
+                      "x": {},
+                      "y": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation",
+                      "x",
+                      "y"
+                    ]
                   }
                 ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "appshot_id": {
                     "anyOf": [
                       {
@@ -9549,9 +9907,33 @@
                       "end_x",
                       "end_y"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "end_x": {},
+                      "end_y": {},
+                      "operation": {},
+                      "start_x": {},
+                      "start_y": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation",
+                      "start_x",
+                      "start_y",
+                      "end_x",
+                      "end_y"
+                    ]
                   }
                 ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "appshot_id": {
                     "anyOf": [
                       {
@@ -9635,6 +10017,23 @@
           }
         ],
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "appshot_id": {
             "anyOf": [
               {
@@ -9786,6 +10185,23 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "appshot_id": {
             "anyOf": [
               {
@@ -9877,9 +10293,27 @@
                       "operation",
                       "text"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "operation": {},
+                      "text": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation",
+                      "text"
+                    ]
                   }
                 ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "appshot_id": {
                     "anyOf": [
                       {
@@ -9941,9 +10375,27 @@
                       "operation",
                       "key"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "key": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation",
+                      "key"
+                    ]
                   }
                 ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "appshot_id": {
                     "anyOf": [
                       {
@@ -9984,6 +10436,23 @@
           }
         ],
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "appshot_id": {
             "anyOf": [
               {
@@ -10108,6 +10577,23 @@
             "pattern": ".*\\S.*",
             "type": "string"
           },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "appshot_id": {
             "anyOf": [
               {
@@ -10197,9 +10683,27 @@
                       "operation",
                       "event_id"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "event_id": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation",
+                      "event_id"
+                    ]
                   }
                 ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "appshot_id": {
                     "anyOf": [
                       {
@@ -10263,9 +10767,27 @@
                       "operation",
                       "event_id"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "event_id": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation",
+                      "event_id"
+                    ]
                   }
                 ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "appshot_id": {
                     "anyOf": [
                       {
@@ -10333,11 +10855,31 @@
                       "event_id",
                       "action_id"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "action_id": {},
+                      "alias": {},
+                      "event_id": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation",
+                      "event_id",
+                      "action_id"
+                    ]
                   }
                 ],
                 "properties": {
                   "action_id": {
                     "description": "Exact action_id from that same notification event.",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
                     "minLength": 1,
                     "pattern": ".*\\S.*",
                     "type": "string"
@@ -10388,6 +10930,23 @@
             "minLength": 1,
             "pattern": ".*\\S.*",
             "type": "string"
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "appshot_id": {
             "anyOf": [
@@ -10481,6 +11040,23 @@
             "pattern": ".*\\S.*",
             "type": "string"
           },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "appshot_id": {
             "anyOf": [
               {
@@ -10564,6 +11140,23 @@
             "minLength": 1,
             "pattern": ".*\\S.*",
             "type": "string"
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "appshot_id": {
             "anyOf": [
@@ -10680,6 +11273,23 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "device_id": {
             "anyOf": [
               {
@@ -10770,9 +11380,27 @@
                       "operation",
                       "package_name"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "operation": {},
+                      "package_name": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation",
+                      "package_name"
+                    ]
                   }
                 ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "device_id": {
                     "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
                     "minLength": 1,
@@ -10821,9 +11449,27 @@
                       "operation",
                       "intent_uri"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "intent_uri": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation",
+                      "intent_uri"
+                    ]
                   }
                 ],
                 "properties": {
+                  "alias": {
+                    "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                    "minLength": 1,
+                    "pattern": ".*\\S.*",
+                    "type": "string"
+                  },
                   "device_id": {
                     "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
                     "minLength": 1,
@@ -10867,6 +11513,23 @@
           }
         ],
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "device_id": {
             "anyOf": [
               {
@@ -10954,6 +11617,23 @@
       "input_schema": {
         "additionalProperties": false,
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "allow_downgrade": {
             "anyOf": [
               {
@@ -11088,11 +11768,39 @@
                   "apk_paths"
                 ],
                 "type": "object"
+              },
+              {
+                "properties": {
+                  "alias": {},
+                  "apk_paths": {}
+                },
+                "required": [
+                  "alias",
+                  "apk_paths"
+                ],
+                "type": "object"
               }
             ]
           }
         ],
         "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "allow_downgrade": {
             "anyOf": [
               {
@@ -11233,6 +11941,23 @@
                 "enum": [
                   "sha256"
                 ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
                 "type": "string"
               },
               {
@@ -11606,6 +12331,16 @@
                   "device_id",
                   "operation"
                 ]
+              },
+              {
+                "properties": {
+                  "alias": {},
+                  "operation": {}
+                },
+                "required": [
+                  "alias",
+                  "operation"
+                ]
               }
             ]
           },
@@ -11641,6 +12376,23 @@
                 "enum": [
                   "sha256"
                 ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
                 "type": "string"
               },
               {
@@ -12032,6 +12784,23 @@
               }
             ]
           },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "appshot_id": {
             "anyOf": [
               {
@@ -12394,6 +13163,16 @@
                   "device_id",
                   "operation"
                 ]
+              },
+              {
+                "properties": {
+                  "alias": {},
+                  "operation": {}
+                },
+                "required": [
+                  "alias",
+                  "operation"
+                ]
               }
             ]
           },
@@ -12430,6 +13209,23 @@
                 "enum": [
                   "sha256"
                 ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
                 "type": "string"
               },
               {
@@ -12821,6 +13617,23 @@
               }
             ]
           },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "appshot_id": {
             "anyOf": [
               {
@@ -13188,6 +14001,16 @@
                   "device_id",
                   "operation"
                 ]
+              },
+              {
+                "properties": {
+                  "alias": {},
+                  "operation": {}
+                },
+                "required": [
+                  "alias",
+                  "operation"
+                ]
               }
             ]
           },
@@ -13223,6 +14046,23 @@
                 "enum": [
                   "sha256"
                 ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
                 "type": "string"
               },
               {
@@ -13608,6 +14448,23 @@
                 "enum": [
                   "sha256"
                 ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
                 "type": "string"
               },
               {
@@ -14072,6 +14929,16 @@
                       "device_id",
                       "operation"
                     ]
+                  },
+                  {
+                    "properties": {
+                      "alias": {},
+                      "operation": {}
+                    },
+                    "required": [
+                      "alias",
+                      "operation"
+                    ]
                   }
                 ]
               },
@@ -14138,6 +15005,23 @@
                 "enum": [
                   "sha256"
                 ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
                 "type": "string"
               },
               {
@@ -14618,6 +15502,23 @@
               }
             ]
           },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "appshot_id": {
             "anyOf": [
               {
@@ -14994,6 +15895,16 @@
                   "device_id",
                   "operation"
                 ]
+              },
+              {
+                "properties": {
+                  "alias": {},
+                  "operation": {}
+                },
+                "required": [
+                  "alias",
+                  "operation"
+                ]
               }
             ]
           },
@@ -15037,6 +15948,23 @@
                 "enum": [
                   "sha256"
                 ],
+                "type": "string"
+              },
+              {
+                "const": "",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                "minLength": 1,
+                "pattern": ".*\\S.*",
                 "type": "string"
               },
               {

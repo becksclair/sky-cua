@@ -201,6 +201,12 @@ pub struct PhoneConfig {
     pub profiles: BTreeMap<String, PhoneProfileConfig>,
     #[serde(default)]
     pub primary_target_models: Vec<String>,
+    /// Human-readable aliases for enrolled devices (`alias -> device_id`
+    /// for CompanionDirect or `alias -> serial` for ADB). Agents can
+    /// connect/select by alias instead of the raw identifier. Values are
+    /// resolved at connect time; an unknown alias fails closed.
+    #[serde(default)]
+    pub aliases: BTreeMap<String, String>,
 }
 
 /// Non-secret operator selection for one named phone profile. Credentials stay
@@ -340,6 +346,7 @@ pub struct ResolvedPhoneSelection {
     pub direct_enrollment_ttl_ms: u64,
     pub direct_state_path: Option<String>,
     pub profiles: BTreeMap<String, PhoneProfileConfig>,
+    pub aliases: BTreeMap<String, String>,
 }
 
 /// Every `SKY_CUA_*` environment key declared as a `pub const *_ENV` in this
@@ -734,7 +741,21 @@ pub fn resolve_phone_selection(phone: &PhoneConfig) -> ResolvedPhoneSelection {
         direct_state_path: env_string(PHONE_DIRECT_STATE_PATH_ENV)
             .or_else(|| normalize(phone.direct_state_path.clone())),
         profiles: phone.profiles.clone(),
+        aliases: normalize_aliases(&phone.aliases),
     }
+}
+
+fn normalize_aliases(raw: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (k, v) in raw {
+        let key = k.trim().to_string();
+        let val = v.trim().to_string();
+        if key.is_empty() || val.is_empty() {
+            continue;
+        }
+        out.insert(key, val);
+    }
+    out
 }
 
 fn normalize(value: Option<String>) -> Option<String> {
@@ -1101,6 +1122,56 @@ required_capabilities = ["sms.read"]
                 "Redmi Pad 15 Pro".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn parses_phone_aliases() {
+        let config = parse_machine_config(
+            r#"
+[phone.aliases]
+phone = "f6e5da20-d8df-4de0-ae4b-2fddf2791d17"
+tablet = "0b44dcbb-a6a4-4836-8b17-617a786d3ffa"
+"#,
+        )
+        .expect("valid aliases");
+        assert_eq!(
+            config.phone.aliases.get("phone").map(String::as_str),
+            Some("f6e5da20-d8df-4de0-ae4b-2fddf2791d17")
+        );
+        assert_eq!(
+            config.phone.aliases.get("tablet").map(String::as_str),
+            Some("0b44dcbb-a6a4-4836-8b17-617a786d3ffa")
+        );
+        let resolved = resolve_phone_selection(&config.phone);
+        assert_eq!(
+            resolved.aliases.get("phone").map(String::as_str),
+            Some("f6e5da20-d8df-4de0-ae4b-2fddf2791d17")
+        );
+    }
+
+    #[test]
+    fn phone_aliases_are_trimmed_and_empty_entries_ignored() {
+        let config = parse_machine_config(
+            r#"
+[phone.aliases]
+phone = "  f6e5da20-d8df-4de0-ae4b-2fddf2791d17  "
+empty = "   "
+"#,
+        )
+        .expect("valid aliases with whitespace");
+        // Raw config keeps the original whitespace; resolved view is trimmed
+        // and drops empty entries.
+        assert_eq!(
+            config.phone.aliases.get("phone").map(String::as_str),
+            Some("  f6e5da20-d8df-4de0-ae4b-2fddf2791d17  ")
+        );
+        let resolved = resolve_phone_selection(&config.phone);
+        assert_eq!(resolved.aliases.len(), 1);
+        assert_eq!(
+            resolved.aliases.get("phone").map(String::as_str),
+            Some("f6e5da20-d8df-4de0-ae4b-2fddf2791d17")
+        );
+        assert!(!resolved.aliases.contains_key("empty"));
     }
 
     #[test]

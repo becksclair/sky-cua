@@ -722,6 +722,11 @@ pub struct PhoneDevice {
     /// `false` and is omitted from the wire when unset.
     #[serde(default, skip_serializing_if = "is_false")]
     pub primary: bool,
+    /// Operator-configured human alias for this device (`[phone.aliases]`).
+    /// Present only when the configured alias value matches this device's
+    /// `device_id` (CompanionDirect) or `serial` (ADB). Omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
 }
 
 /// Response for `phone_list_devices`.
@@ -879,6 +884,10 @@ pub struct PhoneSessionSelector {
     pub serial: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
+    /// Human alias mapped in `[phone.aliases]`. Mutually exclusive with
+    /// `serial`/`device_id`/`session_id`; resolved to the underlying id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     /// Canonical AppShot required before a state-changing phone operation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appshot_id: Option<String>,
@@ -945,6 +954,10 @@ pub struct PhoneConnectRequest {
     /// Stable Companion device id. Mutually exclusive with `serial`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
+    /// Human alias from `[phone.aliases]`. Mutually exclusive with
+    /// `serial`/`device_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<PhoneBackendKind>,
     #[serde(default, skip_serializing_if = "is_false")]

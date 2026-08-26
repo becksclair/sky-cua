@@ -274,6 +274,10 @@ impl PhoneManager {
         let Some((device_id, epoch)) = self.direct_identity(session_id) else {
             return Some(AppShotRejectionReason::WrongSession);
         };
+        // Alias is mutually exclusive with device_id/serial in the selector.
+        if selector.alias.is_some() && (selector.device_id.is_some() || selector.serial.is_some()) {
+            return Some(AppShotRejectionReason::WrongTarget);
+        }
         if selector
             .device_id
             .as_deref()
@@ -287,6 +291,14 @@ impl PhoneManager {
             .is_some_and(|value| value != self.serial_of(session_id))
         {
             return Some(AppShotRejectionReason::WrongTarget);
+        }
+        if let Some(alias) = selector.alias.as_deref() {
+            let Some(target) = self.selection.aliases.get(alias) else {
+                return Some(AppShotRejectionReason::WrongTarget);
+            };
+            if target != &device_id && target != &self.serial_of(session_id) {
+                return Some(AppShotRejectionReason::WrongTarget);
+            }
         }
         match &shot.capture {
             AppShotCapture::Phone {
@@ -850,10 +862,12 @@ impl PhoneManager {
                     device: None,
                     transport_id: None,
                     primary: false,
+                    alias: None,
                 });
             }
         }
         self.mark_primary_targets(&mut response.devices);
+        self.populate_aliases(&mut response.devices);
         response
     }
 
@@ -880,6 +894,32 @@ impl PhoneManager {
         // theirs. `sort_by_key` is stable, so `!primary` (false < true) front-loads
         // the matches without reordering within either group.
         devices.sort_by_key(|device| !device.primary);
+    }
+
+    fn populate_aliases(&self, devices: &mut [sky_cua_platform::model::PhoneDevice]) {
+        if self.selection.aliases.is_empty() {
+            return;
+        }
+        // Build reverse lookup: target value -> alias (first alias wins on collision).
+        let mut reverse: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+        for (alias, target) in &self.selection.aliases {
+            reverse.entry(target.as_str()).or_insert(alias.as_str());
+        }
+        for device in devices.iter_mut() {
+            if let Some(alias) = device
+                .device_id
+                .as_deref()
+                .and_then(|id| reverse.get(id).copied())
+            {
+                device.alias = Some(alias.to_string());
+                continue;
+            }
+            if !device.serial.is_empty()
+                && let Some(alias) = reverse.get(device.serial.as_str()).copied()
+            {
+                device.alias = Some(alias.to_string());
+            }
+        }
     }
 
     /// Run the real `adb pair host:port code` flow. The pairing code never
@@ -930,7 +970,10 @@ impl PhoneManager {
     /// list, and registers the session. On a fatal resolution failure the honest
     /// host-status view is returned rather than a fabricated session.
     async fn connect(&mut self, request: PhoneConnectRequest) -> PhoneResponse {
-        if request.serial.is_some() && request.device_id.is_some() {
+        let alias_count = usize::from(request.serial.is_some())
+            + usize::from(request.device_id.is_some())
+            + usize::from(request.alias.is_some());
+        if alias_count > 1 {
             return PhoneResponse::Status(PhoneStatusReport {
                 enabled: true,
                 adb_available: false,
@@ -952,10 +995,104 @@ impl PhoneManager {
                 devices: Vec::new(),
                 diagnostics: vec![DiagnosticEntry {
                     code: "PhoneActionRejected".into(),
-                    message: "phone_connect serial and device_id are mutually exclusive".into(),
+                    message: "phone_connect serial, device_id and alias are mutually exclusive"
+                        .into(),
                     details: None,
                 }],
             });
+        }
+        if let Some(alias) = request.alias.as_deref() {
+            let Some(target) = self.selection.aliases.get(alias).cloned() else {
+                return PhoneResponse::Status(PhoneStatusReport {
+                    enabled: true,
+                    adb_available: false,
+                    adb_path: None,
+                    adb_version: None,
+                    adb_server_running: None,
+                    scrcpy_available: false,
+                    scrcpy_path: None,
+                    scrcpy_version: None,
+                    companion_enabled: self.selection.companion_enabled,
+                    mdns_available: false,
+                    default_serial: None,
+                    default_backend: PhoneBackendKind::None,
+                    sessions: self
+                        .sessions
+                        .values()
+                        .map(|entry| entry.session.clone())
+                        .collect(),
+                    devices: Vec::new(),
+                    diagnostics: vec![DiagnosticEntry {
+                        code: "PhoneAliasNotFound".into(),
+                        message: format!(
+                            "phone alias {alias:?} is not configured in [phone.aliases]"
+                        ),
+                        details: None,
+                    }],
+                });
+            };
+            // Prefer direct device_id when the mapped value matches a known
+            // direct device; otherwise treat it as an ADB serial. For offline
+            // direct devices the provider cache is empty, so also treat a
+            // UUID-shaped value as a direct id and probe the direct path
+            // first; if that probe fails we fall through to the ADB path only
+            // when the value also looks like a serial (contains ':').
+            let is_direct = self
+                .direct_provider
+                .as_ref()
+                .is_some_and(|p| p.device(&target).is_some())
+                || self.sessions.values().any(|e| {
+                    matches!(e.session.connection, Some(PhoneConnectionIdentity::CompanionDirect { device_id: ref id, .. }) if id == &target)
+                });
+            let is_uuid = is_uuid_format(&target);
+            if is_direct || is_uuid {
+                let res = self.connect_direct(&target).await;
+                // UUID aliases that are offline should surface the direct
+                // “device offline” diagnostic, not an ADB mis-route. Only
+                // fall back to ADB when the alias was not a known direct
+                // device and the value also looks like a host:port serial.
+                if is_direct {
+                    return res;
+                }
+                if let PhoneResponse::Connected(_) = res {
+                    return res;
+                }
+                if !target.contains(':') {
+                    return res;
+                }
+                // Fall through to ADB serial handling for host:port-like
+                // values that happened to be UUID-shaped but are really
+                // serials (defensive; not expected in practice).
+            }
+            // Treat as ADB serial; reuse the serial connect path without
+            // going through the auto-connect/default logic.
+            if let Some(session_id) = self.session_id_for_serial(&target) {
+                let allow_install = self.operator_auto_install() || request.install_companion;
+                self.rebuild_session(
+                    &session_id,
+                    PhoneCapabilityRefreshState::Refreshed,
+                    allow_install,
+                    request.backend,
+                )
+                .await;
+                if request_wants_scrcpy(&request)
+                    && self
+                        .sessions
+                        .get(&session_id)
+                        .is_some_and(|entry| entry.scrcpy.is_none())
+                {
+                    self.relaunch_scrcpy_on_reconnect(&session_id).await;
+                }
+                if let Some(entry) = self.sessions.get(&session_id) {
+                    return PhoneResponse::Connected(entry.session.clone());
+                }
+            }
+            // Fall through to the serial connect path by synthesizing a
+            // serial request.
+            let mut serial_req = request;
+            serial_req.alias = None;
+            serial_req.serial = Some(target);
+            return Box::pin(self.connect(serial_req)).await;
         }
         if let Some(device_id) = request.device_id.as_deref() {
             return self.connect_direct(device_id).await;
@@ -1678,6 +1815,16 @@ impl PhoneManager {
     /// explicit `session_id`, then a `serial` lookup, then — when exactly one
     /// session exists — that single session.
     fn resolve_session_id(&self, selector: &PhoneSessionSelector) -> Option<String> {
+        // Alias is mutually exclusive with the other selectors. Fail closed
+        // instead of silently ignoring one (schema enforces this for MCP, but
+        // direct ServiceRequest callers bypass it).
+        if selector.alias.is_some()
+            && (selector.serial.is_some()
+                || selector.device_id.is_some()
+                || selector.session_id.is_some())
+        {
+            return None;
+        }
         if let Some(session_id) = selector.session_id.as_deref()
             && self.sessions.contains_key(session_id)
         {
@@ -1695,9 +1842,24 @@ impl PhoneManager {
         {
             return Some(session_id.clone());
         }
+        if let Some(alias) = selector.alias.as_deref()
+            && let Some(target) = self.selection.aliases.get(alias)
+            && let Some((session_id, _)) = self.sessions.iter().find(|(_, entry)| {
+                matches!(entry.session.connection, Some(PhoneConnectionIdentity::CompanionDirect { device_id: ref id, .. }) if id == target)
+            })
+        {
+            return Some(session_id.clone());
+        }
+        if let Some(alias) = selector.alias.as_deref()
+            && let Some(target) = self.selection.aliases.get(alias)
+            && let Some(session_id) = self.session_id_for_serial(target)
+        {
+            return Some(session_id);
+        }
         if selector.session_id.is_none()
             && selector.serial.is_none()
             && selector.device_id.is_none()
+            && selector.alias.is_none()
             && self.sessions.len() == 1
         {
             return self.sessions.keys().next().cloned();
@@ -2020,6 +2182,27 @@ impl PhoneManager {
 /// explicit `start_scrcpy` flag, or a request that selects the scrcpy backend.
 fn request_wants_scrcpy(request: &PhoneConnectRequest) -> bool {
     request.start_scrcpy || request.backend == Some(PhoneBackendKind::Scrcpy)
+}
+
+fn is_uuid_format(value: &str) -> bool {
+    // Strict 8-4-4-4-12 hex, case-insensitive. Avoids the loose
+    // `len>=32 && contains('-')` that would mis-route an ADB serial that
+    // happens to contain a hyphen.
+    if value.len() != 36 {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    const HYPHENS: [usize; 4] = [8, 13, 18, 23];
+    for (i, b) in bytes.iter().enumerate() {
+        if HYPHENS.contains(&i) {
+            if *b != b'-' {
+                return false;
+            }
+        } else if !b.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+    true
 }
 
 /// Current wall-clock time in milliseconds since the Unix epoch.

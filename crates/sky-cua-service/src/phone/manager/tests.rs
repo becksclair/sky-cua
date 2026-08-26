@@ -265,6 +265,7 @@ async fn direct_companion_status_dispatches_idempotently_at_current_epoch() {
     let connected = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: None,
+            alias: None,
             device_id: Some("direct-device".into()),
             backend: None,
             install_companion: false,
@@ -279,6 +280,7 @@ async fn direct_companion_status_dispatches_idempotently_at_current_epoch() {
         .handle(PhoneRequest::CompanionStatus(PhoneCompanionStatusRequest {
             session: PhoneSessionSelector {
                 session_id: Some(session_id),
+                alias: None,
                 serial: None,
                 device_id: Some("direct-device".into()),
                 appshot_id: None,
@@ -331,6 +333,7 @@ async fn direct_capability_refresh_reprobes_companion_without_adb() {
     let PhoneResponse::Connected(session) = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: None,
+            alias: None,
             device_id: Some("direct-refresh".into()),
             backend: None,
             install_companion: false,
@@ -348,6 +351,7 @@ async fn direct_capability_refresh_reprobes_companion_without_adb() {
             PhoneRefreshCapabilitiesRequest {
                 session: PhoneSessionSelector {
                     session_id: Some(session.session_id),
+                    alias: None,
                     serial: None,
                     device_id: Some("direct-refresh".into()),
                     appshot_id: None,
@@ -412,6 +416,7 @@ async fn direct_phone_content_describe_and_release_dispatch_to_companion() {
     let PhoneResponse::Connected(session) = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: None,
+            alias: None,
             device_id: Some("direct-content".into()),
             backend: None,
             install_companion: false,
@@ -423,6 +428,7 @@ async fn direct_phone_content_describe_and_release_dispatch_to_companion() {
     };
     let selector = PhoneSessionSelector {
         session_id: Some(session.session_id),
+        alias: None,
         serial: None,
         device_id: Some("direct-content".into()),
         appshot_id: None,
@@ -460,6 +466,7 @@ async fn direct_epoch_supersession_replaces_old_manager_session() {
     let request = || {
         PhoneRequest::Connect(PhoneConnectRequest {
             serial: None,
+            alias: None,
             device_id: Some("direct-device".into()),
             backend: None,
             install_companion: false,
@@ -671,6 +678,7 @@ fn selector(session_id: &str) -> PhoneSessionSelector {
         session_id: Some(session_id.to_string()),
         serial: None,
         device_id: None,
+        alias: None,
         appshot_id: None,
     }
 }
@@ -816,6 +824,7 @@ async fn direct_observe_registers_its_appshot_as_an_actionable_phone_snapshot() 
     let connected = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: None,
+            alias: None,
             device_id: Some("direct-device".into()),
             backend: None,
             install_companion: false,
@@ -893,6 +902,7 @@ async fn direct_list_and_connect_do_not_require_adb_or_fake_a_serial() {
     let connected = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: None,
+            alias: None,
             device_id: Some("direct-device".into()),
             backend: None,
             install_companion: false,
@@ -919,6 +929,7 @@ async fn direct_observe_invalidation_does_not_treat_missing_adb_serial_as_discon
     let connected = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: None,
+            alias: None,
             device_id: Some("direct-device".into()),
             backend: None,
             install_companion: false,
@@ -988,6 +999,7 @@ async fn stale_direct_profile_refreshes_over_the_direct_link_without_adb() {
     let connected = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: None,
+            alias: None,
             device_id: Some("direct-device".into()),
             backend: None,
             install_companion: false,
@@ -1085,6 +1097,7 @@ async fn direct_press_key_dispatches_current_epoch_without_adb_or_replay() {
     let connected = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: None,
+            alias: None,
             device_id: Some("direct-device".into()),
             backend: None,
             install_companion: false,
@@ -1103,6 +1116,7 @@ async fn direct_press_key_dispatches_current_epoch_without_adb_or_replay() {
         .handle(PhoneRequest::PressKey(PhonePressKeyRequest {
             session: PhoneSessionSelector {
                 session_id: Some(session_id),
+                alias: None,
                 serial: None,
                 device_id: Some("direct-device".into()),
                 appshot_id: Some("shot-valid".into()),
@@ -1128,6 +1142,7 @@ async fn direct_appshot_identity_mismatch_fence_rejects_session_device_and_epoch
     let connected = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: None,
+            alias: None,
             device_id: Some("direct-device".into()),
             backend: None,
             install_companion: false,
@@ -1237,6 +1252,7 @@ async fn direct_missing_appshot_rejects_grouped_mutation_without_dispatch() {
     let connected = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: None,
+            alias: None,
             device_id: Some("direct-device".into()),
             backend: None,
             install_companion: false,
@@ -1251,6 +1267,7 @@ async fn direct_missing_appshot_rejects_grouped_mutation_without_dispatch() {
             sky_cua_platform::model::PhoneFeatureCall {
                 session: PhoneSessionSelector {
                     session_id: Some(session.session_id),
+                    alias: None,
                     serial: None,
                     device_id: Some("direct-device".into()),
                     appshot_id: None,
@@ -1327,6 +1344,7 @@ async fn direct_app_launch_appshot_authorizes_next_fenced_action_without_adb() {
     let connected = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: None,
+            alias: None,
             device_id: Some("direct-device".into()),
             backend: None,
             install_companion: false,
@@ -1342,6 +1360,7 @@ async fn direct_app_launch_appshot_authorizes_next_fenced_action_without_adb() {
             sky_cua_platform::model::PhoneAppLaunchRequest {
                 session: PhoneSessionSelector {
                     session_id: Some(session_id.clone()),
+                    alias: None,
                     serial: None,
                     device_id: Some("direct-device".into()),
                     appshot_id: None,
@@ -1363,6 +1382,7 @@ async fn direct_app_launch_appshot_authorizes_next_fenced_action_without_adb() {
         .handle(PhoneRequest::PressKey(PhonePressKeyRequest {
             session: PhoneSessionSelector {
                 session_id: Some(session_id),
+                alias: None,
                 serial: None,
                 device_id: Some("direct-device".into()),
                 appshot_id: Some(destination.appshot_id.clone()),
@@ -1385,6 +1405,7 @@ async fn direct_connect_rejects_serial_and_device_id_without_side_effect() {
     let response = manager
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.into()),
+            alias: None,
             device_id: Some("direct-device".into()),
             backend: None,
             install_companion: false,
@@ -1408,6 +1429,7 @@ async fn connect(manager: &mut PhoneManager) -> sky_cua_platform::model::PhoneSe
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.to_string()),
             device_id: None,
+            alias: None,
             backend: None,
             install_companion: false,
             start_scrcpy: false,
@@ -1534,6 +1556,7 @@ async fn connect_rejects_serial_absent_from_device_list() {
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some("phone-smoke-nonexistent-serial".to_string()),
             device_id: None,
+            alias: None,
             backend: None,
             install_companion: false,
             start_scrcpy: false,
@@ -3244,6 +3267,7 @@ async fn connect_with_start_scrcpy_missing_binary_degrades_with_diagnostic() {
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.to_string()),
             device_id: None,
+            alias: None,
             backend: None,
             install_companion: false,
             start_scrcpy: true,
@@ -3359,6 +3383,7 @@ async fn reconnect_with_start_scrcpy_relaunches_dead_mirror_via_adoption() {
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.to_string()),
             device_id: None,
+            alias: None,
             backend: None,
             install_companion: false,
             start_scrcpy: true,
@@ -3423,6 +3448,7 @@ async fn reconnect_with_start_scrcpy_surfaces_diagnostic_when_relaunch_fails() {
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.to_string()),
             device_id: None,
+            alias: None,
             backend: None,
             install_companion: false,
             start_scrcpy: true,
@@ -4099,6 +4125,7 @@ async fn wireless_connect_failure_surfaces_connect_failed_diagnostic() {
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(WIRELESS_SERIAL.to_string()),
             device_id: None,
+            alias: None,
             backend: None,
             install_companion: false,
             start_scrcpy: false,
@@ -4822,6 +4849,7 @@ async fn connect_auto_connects_configured_wireless_default() {
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.to_string()),
             device_id: None,
+            alias: None,
             backend: None,
             install_companion: false,
             start_scrcpy: false,
@@ -4860,6 +4888,7 @@ async fn connect_does_not_auto_connect_when_disabled() {
         .handle(PhoneRequest::Connect(PhoneConnectRequest {
             serial: Some(SERIAL.to_string()),
             device_id: None,
+            alias: None,
             backend: None,
             install_companion: false,
             start_scrcpy: false,

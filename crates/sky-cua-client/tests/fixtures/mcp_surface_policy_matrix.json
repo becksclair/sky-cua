@@ -18,6 +18,7 @@
         "capture_screen": {
           "component_enum": null,
           "property_names": [
+            "alias",
             "backend",
             "device_id",
             "session_id",
@@ -50,6 +51,7 @@
         "observe": {
           "component_enum": null,
           "property_names": [
+            "alias",
             "backend",
             "device_id",
             "include_accessibility",
@@ -185,6 +187,7 @@
         "capture_screen": {
           "component_enum": null,
           "property_names": [
+            "alias",
             "backend",
             "device_id",
             "session_id",
@@ -225,6 +228,7 @@
         "observe": {
           "component_enum": null,
           "property_names": [
+            "alias",
             "backend",
             "capture_timeout_ms",
             "device_id",
@@ -375,6 +379,7 @@
         "capture_screen": {
           "component_enum": null,
           "property_names": [
+            "alias",
             "backend",
             "device_id",
             "session_id",
@@ -410,6 +415,7 @@
         "observe": {
           "component_enum": null,
           "property_names": [
+            "alias",
             "app_id",
             "backend",
             "detail",
@@ -604,6 +610,7 @@
         "capture_screen": {
           "component_enum": null,
           "property_names": [
+            "alias",
             "backend",
             "device_id",
             "session_id",
@@ -647,6 +654,7 @@
         "observe": {
           "component_enum": null,
           "property_names": [
+            "alias",
             "app_id",
             "backend",
             "capture_timeout_ms",

@@ -30,23 +30,39 @@ pub(super) fn phone_device_id_schema() -> Value {
     })
 }
 
-/// Replace post-connect `session_id` requirements with an explicit typed
-/// selector alternative. Serial remains accepted for legacy callers, while a
-/// direct Companion link can validate using only `device_id`.
+pub(super) fn phone_alias_schema() -> Value {
+    json!({
+        "type": "string",
+        "minLength": 1,
+        "pattern": ".*\\S.*",
+        "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\")."
+    })
+}
+
+/// Replace post-connect `session_id` requirements with typed selector
+/// alternatives: `session_id` (active session), `device_id` (direct id), or
+/// human `alias` mapped in `[phone.aliases]`.
 fn phone_selector_alternatives(mut schema: Value) -> Value {
     let device_schema = schema
         .get("properties")
         .and_then(|properties| properties.get("device_id"))
         .cloned()
         .unwrap_or_else(phone_device_id_schema);
+    let alias_schema = schema
+        .get("properties")
+        .and_then(|properties| properties.get("alias"))
+        .cloned()
+        .unwrap_or_else(phone_alias_schema);
 
-    fn visit(value: &mut Value, device_schema: &Value) {
+    fn visit(value: &mut Value, device_schema: &Value, alias_schema: &Value) {
         match value {
-            Value::Array(items) => items.iter_mut().for_each(|item| visit(item, device_schema)),
+            Value::Array(items) => items
+                .iter_mut()
+                .for_each(|item| visit(item, device_schema, alias_schema)),
             Value::Object(object) => {
                 object
                     .values_mut()
-                    .for_each(|item| visit(item, device_schema));
+                    .for_each(|item| visit(item, device_schema, alias_schema));
                 let Some(Value::Array(required)) = object.remove("required") else {
                     return;
                 };
@@ -70,22 +86,26 @@ fn phone_selector_alternatives(mut schema: Value) -> Value {
                 let mut session_required = vec![Value::String("session_id".into())];
                 session_required.extend(rest.clone());
                 let mut device_required = vec![Value::String("device_id".into())];
-                device_required.extend(rest);
+                device_required.extend(rest.clone());
+                let mut alias_required = vec![Value::String("alias".into())];
+                alias_required.extend(rest);
                 if let Some(Value::Object(properties)) = object.get_mut("properties") {
                     properties.insert("device_id".into(), device_schema.clone());
+                    properties.insert("alias".into(), alias_schema.clone());
                 }
                 object.insert(
                     "oneOf".to_string(),
                     Value::Array(vec![
                         json!({"required": session_required}),
                         json!({"required": device_required}),
+                        json!({"required": alias_required}),
                     ]),
                 );
             }
             _ => {}
         }
     }
-    visit(&mut schema, &device_schema);
+    visit(&mut schema, &device_schema, &alias_schema);
     schema
 }
 
@@ -110,6 +130,7 @@ pub(super) fn phone_selector_properties() -> Value {
         "session_id": phone_session_id_schema(),
         "serial": optional_absent_string_schema(phone_serial_schema()),
         "device_id": optional_absent_string_schema(phone_device_id_schema()),
+        "alias": optional_absent_string_schema(phone_alias_schema()),
         "appshot_id": optional_absent_string_schema(json!({"type":"string", "minLength":1, "description":"Canonical phone AppShot id returned by phone_observe; required for state-changing phone actions."}))
     })
 }
@@ -124,6 +145,7 @@ fn with_phone_action_selector(properties: Value) -> Value {
         json!({
             "session_id": phone_session_id_schema(),
             "device_id": optional_absent_string_schema(phone_device_id_schema()),
+            "alias": optional_absent_string_schema(phone_alias_schema()),
             "appshot_id": optional_absent_string_schema(json!({"type":"string", "minLength":1}))
         }),
     )
@@ -132,7 +154,8 @@ fn with_phone_action_selector(properties: Value) -> Value {
 pub(super) fn phone_session_properties() -> Value {
     json!({
         "session_id": phone_session_id_schema(),
-        "device_id": optional_absent_string_schema(phone_device_id_schema())
+        "device_id": optional_absent_string_schema(phone_device_id_schema()),
+        "alias": optional_absent_string_schema(phone_alias_schema())
     })
 }
 
@@ -165,6 +188,7 @@ pub(super) fn phone_connection_constraints() -> Value {
                     "operation",
                     "serial",
                     "device_id",
+                    "alias",
                     "backend",
                     "install_companion",
                     "start_scrcpy",

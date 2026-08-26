@@ -44,6 +44,7 @@ impl AdbDeviceLine {
             // device-list path marks primaries against `[phone]
             // primary_target_models`.
             primary: false,
+            alias: None,
         }
     }
 }

@@ -154,6 +154,7 @@ fn build_phone_request(
                 "device_id",
                 "phone_connect device_id",
             )?,
+            alias: args::parse_optional_string(arguments, "alias", "phone_connect alias")?,
             backend: parse_phone_backend(arguments)?,
             install_companion: parse_optional_bool(arguments, "install_companion", false)?,
             start_scrcpy: parse_optional_bool(arguments, "start_scrcpy", false)?,

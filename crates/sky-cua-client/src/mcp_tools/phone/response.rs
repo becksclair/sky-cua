@@ -898,6 +898,7 @@ mod tests {
                 device: None,
                 transport_id: None,
                 primary: true,
+                alias: None,
             }],
             diagnostics: Vec::new(),
         };
@@ -969,6 +970,7 @@ mod tests {
                 device: None,
                 transport_id: None,
                 primary: false,
+                alias: None,
             }],
             diagnostics: vec![diagnostic("PhoneCommandSpawnFailed")],
         };
