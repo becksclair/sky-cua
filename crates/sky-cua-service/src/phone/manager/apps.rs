@@ -448,7 +448,6 @@ impl PhoneManager {
                 .await
             }
         };
-
         match result {
             Ok(outcome) if outcome.success => PhoneAppResponse {
                 session_id,
@@ -483,7 +482,6 @@ impl PhoneManager {
             ),
         }
     }
-
     /// `phone_open_settings`: ADB `am start` for the requested settings screen.
     pub(super) async fn open_settings(
         &mut self,
@@ -534,11 +532,9 @@ impl PhoneManager {
             outcome,
         )
     }
-
     // ===================================================================
     // App helpers
     // ===================================================================
-
     /// Whether companion app management (`app_op`) should be preferred for a
     /// session: a fresh cached profile with a reachable companion. Launch and
     /// open-intent route through the companion first; the ADB path is the
@@ -557,7 +553,6 @@ impl PhoneManager {
                 .get(session_id)
                 .is_some_and(|entry| entry.companion.is_some())
     }
-
     /// Dispatch an `app_op` through the live companion RPC client.
     ///
     /// Returns `Some(success)` when the companion handled the op (the launch was
@@ -611,7 +606,6 @@ impl PhoneManager {
             }
         }
     }
-
     /// Foreground app from the companion, if reachable.
     async fn companion_current_app(&mut self, session_id: &str) -> Option<PhoneAppInfo> {
         if let Some((device_id, epoch)) = self.direct_identity(session_id) {
@@ -657,7 +651,6 @@ impl PhoneManager {
             system_app: false,
         })
     }
-
     /// Current foreground app for `phone_observe`, companion-first then ADB.
     pub(super) async fn current_app_info(
         &mut self,
@@ -691,7 +684,6 @@ impl PhoneManager {
             )),
         }
     }
-
     /// Build an app response from a simple ADB `InputOutcome`.
     fn simple_app_result(
         &self,
@@ -733,7 +725,6 @@ impl PhoneManager {
         }
     }
 }
-
 fn app_no_session(selector: &PhoneSessionSelector, kind: PhoneAppResponseKind) -> PhoneAppResponse {
     let (session_id, serial) = selector_ids(selector);
     PhoneAppResponse {
@@ -750,7 +741,6 @@ fn app_no_session(selector: &PhoneSessionSelector, kind: PhoneAppResponseKind) -
         diagnostics: vec![no_session_diagnostic(selector)],
     }
 }
-
 /// Build an app response for a companion-handled op. On success the backend is
 /// `Companion`; a companion `ok=false` is a structured app-action failure.
 fn companion_app_result(
@@ -787,7 +777,6 @@ fn companion_app_result(
         )
     }
 }
-
 fn app_failure(
     session_id: String,
     serial: String,

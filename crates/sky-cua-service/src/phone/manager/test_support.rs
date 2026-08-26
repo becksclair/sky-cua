@@ -3,6 +3,14 @@
 
 use super::*;
 use crate::phone::command::FakeCommandRunner;
+use crate::phone::cursor::PhoneCursorTracker;
+use crate::phone::protocol::client::CompanionClient;
+use crate::phone::scrcpy;
+use crate::phone::snapshot::{DEFAULT_SNAPSHOT_CAPACITY, PhoneSnapshotRegistry};
+use sky_cua_platform::model::{
+    PhoneBackendKind, PhoneCapabilityProfile, PhoneCapabilityRefreshState, PhoneConnectionIdentity,
+    PhoneConnectionKind, PhoneSession,
+};
 
 impl PhoneManager {
     /// Test-only access to the current epoch-millis clock.
