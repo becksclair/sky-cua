@@ -17,7 +17,9 @@ use sky_cua_platform::model::{
 };
 
 use super::{PhoneManager, no_session_diagnostic, selector_ids};
-use crate::phone::protocol::{NotificationOp, NotificationOpParams, NotificationRedactionDto};
+use crate::phone::protocol::{
+    NotificationOp, NotificationOpParams, NotificationRedactionDto, methods,
+};
 
 impl PhoneManager {
     // ===================================================================
@@ -26,7 +28,8 @@ impl PhoneManager {
 
     /// `phone_accessibility_tree`: bounded active-window node list from the
     /// companion. ADB has no accessibility-tree fallback, so a missing/unreachable
-    /// companion returns a structured unavailable response.
+    /// companion returns a structured unavailable response. Direct sessions dispatch
+    /// over the authenticated link.
     pub(super) async fn accessibility_tree(
         &mut self,
         request: PhoneAccessibilityTreeRequest,
@@ -41,6 +44,88 @@ impl PhoneManager {
         };
         let serial = self.serial_of(&session_id);
         let max_nodes = request.node_limit.unwrap_or(200) as u32;
+
+        if let Some((device_id, epoch)) = self.direct_identity(&session_id) {
+            if let Some(provider) = self.direct_provider.clone() {
+                let params = serde_json::json!({"max_nodes": max_nodes});
+                match provider
+                    .dispatch(
+                        &device_id,
+                        epoch,
+                        methods::ACCESSIBILITY_TREE,
+                        params,
+                        true,
+                        std::time::Duration::from_secs(5),
+                    )
+                    .await
+                {
+                    Ok(value) => {
+                        let tree: crate::phone::protocol::AccessibilityTreeResult =
+                            match serde_json::from_value(value) {
+                                Ok(r) => r,
+                                Err(error) => {
+                                    return accessibility_unavailable(
+                                        session_id,
+                                        serial,
+                                        DiagnosticEntry {
+                                            code: "PhoneAccessibilityTreeDecode".to_string(),
+                                            message: format!(
+                                                "CompanionDirect accessibility_tree decode failed: {error}"
+                                            ),
+                                            details: None,
+                                        },
+                                    );
+                                }
+                            };
+                        let nodes = tree
+                            .nodes
+                            .iter()
+                            .enumerate()
+                            .map(|(index, node)| PhoneAccessibilityNode {
+                                node_index: index,
+                                parent_index: None,
+                                class_name: node.class.clone(),
+                                package_name: tree.package.clone(),
+                                text: node.text.clone(),
+                                content_description: node.content_desc.clone(),
+                                bounds: node.bounds.map(bounds_to_rect),
+                                clickable: node.clickable,
+                                focusable: node.focusable,
+                                enabled: node.enabled,
+                                redacted: tree.redacted,
+                            })
+                            .collect();
+                        return PhoneAccessibilityTreeResponse {
+                            session_id,
+                            serial,
+                            backend: PhoneBackendKind::Companion,
+                            package_name: tree.package.clone(),
+                            activity: tree.activity.clone(),
+                            nodes,
+                            truncated: tree.truncated,
+                            redacted: tree.redacted,
+                            diagnostics: Vec::new(),
+                        };
+                    }
+                    Err(error) => {
+                        if super::helpers::is_direct_disconnected(&error) {
+                            self.invalidate_companion(&session_id);
+                        }
+                        return accessibility_unavailable(
+                            session_id,
+                            serial,
+                            DiagnosticEntry {
+                                code: "PhoneCompanionDirectDispatchFailed".to_string(),
+                                message: format!(
+                                    "CompanionDirect accessibility_tree failed: {error:?}"
+                                ),
+                                details: None,
+                            },
+                        );
+                    }
+                }
+            }
+        }
 
         let Some(entry) = self.sessions.get_mut(&session_id) else {
             return accessibility_unavailable(session_id, serial, companion_required_diagnostic());
@@ -102,11 +187,49 @@ impl PhoneManager {
     }
 
     /// Bounded accessibility summary for `phone_observe`. Returns `None` when the
-    /// companion cannot serve a tree.
+    /// companion cannot serve a tree. Direct sessions dispatch over the link.
     pub(super) async fn accessibility_summary(
         &mut self,
         session_id: &str,
     ) -> Option<PhoneAccessibilitySummary> {
+        if let Some((device_id, epoch)) = self.direct_identity(session_id) {
+            if let Some(provider) = self.direct_provider.clone() {
+                if let Ok(value) = provider
+                    .dispatch(
+                        &device_id,
+                        epoch,
+                        methods::ACCESSIBILITY_TREE,
+                        serde_json::json!({"max_nodes": 60}),
+                        true,
+                        std::time::Duration::from_secs(5),
+                    )
+                    .await
+                {
+                    if let Ok(tree) =
+                        serde_json::from_value::<crate::phone::protocol::AccessibilityTreeResult>(
+                            value,
+                        )
+                    {
+                        let headline_texts: Vec<String> = tree
+                            .nodes
+                            .iter()
+                            .filter_map(|node| node.text.clone())
+                            .filter(|text| !text.trim().is_empty())
+                            .take(8)
+                            .collect();
+                        return Some(PhoneAccessibilitySummary {
+                            package_name: tree.package.clone(),
+                            activity: tree.activity.clone(),
+                            node_count: tree.nodes.len() as u32,
+                            headline_texts,
+                            truncated: tree.truncated,
+                            redacted: tree.redacted,
+                        });
+                    }
+                }
+                return None;
+            }
+        }
         let entry = self.sessions.get_mut(session_id)?;
         let runtime = entry.companion.as_mut()?;
         let tree = runtime.client.accessibility_tree(60).await.ok()?;
@@ -132,7 +255,9 @@ impl PhoneManager {
     // ===================================================================
 
     /// `phone_notifications`: bounded recent notification events from the
-    /// companion. ADB has no notification fallback in v1.
+    /// companion. ADB has no notification fallback in v1. Direct sessions
+    /// dispatch over the authenticated `phone-control.v2` link; legacy ADB
+    /// sessions use the `adb forward` RPC.
     pub(super) async fn notifications(
         &mut self,
         request: PhoneNotificationsRequest,
@@ -147,6 +272,71 @@ impl PhoneManager {
         };
         let serial = self.serial_of(&session_id);
         let max = request.limit.unwrap_or(20) as u32;
+
+        // Direct path first (S26 etc). These sessions have companion: None on
+        // purpose — they were created via `connect_direct` and must not fall
+        // into the legacy `entry.companion` None -> companion_required branch.
+        if let Some((device_id, epoch)) = self.direct_identity(&session_id) {
+            if let Some(provider) = self.direct_provider.clone() {
+                let params = serde_json::json!({"max": max});
+                match provider
+                    .dispatch(
+                        &device_id,
+                        epoch,
+                        methods::NOTIFICATIONS,
+                        params,
+                        true,
+                        std::time::Duration::from_secs(5),
+                    )
+                    .await
+                {
+                    Ok(value) => {
+                        let result: crate::phone::protocol::NotificationsResult =
+                            match serde_json::from_value(value) {
+                                Ok(r) => r,
+                                Err(error) => {
+                                    return notifications_unavailable(
+                                        session_id,
+                                        serial,
+                                        DiagnosticEntry {
+                                            code: "PhoneNotificationsDecode".to_string(),
+                                            message: format!(
+                                                "CompanionDirect notifications decode failed: {error}"
+                                            ),
+                                            details: None,
+                                        },
+                                    );
+                                }
+                            };
+                        return PhoneNotificationsResponse {
+                            session_id,
+                            serial,
+                            backend: PhoneBackendKind::Companion,
+                            listener_enabled: result.listener_enabled,
+                            events: result.events.iter().map(notification_event).collect(),
+                            truncated: result.truncated,
+                            diagnostics: Vec::new(),
+                        };
+                    }
+                    Err(error) => {
+                        if super::helpers::is_direct_disconnected(&error) {
+                            self.invalidate_companion(&session_id);
+                        }
+                        return notifications_unavailable(
+                            session_id,
+                            serial,
+                            DiagnosticEntry {
+                                code: "PhoneCompanionDirectDispatchFailed".to_string(),
+                                message: format!(
+                                    "CompanionDirect notifications failed: {error:?}"
+                                ),
+                                details: None,
+                            },
+                        );
+                    }
+                }
+            }
+        }
 
         let Some(entry) = self.sessions.get_mut(&session_id) else {
             return notifications_unavailable(session_id, serial, companion_required_diagnostic());
@@ -183,10 +373,34 @@ impl PhoneManager {
     }
 
     /// Recent notifications for `phone_observe`. Empty when unavailable.
+    /// Direct sessions dispatch via the authenticated link; legacy sessions
+    /// use the `adb forward` RPC.
     pub(super) async fn recent_notifications(
         &mut self,
         session_id: &str,
     ) -> Vec<PhoneNotificationEvent> {
+        if let Some((device_id, epoch)) = self.direct_identity(session_id) {
+            if let Some(provider) = self.direct_provider.clone() {
+                if let Ok(value) = provider
+                    .dispatch(
+                        &device_id,
+                        epoch,
+                        methods::NOTIFICATIONS,
+                        serde_json::json!({"max": 10}),
+                        true,
+                        std::time::Duration::from_secs(5),
+                    )
+                    .await
+                {
+                    if let Ok(result) =
+                        serde_json::from_value::<crate::phone::protocol::NotificationsResult>(value)
+                    {
+                        return result.events.iter().map(notification_event).collect();
+                    }
+                }
+                return Vec::new();
+            }
+        }
         let Some(entry) = self.sessions.get_mut(session_id) else {
             return Vec::new();
         };
@@ -269,7 +483,7 @@ impl PhoneManager {
 
     /// Shared notification-op dispatch: companion-only, returns a refreshed
     /// notification list on success (so the agent sees the result) or a structured
-    /// unavailable response otherwise.
+    /// unavailable response otherwise. Direct sessions use the authenticated link.
     async fn notification_op(
         &mut self,
         selector: &PhoneSessionSelector,
@@ -280,6 +494,113 @@ impl PhoneManager {
             return notifications_unavailable(session_id, serial, no_session_diagnostic(selector));
         };
         let serial = self.serial_of(&session_id);
+
+        // Direct path.
+        if let Some((device_id, epoch)) = self.direct_identity(&session_id) {
+            if let Some(provider) = self.direct_provider.clone() {
+                let op_params = match serde_json::to_value(&params) {
+                    Ok(v) => v,
+                    Err(error) => {
+                        return notifications_unavailable(
+                            session_id,
+                            serial,
+                            DiagnosticEntry {
+                                code: "PhoneNotificationOpEncode".to_string(),
+                                message: format!("failed to encode notification op: {error}"),
+                                details: None,
+                            },
+                        );
+                    }
+                };
+                match provider
+                    .dispatch(
+                        &device_id,
+                        epoch,
+                        methods::NOTIFICATION_OP,
+                        op_params,
+                        false,
+                        std::time::Duration::from_secs(5),
+                    )
+                    .await
+                {
+                    Ok(value) => {
+                        let op_result: crate::phone::protocol::NotificationOpResult =
+                            match serde_json::from_value(value) {
+                                Ok(r) => r,
+                                Err(error) => {
+                                    return notifications_unavailable(
+                                        session_id,
+                                        serial,
+                                        DiagnosticEntry {
+                                            code: "PhoneNotificationOpDecode".to_string(),
+                                            message: format!(
+                                                "CompanionDirect notification op decode failed: {error}"
+                                            ),
+                                            details: None,
+                                        },
+                                    );
+                                }
+                            };
+                        if !op_result.ok {
+                            return notifications_unavailable(
+                                session_id,
+                                serial,
+                                DiagnosticEntry {
+                                    code: "PhoneNotificationOpRejected".to_string(),
+                                    message: "companion rejected the notification operation"
+                                        .to_string(),
+                                    details: None,
+                                },
+                            );
+                        }
+                        // Fetch fresh list.
+                        let events = match provider
+                            .dispatch(
+                                &device_id,
+                                epoch,
+                                methods::NOTIFICATIONS,
+                                serde_json::json!({"max": 20}),
+                                true,
+                                std::time::Duration::from_secs(5),
+                            )
+                            .await
+                        {
+                            Ok(v) => serde_json::from_value::<
+                                crate::phone::protocol::NotificationsResult,
+                            >(v)
+                            .map(|r| r.events.iter().map(notification_event).collect())
+                            .unwrap_or_default(),
+                            Err(_) => Vec::new(),
+                        };
+                        return PhoneNotificationsResponse {
+                            session_id,
+                            serial,
+                            backend: PhoneBackendKind::Companion,
+                            listener_enabled: true,
+                            events,
+                            truncated: false,
+                            diagnostics: Vec::new(),
+                        };
+                    }
+                    Err(error) => {
+                        if super::helpers::is_direct_disconnected(&error) {
+                            self.invalidate_companion(&session_id);
+                        }
+                        return notifications_unavailable(
+                            session_id,
+                            serial,
+                            DiagnosticEntry {
+                                code: "PhoneCompanionDirectDispatchFailed".to_string(),
+                                message: format!(
+                                    "CompanionDirect notification op failed: {error:?}"
+                                ),
+                                details: None,
+                            },
+                        );
+                    }
+                }
+            }
+        }
 
         let Some(entry) = self.sessions.get_mut(&session_id) else {
             return notifications_unavailable(session_id, serial, companion_required_diagnostic());
