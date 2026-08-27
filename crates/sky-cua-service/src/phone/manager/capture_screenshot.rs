@@ -49,11 +49,61 @@ impl PhoneManager {
 
     /// Companion screenshot RPC, decoded to raw PNG bytes plus native-overlay
     /// metadata. A transport failure drops the companion runtime so later routing
-    /// falls back.
+    /// falls back. Direct sessions dispatch over the authenticated
+    /// `phone-control.v2` ws (`screenshot`); legacy ADB sessions use the
+    /// `adb forward` RPC.
     pub(crate) async fn companion_screenshot(
         &mut self,
         ctx: &ActionContext,
     ) -> Result<(Vec<u8>, u32, u32, bool, PhoneBackendKind), DiagnosticEntry> {
+        if let Some((device_id, epoch)) = self.direct_identity(&ctx.session_id)
+            && let Some(provider) = self.direct_provider.clone()
+        {
+            match provider
+                .dispatch(
+                    &device_id,
+                    epoch,
+                    crate::phone::protocol::methods::SCREENSHOT,
+                    serde_json::json!({"include_overlay": false}),
+                    true,
+                    std::time::Duration::from_secs(10),
+                )
+                .await
+            {
+                Ok(value) => {
+                    let shot: crate::phone::protocol::ScreenshotResult =
+                        serde_json::from_value(value).map_err(|error| DiagnosticEntry {
+                            code: "PhoneCompanionScreenshotDecode".to_string(),
+                            message: format!("CompanionDirect screenshot decode failed: {error}"),
+                            details: None,
+                        })?;
+                    let bytes = BASE64
+                        .decode(shot.data_base64.as_bytes())
+                        .map_err(|error| DiagnosticEntry {
+                            code: "PhoneCompanionScreenshotDecode".to_string(),
+                            message: format!("companion screenshot base64 invalid: {error}"),
+                            details: None,
+                        })?;
+                    return Ok((
+                        bytes,
+                        shot.width,
+                        shot.height,
+                        shot.contains_native_overlay,
+                        PhoneBackendKind::Companion,
+                    ));
+                }
+                Err(error) => {
+                    if super::helpers::is_direct_disconnected(&error) {
+                        self.invalidate_companion(&ctx.session_id);
+                    }
+                    return Err(DiagnosticEntry {
+                        code: "PhoneCompanionDirectDispatchFailed".to_string(),
+                        message: format!("CompanionDirect screenshot failed: {error:?}"),
+                        details: None,
+                    });
+                }
+            }
+        }
         let Some(entry) = self.sessions.get_mut(&ctx.session_id) else {
             return Err(no_companion_diagnostic());
         };

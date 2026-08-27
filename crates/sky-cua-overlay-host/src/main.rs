@@ -754,10 +754,18 @@ mod tests {
     fn wait_for_socket(path: &Path) {
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(2) {
-            if path.exists() {
+            if path.exists() && UnixStream::connect(path).is_ok() {
                 return;
             }
             thread::sleep(Duration::from_millis(10));
+        }
+        if path.exists() {
+            // Socket file exists but not yet accepting — give the server a final
+            // moment before panicking (file-exists-only wait races accept loop).
+            thread::sleep(Duration::from_millis(50));
+            if UnixStream::connect(path).is_ok() {
+                return;
+            }
         }
         panic!("socket did not appear: {}", path.display());
     }

@@ -338,7 +338,8 @@ impl PhoneManager {
         )
     }
 
-    /// `phone_app_force_stop`: ADB `am force-stop`.
+    /// `phone_app_force_stop`: companion `app_op(force_stop)` when the session
+    /// is a DirectCompanion link, else ADB `am force-stop`.
     pub(super) async fn app_force_stop(
         &mut self,
         request: PhoneAppForceStopRequest,
@@ -347,17 +348,58 @@ impl PhoneManager {
             return app_no_session(&request.session, PhoneAppResponseKind::ForceStop);
         };
         let serial = self.serial_of(&session_id);
-        if self.direct_identity(&session_id).is_some() {
-            return app_failure(
-                session_id,
-                serial,
-                PhoneAppResponseKind::ForceStop,
-                DiagnosticEntry {
-                    code: "PhoneOperationUnsupported".into(),
-                    message: "force-stop requires ADB or a visible Settings UI fallback".into(),
-                    details: None,
-                },
-            );
+        if let Some((device_id, epoch)) = self.direct_identity(&session_id) {
+            let Some(provider) = &self.direct_provider else {
+                return app_failure(
+                    session_id,
+                    serial,
+                    PhoneAppResponseKind::ForceStop,
+                    DiagnosticEntry {
+                        code: "PhoneCompanionDirectDispatchFailed".into(),
+                        message: "direct provider unavailable for direct session".into(),
+                        details: None,
+                    },
+                );
+            };
+            let result = provider
+                .dispatch(
+                    &device_id,
+                    epoch,
+                    crate::phone::protocol::methods::APP_OP,
+                    serde_json::json!({"op": "force_stop", "package": request.package_name}),
+                    false,
+                    std::time::Duration::from_secs(10),
+                )
+                .await;
+            return match result {
+                Ok(value) => {
+                    let ok = serde_json::from_value::<crate::phone::protocol::AppOpResult>(value)
+                        .map(|r| r.ok)
+                        .unwrap_or(false);
+                    companion_app_result(
+                        session_id,
+                        serial,
+                        PhoneAppResponseKind::ForceStop,
+                        ok,
+                        "phone_app_force_stop",
+                    )
+                }
+                Err(error) => {
+                    if super::helpers::is_direct_disconnected(&error) {
+                        self.invalidate_companion(&session_id);
+                    }
+                    app_failure(
+                        session_id,
+                        serial,
+                        PhoneAppResponseKind::ForceStop,
+                        DiagnosticEntry {
+                            code: "PhoneCompanionDirectDispatchFailed".into(),
+                            message: format!("CompanionDirect force-stop failed: {error:?}"),
+                            details: None,
+                        },
+                    )
+                }
+            };
         }
         let outcome = adb::force_stop(
             self.runner.as_ref(),

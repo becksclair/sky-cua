@@ -1,6 +1,9 @@
-//! Companion lifecycle: install/update decisioning, `adb forward` + token
-//! provisioning, the capability probe, and the `phone_companion_status` /
-//! `phone_install_companion` tools.
+//! Companion install/update decisioning, capability probe helpers, and
+//! `phone_companion_status` / `phone_install_companion` tools.
+//!
+//! The `adb forward` + token bootstrap lives in `companion_lane.rs`; this
+//! module owns permission enablement and status queries. DirectCompanion
+//! (`ws://`) sessions dispatch `companion.status` over the authenticated link.
 //!
 //! `phone_connect`/`phone_refresh_capabilities` call [`PhoneManager::bootstrap_companion`]
 //! to decide install/update from installed-vs-expected identity (never trusting a

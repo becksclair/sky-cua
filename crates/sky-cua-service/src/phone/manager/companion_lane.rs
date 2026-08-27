@@ -1,6 +1,10 @@
-//! Companion lifecycle: install/update decisioning, `adb forward` + token
-//! provisioning, the capability probe, and the `phone_companion_status` /
-//! `phone_install_companion` tools.
+//! Companion lifecycle: install/update decisioning, capability probe, and
+//! `phone_companion_status` / `phone_install_companion` tools.
+//!
+//! DirectCompanion (`ws://` `phone-control.v2`) is the primary path:
+//! overlay and companion RPCs dispatch over the authenticated link when
+//! `direct_identity()` is present. The legacy `adb forward` + token path is
+//! retained only for ADB-serial sessions when `direct_enabled=false`.
 //!
 //! `phone_connect`/`phone_refresh_capabilities` call [`PhoneManager::bootstrap_companion`]
 //! to decide install/update from installed-vs-expected identity (never trusting a
