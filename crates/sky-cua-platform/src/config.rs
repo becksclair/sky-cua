@@ -733,10 +733,12 @@ pub fn resolve_phone_selection(phone: &PhoneConfig) -> ResolvedPhoneSelection {
             .unwrap_or(false),
         capability_cache_ttl_ms: env_u64(PHONE_CAPABILITY_CACHE_TTL_MS_ENV)
             .or(phone.capability_cache_ttl_ms)
-            .unwrap_or(PHONE_DEFAULT_CAPABILITY_CACHE_TTL_MS),
+            .unwrap_or(PHONE_DEFAULT_CAPABILITY_CACHE_TTL_MS)
+            .max(1_000),
         appshot_ttl_ms: env_u64(PHONE_APPSHOT_TTL_MS_ENV)
             .or(phone.appshot_ttl_ms)
-            .unwrap_or(PHONE_DEFAULT_APPSHOT_TTL_MS),
+            .unwrap_or(PHONE_DEFAULT_APPSHOT_TTL_MS)
+            .max(1_000),
         primary_target_models: target_models,
         direct_enabled: env_bool(PHONE_DIRECT_ENABLED_ENV)
             .or(phone.direct_enabled)

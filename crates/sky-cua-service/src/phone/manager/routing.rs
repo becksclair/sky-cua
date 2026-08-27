@@ -421,7 +421,7 @@ impl PhoneManager {
             return action_no_session(&request.session, "phone_key_event");
         };
         if let Some((device_id, epoch)) = self.direct_identity(&ctx.session_id) {
-            let result = self
+            let direct_result = self
                 .dispatch_direct(
                     &device_id,
                     epoch,
@@ -433,11 +433,54 @@ impl PhoneManager {
                     }),
                 )
                 .await;
+            // Companion currently stubs key_event as PERMISSION_DENIED with hint to use ADB.
+            // Fall back to ADB on that visible denial so enrolled Direct sessions still succeed via serial.
+            let needs_fallback = direct_result.as_ref().err().is_some_and(|d| {
+                d.code == "PERMISSION_DENIED"
+                    || d.code == "UNSUPPORTED_ACTION"
+                    || d.code == "UNSUPPORTED_API"
+            });
+            if !needs_fallback {
+                return self
+                    .finish_action(
+                        &ctx,
+                        "phone_key_event",
+                        PhoneBackendKind::Companion,
+                        None,
+                        None,
+                        None,
+                        None,
+                        direct_result,
+                    )
+                    .await;
+            }
+            let adb_result = adb::input_keyevent(
+                self.runner.as_ref(),
+                self.configured_adb_path(),
+                &ctx.serial,
+                &request.key_code,
+            )
+            .await
+            .map(|outcome| outcome.success)
+            .map_err(|error| adb::command_error_diagnostic("adb shell input keyevent", &error));
+            // Preserve Direct denial as diagnostic if ADB also fails
+            let result = match adb_result {
+                Ok(v) => Ok(v),
+                Err(adb_diag) => Err(DiagnosticEntry {
+                    code: adb_diag.code,
+                    message: format!(
+                        "{}; direct denied: {}",
+                        adb_diag.message,
+                        direct_result.err().unwrap().message
+                    ),
+                    details: adb_diag.details,
+                }),
+            };
             return self
                 .finish_action(
                     &ctx,
                     "phone_key_event",
-                    PhoneBackendKind::Companion,
+                    PhoneBackendKind::Adb,
                     None,
                     None,
                     None,
