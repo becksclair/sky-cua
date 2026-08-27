@@ -145,9 +145,10 @@ fn integrate_pointer_deltas(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
     use super::{PointerDelta, excluded_device_name, integrate_pointer_deltas};
     use crate::uinput::DesktopBounds;
-    use std::sync::mpsc;
 
     #[test]
     fn excludes_synthetic_pointer_devices_by_name() {

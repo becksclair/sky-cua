@@ -13,19 +13,20 @@ use sky_cua_platform::model::{
     PhoneAccessibilityTreeRequest, PhoneAppCurrentRequest, PhoneAppForceStopRequest,
     PhoneAppInstallRequest, PhoneAppLaunchRequest, PhoneAppListRequest, PhoneAppOpenIntentRequest,
     PhoneCameraRequest, PhoneClipboardRequest, PhoneCompanionStatusRequest, PhoneConnectRequest,
-    PhoneContentRequest, PhoneDisconnectRequest, PhoneEditorRequest, PhoneFeatureCall,
-    PhoneInstallCompanionRequest, PhoneListDevicesRequest, PhoneNotificationActionRequest,
-    PhoneNotificationDismissRequest, PhoneNotificationOpenRequest, PhoneNotificationReplyRequest,
-    PhoneNotificationsRequest, PhoneObserveRequest, PhoneOpenSettingsRequest,
-    PhonePairWirelessRequest, PhonePressKeyRequest, PhoneRefreshCapabilitiesRequest, PhoneRequest,
-    PhoneResponse, PhoneScreenshotRequest, PhoneStatusRequest, PhoneStorageRequest,
-    PhoneSwipeRequest, PhoneTapRequest, PhoneTypeTextRequest, ServiceRequest, ServiceResponse,
+    PhoneContentRequest, PhoneDisconnectRequest, PhoneDoubleTapRequest, PhoneEditorRequest,
+    PhoneFeatureCall, PhoneGlobalActionRequest, PhoneInstallCompanionRequest, PhoneKeyEventRequest,
+    PhoneListDevicesRequest, PhoneLongPressRequest, PhoneNodeActionRequest,
+    PhoneNotificationActionRequest, PhoneNotificationDismissRequest, PhoneNotificationOpenRequest,
+    PhoneNotificationReplyRequest, PhoneNotificationsRequest, PhoneObserveRequest,
+    PhoneOpenSettingsRequest, PhonePairWirelessRequest, PhonePressKeyRequest,
+    PhoneRefreshCapabilitiesRequest, PhoneRequest, PhoneResponse, PhoneScreenshotRequest,
+    PhoneStatusRequest, PhoneStorageRequest, PhoneSwipeRequest, PhoneTapRequest,
+    PhoneTypeTextRequest, ServiceRequest, ServiceResponse,
 };
 
 mod args;
 mod response;
 
-use super::{McpService, invalid_request_tool_error, tool_error};
 use args::{
     parse_optional_bool, parse_optional_duration_ms, parse_optional_limit, parse_phone_apk_paths,
     parse_phone_app_install_mode, parse_phone_backend, parse_phone_coordinate,
@@ -38,6 +39,8 @@ use response::{
     phone_list_devices_result, phone_notifications_result, phone_observe_result,
     phone_pair_wireless_result, phone_screenshot_result, phone_status_result,
 };
+
+use super::{McpService, invalid_request_tool_error, tool_error};
 
 pub(super) fn is_phone_tool(tool_name: &str) -> bool {
     matches!(
@@ -52,6 +55,8 @@ pub(super) fn is_phone_tool(tool_name: &str) -> bool {
             | "phone_screenshot"
             | "phone_tap"
             | "phone_swipe"
+            | "phone_long_press"
+            | "phone_double_tap"
             | "phone_type_text"
             | "phone_press_key"
             | "phone_install_companion"
@@ -74,6 +79,9 @@ pub(super) fn is_phone_tool(tool_name: &str) -> bool {
             | "phone_editor"
             | "phone_camera"
             | "phone_storage"
+            | "phone_node_action"
+            | "phone_global_action"
+            | "phone_key_event"
     )
 }
 
@@ -201,6 +209,12 @@ fn build_phone_request(
                 false,
             )?,
         }),
+        "phone_long_press" => PhoneRequest::LongPress(serde_json::from_value::<
+            PhoneLongPressRequest,
+        >(arguments.clone())?),
+        "phone_double_tap" => PhoneRequest::DoubleTap(serde_json::from_value::<
+            PhoneDoubleTapRequest,
+        >(arguments.clone())?),
         "phone_type_text" => PhoneRequest::TypeText(PhoneTypeTextRequest {
             session: parse_phone_selector(arguments)?,
             text: parse_required_literal_string(arguments, "text", "phone_type_text text")?,
@@ -358,6 +372,15 @@ fn build_phone_request(
         "phone_storage" => PhoneRequest::Storage(serde_json::from_value::<
             PhoneFeatureCall<PhoneStorageRequest>,
         >(arguments.clone())?),
+        "phone_node_action" => PhoneRequest::NodeAction(serde_json::from_value::<
+            PhoneNodeActionRequest,
+        >(arguments.clone())?),
+        "phone_global_action" => PhoneRequest::GlobalAction(serde_json::from_value::<
+            PhoneGlobalActionRequest,
+        >(arguments.clone())?),
+        "phone_key_event" => PhoneRequest::KeyEvent(
+            serde_json::from_value::<PhoneKeyEventRequest>(arguments.clone())?,
+        ),
         other => return Err(anyhow!("unexpected phone tool name: {other}")),
     };
     if matches!(

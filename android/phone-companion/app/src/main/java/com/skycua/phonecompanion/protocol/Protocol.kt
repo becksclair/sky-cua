@@ -35,6 +35,9 @@ object Protocol {
         const val STORAGE = "phone_storage"
         const val CAMERA = "phone_camera"
         const val KEY = "phone_key"
+        const val NODE_ACTION = "node_action"
+        const val GLOBAL_ACTION = "global_action"
+        const val KEY_EVENT = "key_event"
         /** Direct-only phone-control.v2 method; intentionally absent from ALL. */
         const val SMS_QUERY = "sms.query"
 
@@ -59,6 +62,9 @@ object Protocol {
                 STORAGE,
                 CAMERA,
                 KEY,
+                NODE_ACTION,
+                GLOBAL_ACTION,
+                KEY_EVENT,
             )
     }
 
@@ -99,6 +105,13 @@ object Protocol {
         const val IMMUTABLE = "immutable"
         const val REPLY_UNAVAILABLE = "reply_unavailable"
         const val OEM_FILTERED = "oem_filtered"
+
+        // node_action / global_action / key_event
+        const val UNSUPPORTED_ACTION = "unsupported_action"
+        const val NODE_NOT_FOUND = "node_not_found"
+        const val ACTION_FAILED = "action_failed"
+        const val PERMISSION_DENIED = "permission_denied"
+        const val APPSHOT_EXPIRED = "appshot_expired"
     }
 }
 

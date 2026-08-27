@@ -1,6 +1,10 @@
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::time::{Duration, Instant};
+
 use atspi_connection::AccessibilityConnection;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
+use sky_cua_platform::model::DoctorSessionEnvReport;
 use sky_cua_platform::model::{
     ActionOutcome, ActionRequest, AppSelector, AppStateSnapshot, CaptureBackendKind, CaptureInfo,
     CaptureScope, CaptureScreenMode, DiagnosticEntry, DisplayInfo, DisplayRef, DisplayTarget,
@@ -9,6 +13,8 @@ use sky_cua_platform::model::{
     ToolCapabilities, WindowTarget,
 };
 use sky_cua_platform::{AppInfo, new_snapshot_id};
+use tokio::sync::Mutex;
+use tracing::warn;
 
 use crate::actions::runtime::{
     SemanticActionInvocation, SemanticAtspiAction, SemanticSetValueResult,
@@ -37,11 +43,6 @@ use crate::virtual_input::{LinuxVirtualInput, virtual_input_keyboard_available};
 use crate::windowing as linux_windowing;
 use crate::x11::input_xtest::{self, X11MouseButton};
 use crate::x11::windowing::{self, X11WindowInfo};
-use sky_cua_platform::model::DoctorSessionEnvReport;
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
-use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
-use tracing::warn;
 
 const DISPLAY_TOPOLOGY_CACHE_TTL: Duration = Duration::from_secs(10);
 const ENVIRONMENT_CACHE_TTL: Duration = Duration::from_secs(10);

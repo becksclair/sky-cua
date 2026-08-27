@@ -185,14 +185,15 @@ impl LayerShellApp {
 
 #[cfg(test)]
 mod tests {
-    use super::layer_shell_capabilities;
-    use crate::OVERLAY_HOST_PROTOCOL_VERSION;
-    use crate::system_cursor::SystemCursorAdapter;
     use sky_cua_platform::model::{
         AgentCursorBackendKind, AgentCursorPointerTrackingBackendKind,
         AgentCursorRendererBackendKind, AgentCursorSystemCursorBackendKind,
         AgentOverlayCoverageKind,
     };
+
+    use super::layer_shell_capabilities;
+    use crate::OVERLAY_HOST_PROTOCOL_VERSION;
+    use crate::system_cursor::SystemCursorAdapter;
 
     #[test]
     fn layer_shell_capabilities_report_kwin_system_cursor_split_path() {

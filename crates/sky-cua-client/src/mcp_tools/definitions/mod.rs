@@ -5,14 +5,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value, json};
-
-use crate::mcp_server::ModelSessionInfo;
 use sky_cua_platform::{config::AgentSurfacePolicy, model::BROWSER_EVAL_ENV};
 
 use super::annotations::{
     LOCAL_DESTRUCTIVE_ACTION, LOCAL_NAVIGATION_ACTION, LOCAL_STATEFUL_ACTION, READ_ONLY_TOOL,
     ToolAnnotations,
 };
+use crate::mcp_server::ModelSessionInfo;
 
 mod browser;
 mod common;
@@ -882,6 +881,30 @@ fn build_grouped_tool_definitions(
                 "metadata",
                 "list_saf_roots",
             ])
+        ),
+        grouped_tool_with_constraints(
+            "phone_node_action",
+            "Perform a semantic accessibility action on a phone node (long_click for Telegram selection, click, scroll, etc.). Prefer stable view_id for playground targets; appshot_id+node_id requires a fresh AppShot.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            phone_node_action_properties(),
+            json!(["action"]),
+            phone_node_action_constraints()
+        ),
+        grouped_tool_with_constraints(
+            "phone_global_action",
+            "Perform a global accessibility action (back, home, notifications, lock_screen, etc.). Fails visibly with permission_denied if not allowed.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            phone_global_action_properties(),
+            json!(["action"]),
+            phone_global_action_constraints()
+        ),
+        grouped_tool_with_constraints(
+            "phone_key_event",
+            "Inject a raw Android keycode (KEYCODE_VOLUME_UP or numeric 24) on a connected phone. Direct global keys work over CompanionDirect; volume/media keys fall back to ADB serial.",
+            LOCAL_DESTRUCTIVE_ACTION,
+            phone_key_event_properties(),
+            json!(["key_code"]),
+            phone_key_event_constraints()
         )
     ]);
     if surfaces.browser && browser_eval_enabled {

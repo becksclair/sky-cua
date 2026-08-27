@@ -1,10 +1,11 @@
-use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
+
+use anyhow::{Context, Result};
 use url::Url;
 
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -253,8 +254,9 @@ fn rewrite_headers(headers: &[u8], allowed_origin: Option<&str>) -> io::Result<V
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Instant;
+
+    use super::*;
 
     #[test]
     fn authorizes_and_strips_the_extension_origin() {

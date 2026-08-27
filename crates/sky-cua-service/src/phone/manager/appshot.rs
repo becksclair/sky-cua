@@ -1,5 +1,7 @@
 //! CompanionDirect universal phone AppShot capture and host artifact projection.
 
+use std::time::Duration;
+
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use sky_cua_platform::{
@@ -9,7 +11,6 @@ use sky_cua_platform::{
         AppShotEnvelope, ContentPersistence, ContentRef, ContentSource, DiagnosticEntry,
     },
 };
-use std::time::Duration;
 
 use super::{CompanionDirectProvider, PhoneManager, now_ms};
 use crate::phone::{mapping, snapshot};

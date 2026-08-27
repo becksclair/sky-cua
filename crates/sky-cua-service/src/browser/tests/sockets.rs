@@ -7,6 +7,7 @@ use sky_cua_platform::model::{BrowserTargetKind, DiagnosticEntry};
 use tokio::net::UnixListener;
 use tokio::time::Instant as TokioInstant;
 
+use super::helpers::*;
 use crate::browser::bridge::{
     browser_bridge_diagnostics, browser_open_timeout, list_tabs, open_tab,
 };
@@ -18,8 +19,6 @@ use crate::browser::sockets::{
     reset_socket_inventory_for_tests, socket_host_pid,
 };
 use crate::browser::transport::bridge_request_timeout;
-
-use super::helpers::*;
 
 #[test]
 fn parses_browser_socket_selection_env_values() {

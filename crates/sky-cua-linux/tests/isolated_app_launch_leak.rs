@@ -58,10 +58,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use sky_cua_linux::backend::LinuxDesktopBackend;
 use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::{CLIENT_CLEARED_SESSION_ENV_KEYS_ENV, GRAPHICAL_SESSION_ENV_KEYS};
-
-use sky_cua_linux::backend::LinuxDesktopBackend;
 
 /// Which headless X server provider the host offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

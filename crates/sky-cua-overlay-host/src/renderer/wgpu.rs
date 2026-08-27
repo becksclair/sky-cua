@@ -1,5 +1,7 @@
 //! WGPU renderer implementation for the GPU-driven agent cursor/effect scene.
 
+use anyhow::{Context, Result, bail};
+
 use crate::renderer::{
     CursorImage,
     animation::{AnimationClock, SystemClock},
@@ -11,7 +13,6 @@ use crate::renderer::{
     shaders::{create_effect_bind_group_layout, create_effect_pipeline},
     surface::{SurfaceGuard, choose_surface_format, supports_transparent_alpha_mode},
 };
-use anyhow::{Context, Result, bail};
 
 /// Lightweight wrapper around a [`wgpu::Instance`].
 ///

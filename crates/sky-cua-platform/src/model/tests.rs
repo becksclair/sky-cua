@@ -1,3 +1,6 @@
+use chrono::Utc;
+use serde_json::json;
+
 use super::test_support::available_capabilities;
 use super::{
     ActionName, ActionOutcome, ActionRequest, AgentCursorBackendKind, AgentCursorCapabilities,
@@ -12,8 +15,6 @@ use super::{
     SemanticBackendKind, ServiceRequest, ServiceResponse, SessionKind, SetupCommandReport,
     WindowInfo, WindowTarget, WindowTargetingSetupReport,
 };
-use chrono::Utc;
-use serde_json::json;
 
 #[test]
 fn boxed_execute_action_preserves_wire_shape() {

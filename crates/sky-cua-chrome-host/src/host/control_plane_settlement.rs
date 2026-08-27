@@ -1,7 +1,8 @@
-use super::*;
-use crate::frame::write_frame_until;
 use std::cmp::Ordering;
 use std::sync::TryLockError;
+
+use super::*;
+use crate::frame::write_frame_until;
 
 pub(super) const SKY_CUA_HOST_SETTLEMENT_METHOD: &str = "skyCuaHost/settlement";
 pub(super) const SKY_CUA_HOST_SETTLEMENT_ACK_METHOD: &str = "skyCuaHost/settlementAck";

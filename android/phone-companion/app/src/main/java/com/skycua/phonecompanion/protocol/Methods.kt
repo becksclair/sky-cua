@@ -180,6 +180,148 @@ fun gestureDispatchedResult(): JsonValue.Obj =
     jsonObject { put("dispatched", true) }
 
 // ---------------------------------------------------------------------------
+// node_action
+// ---------------------------------------------------------------------------
+
+enum class NodeActionKind(val wire: String) {
+    CLICK("click"),
+    LONG_CLICK("long_click"),
+    CONTEXT_CLICK("context_click"),
+    DISMISS("dismiss"),
+    EXPAND("expand"),
+    COLLAPSE("collapse"),
+    SCROLL_FORWARD("scroll_forward"),
+    SCROLL_BACKWARD("scroll_backward"),
+    SCROLL_UP("scroll_up"),
+    SCROLL_DOWN("scroll_down"),
+    SCROLL_LEFT("scroll_left"),
+    SCROLL_RIGHT("scroll_right"),
+    PAGE_UP("page_up"),
+    PAGE_DOWN("page_down"),
+    PAGE_LEFT("page_left"),
+    PAGE_RIGHT("page_right"),
+    SCROLL_TO_POSITION("scroll_to_position"),
+    FOCUS("focus"),
+    CLEAR_FOCUS("clear_focus"),
+    ACCESSIBILITY_FOCUS("accessibility_focus"),
+    CLEAR_ACCESSIBILITY_FOCUS("clear_accessibility_focus"),
+    SELECT("select"),
+    CLEAR_SELECTION("clear_selection"),
+    SHOW_ON_SCREEN("show_on_screen"),
+    SET_PROGRESS("set_progress"),
+    SET_TEXT("set_text"),
+    SET_SELECTION("set_selection"),
+    COPY("copy"),
+    CUT("cut"),
+    PASTE("paste"),
+    NEXT_AT_MOVEMENT_GRANULARITY("next_at_movement_granularity"),
+    PREVIOUS_AT_MOVEMENT_GRANULARITY("previous_at_movement_granularity"),
+    NEXT_HTML_ELEMENT("next_html_element"),
+    PREVIOUS_HTML_ELEMENT("previous_html_element"),
+    PRESS_AND_HOLD("press_and_hold"),
+    IME_ENTER("ime_enter"),
+    MOVE_WINDOW("move_window"),
+    SHOW_TOOLTIP("show_tooltip"),
+    HIDE_TOOLTIP("hide_tooltip"),
+}
+
+data class NodeActionParams(
+    val appshotId: String?,
+    val nodeId: Long?,
+    val viewId: String?,
+    val action: NodeActionKind,
+    val args: JsonValue.Obj?,
+) {
+    companion object {
+        fun parse(params: JsonValue.Obj): NodeActionParams {
+            val actionStr = params.string("action") ?: bad("missing node action")
+            val action = NodeActionKind.entries.firstOrNull { it.wire == actionStr }
+                ?: bad("unknown node action '$actionStr'")
+            val appshotId = params.string("appshot_id")
+            val nodeId = params.long("node_id")
+            val viewId = params.string("view_id")
+            if (nodeId == null && viewId.isNullOrEmpty()) {
+                bad("node_action requires node_id or view_id")
+            }
+            val args = params.obj("args")
+            return NodeActionParams(appshotId, nodeId, viewId, action, args)
+        }
+    }
+}
+
+fun nodeActionResult(dispatched: Boolean, success: Boolean? = null): JsonValue.Obj =
+    jsonObject {
+        put("dispatched", dispatched)
+        if (success != null) put("success", success)
+    }
+
+// ---------------------------------------------------------------------------
+// global_action
+// ---------------------------------------------------------------------------
+
+enum class GlobalActionKind(val wire: String) {
+    BACK("back"),
+    HOME("home"),
+    RECENTS("recents"),
+    NOTIFICATIONS("notifications"),
+    QUICK_SETTINGS("quick_settings"),
+    POWER_DIALOG("power_dialog"),
+    TOGGLE_SPLIT_SCREEN("toggle_split_screen"),
+    LOCK_SCREEN("lock_screen"),
+    TAKE_SCREENSHOT("take_screenshot"),
+    KEYCODE_HEADSETHOOK("keycode_headset_hook"),
+    ACCESSIBILITY_BUTTON("accessibility_button"),
+    ACCESSIBILITY_BUTTON_CHOOSER("accessibility_button_chooser"),
+    ACCESSIBILITY_SHORTCUT("accessibility_shortcut"),
+    ACCESSIBILITY_ALL_APPS("accessibility_all_apps"),
+    DISMISS_NOTIFICATION_SHADE("dismiss_notification_shade"),
+    DPAD_UP("dpad_up"),
+    DPAD_DOWN("dpad_down"),
+    DPAD_LEFT("dpad_left"),
+    DPAD_RIGHT("dpad_right"),
+    DPAD_CENTER("dpad_center"),
+    MENU("menu"),
+}
+
+data class GlobalActionParams(val action: GlobalActionKind) {
+    companion object {
+        fun parse(params: JsonValue.Obj): GlobalActionParams {
+            val actionStr = params.string("action") ?: bad("missing global action")
+            val action = GlobalActionKind.entries.firstOrNull { it.wire == actionStr }
+                ?: bad("unknown global action '$actionStr'")
+            return GlobalActionParams(action)
+        }
+    }
+}
+
+fun globalActionResult(dispatched: Boolean): JsonValue.Obj =
+    jsonObject { put("dispatched", dispatched) }
+
+// ---------------------------------------------------------------------------
+// key_event
+// ---------------------------------------------------------------------------
+
+data class KeyEventParams(
+    val keyCode: String,
+    val metaState: Int?,
+    val repeatCount: Int?,
+) {
+    companion object {
+        fun parse(params: JsonValue.Obj): KeyEventParams {
+            val keyCode = params.string("key_code") ?: bad("missing key_code")
+            if (keyCode.isEmpty()) bad("key_code must not be empty")
+            val metaState = params.int("meta_state")
+            val repeatCount = params.int("repeat_count")
+            if (repeatCount != null && repeatCount < 0) bad("repeat_count must be non-negative")
+            return KeyEventParams(keyCode, metaState, repeatCount)
+        }
+    }
+}
+
+fun keyEventResult(dispatched: Boolean): JsonValue.Obj =
+    jsonObject { put("dispatched", dispatched) }
+
+// ---------------------------------------------------------------------------
 // cursor_overlay
 // ---------------------------------------------------------------------------
 

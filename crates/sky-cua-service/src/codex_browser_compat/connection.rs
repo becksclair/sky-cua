@@ -262,15 +262,17 @@ fn codex_app_build_flavor_from_environ(environment: &[u8]) -> Result<Option<Stri
 
 #[cfg(test)]
 mod tests {
-    use super::{codex_app_build_flavor_from_environ, write_outbound_frame};
-    use serde_json::json;
     use std::{
         io,
         pin::Pin,
         task::{Context, Poll},
         time::Duration,
     };
+
+    use serde_json::json;
     use tokio::io::AsyncWrite;
+
+    use super::{codex_app_build_flavor_from_environ, write_outbound_frame};
 
     #[test]
     fn extracts_bounded_utf8_codex_build_flavor() {

@@ -356,11 +356,12 @@ fn add_session_env(command: &mut Command) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sky_cua_platform::model::{
         DoctorAccessibilityReport, DoctorCheck, DoctorInputReport, DoctorPortalReport,
         DoctorReadiness, DoctorReport, DoctorWindowingReport, EnvironmentInfo,
     };
+
+    use super::*;
 
     fn doctor_report_with_accessibility(accessibility: DoctorAccessibilityReport) -> DoctorReport {
         DoctorReport {

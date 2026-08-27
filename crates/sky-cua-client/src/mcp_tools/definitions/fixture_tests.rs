@@ -2,16 +2,17 @@
 //! annotations and cross-checks the advertised registry against
 //! `tests/fixtures/{tool_contract,call_cases,mcp_tool_surface_matrix}.json`.
 
+use std::{fs, path::PathBuf, sync::Mutex};
+
+use serde_json::{Value, json};
+
+use super::contract_fixtures::*;
 use super::{
     InactiveToolReason, McpConfigDiagnostic, McpProcessConfig, McpToolRegistry,
     build_tool_definitions, build_tool_registry, mcp_process_config_from_env, schema_accepts,
     schema_keyword_is_supported,
 };
 use crate::mcp_server::ModelSessionInfo;
-use serde_json::{Value, json};
-use std::{fs, path::PathBuf, sync::Mutex};
-
-use super::contract_fixtures::*;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -66,6 +67,9 @@ const EXPECTED: &[AnnotationRow] = &[
     ("phone_editor", (false, true, false, false)),
     ("phone_camera", (false, true, false, false)),
     ("phone_storage", (false, true, false, false)),
+    ("phone_node_action", (false, true, false, false)),
+    ("phone_global_action", (false, true, false, false)),
+    ("phone_key_event", (false, true, false, false)),
     ("browser_eval", (false, true, false, true)),
 ];
 
@@ -208,7 +212,7 @@ pub(super) fn process_config(browser_eval_enabled: bool) -> McpProcessConfig {
 fn registry_has_expected_name_budget() {
     let model = ModelSessionInfo::default();
     let registry = build_tool_registry(&process_config(false), &model);
-    assert_eq!(registry.active_names.len(), 40);
+    assert_eq!(registry.active_names.len(), 43);
     assert!(registry.contains("observe"));
     assert!(registry.contains("browser_input"));
     let doctor = registry
@@ -233,7 +237,7 @@ fn registry_has_expected_name_budget() {
 fn registry_adds_browser_eval_only_when_enabled() {
     let model = ModelSessionInfo::default();
     let registry = build_tool_registry(&process_config(true), &model);
-    assert_eq!(registry.active_names.len(), 41);
+    assert_eq!(registry.active_names.len(), 44);
     assert!(registry.contains("browser_eval"));
     assert_eq!(registry.inactive_reason("browser_eval"), None);
 }
@@ -1284,7 +1288,9 @@ fn tool_contract_fixture_matches_generated_registry() {
         .iter()
         .map(|tool| tool["name"].as_str().expect("tool name"))
         .collect();
-    assert_eq!(contract_names, advertised_names);
+    if std::env::var_os("SKY_CUA_UPDATE_MCP_FIXTURES").is_none() {
+        assert_eq!(contract_names, advertised_names);
+    }
 
     assert_fixture_matches(
         "tool_contract.json",

@@ -5,6 +5,12 @@ use sky_cua_platform::model::{
     ServiceResponse, WindowTarget,
 };
 
+use super::semantic_text::append_appshot_semantics;
+use super::{
+    McpService, ScreenshotDelivery, effective_capture_screen, enrich_snapshot,
+    inline_screenshot_block, invalid_request_tool_error, parse_app_selector,
+    parse_optional_string_argument, parse_optional_usize, parse_screenshot_delivery, tool_error,
+};
 use crate::app_state::{
     APP_STATE_DEFAULT_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_LIMIT,
     APP_STATE_MAX_ELEMENT_QUERY_CHARS, AppStateDetail, AppStateElementOptions,
@@ -15,13 +21,6 @@ use crate::output_shapes::{
     full_snapshot_with_element_selection, select_app_state_elements,
     snapshot_text_content_with_element_options, snapshot_text_content_with_element_selection,
     summary_snapshot_with_element_selection, text_app_state_element_selection,
-};
-
-use super::semantic_text::append_appshot_semantics;
-use super::{
-    McpService, ScreenshotDelivery, effective_capture_screen, enrich_snapshot,
-    inline_screenshot_block, invalid_request_tool_error, parse_app_selector,
-    parse_optional_string_argument, parse_optional_usize, parse_screenshot_delivery, tool_error,
 };
 
 pub(super) fn handle_get_app_state(

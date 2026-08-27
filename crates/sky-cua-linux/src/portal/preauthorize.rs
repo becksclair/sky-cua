@@ -391,12 +391,14 @@ fn gnome_restore_data(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use zbus::zvariant::{Structure, Value};
+
     use super::{
         DisplayConfigState, GNOME_RESTORE_BACKEND_NAME, GNOME_RESTORE_VERSION, LogicalMonitor,
         Monitor, MonitorIdentity, gnome_restore_data, primary_monitor_identity_from_state,
     };
-    use std::collections::HashMap;
-    use zbus::zvariant::{Structure, Value};
 
     fn monitor(connector: &str, vendor: &str, product: &str, serial: &str) -> Monitor {
         (

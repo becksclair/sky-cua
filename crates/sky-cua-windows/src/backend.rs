@@ -2238,6 +2238,13 @@ fn win32_error(message: &str) -> BackendError {
 
 #[cfg(test)]
 mod tests {
+    use sky_cua_platform::diagnostics::BackendErrorCode;
+    use sky_cua_platform::model::{
+        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
+        DisplayInfo, DisplayTarget, ElementNode, InputBackendKind, PixelSize, RectF, WindowTarget,
+    };
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_RETURN};
+
     use super::{
         CaptureBlankFrame, WindowInfo, WindowsInputBackend, absolute_pointer_coord,
         absolute_pointer_coords, assign_window_displays, capture_source_for_rect,
@@ -2245,12 +2252,6 @@ mod tests {
         primary_display, resolve_display_target, resolve_window_target, scroll_delta_y,
         uia_backend_ref_for_fallback, virtual_key, window_element,
     };
-    use sky_cua_platform::diagnostics::BackendErrorCode;
-    use sky_cua_platform::model::{
-        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
-        DisplayInfo, DisplayTarget, ElementNode, InputBackendKind, PixelSize, RectF, WindowTarget,
-    };
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_RETURN};
 
     #[test]
     fn parses_hex_window_handle() {

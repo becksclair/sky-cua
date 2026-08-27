@@ -67,6 +67,15 @@ interface MethodHandler {
     fun key(params: JsonValue.Obj): JsonValue.Obj =
         throw MethodApplicationException("unsupported_api", "key input is unavailable")
 
+    fun nodeAction(params: NodeActionParams): JsonValue.Obj =
+        throw MethodApplicationException("unsupported_api", "node action is unavailable")
+
+    fun globalAction(params: GlobalActionParams): JsonValue.Obj =
+        throw MethodApplicationException("unsupported_api", "global action is unavailable")
+
+    fun keyEvent(params: KeyEventParams): JsonValue.Obj =
+        throw MethodApplicationException("unsupported_api", "key event is unavailable")
+
     /** Observation-only direct phone-control.v2 SMS query. This is not part of
      * the legacy v1 RPC method registry. */
     fun smsQuery(params: JsonValue.Obj): JsonValue.Obj =
@@ -154,6 +163,9 @@ class RpcDispatcher(
             Protocol.Methods.STORAGE -> handler.storage(request.params)
             Protocol.Methods.CAMERA -> handler.camera(request.params)
             Protocol.Methods.KEY -> handler.key(request.params)
+            Protocol.Methods.NODE_ACTION -> handler.nodeAction(NodeActionParams.parse(request.params))
+            Protocol.Methods.GLOBAL_ACTION -> handler.globalAction(GlobalActionParams.parse(request.params))
+            Protocol.Methods.KEY_EVENT -> handler.keyEvent(KeyEventParams.parse(request.params))
             else ->
                 throw MethodParamException(
                     Protocol.ErrorCodes.UNKNOWN_METHOD,

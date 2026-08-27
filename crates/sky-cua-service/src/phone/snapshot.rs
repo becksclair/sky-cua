@@ -255,8 +255,9 @@ impl PhoneSnapshotRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sky_cua_platform::model::{CoordinateSpace, RectF};
+
+    use super::*;
 
     fn size(w: u32, h: u32) -> PixelSize {
         PixelSize {

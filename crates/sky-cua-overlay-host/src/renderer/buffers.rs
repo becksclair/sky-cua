@@ -1,8 +1,9 @@
 //! Vertex and buffer helpers for the GPU-rendered cursor/effect scene.
 
+use sky_cua_platform::{model::AgentOverlayGestureKind, overlay_spec};
+
 use crate::cursor_asset;
 use crate::renderer::scene::{CursorPoint, EffectScene};
-use sky_cua_platform::{model::AgentOverlayGestureKind, overlay_spec};
 
 pub const MAX_EFFECT_POINTS: usize = overlay_spec::shared::effects::MAX_GESTURE_POINTS as usize;
 
@@ -359,8 +360,9 @@ fn ndc_y(y: f64, height: u32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sky_cua_platform::model::AgentOverlayGestureKind;
+
+    use super::*;
 
     #[test]
     fn cursor_vertex_layout_matches_wgsl() {

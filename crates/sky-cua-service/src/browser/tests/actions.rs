@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use sky_cua_platform::model::{BROWSER_EVAL_ENV, BrowserSessionIdentity, BrowserTargetKind};
 use tokio::net::UnixListener;
 
+use super::helpers::*;
 use crate::browser::bridge::{
     click_element, eval, eval_with_policy, list_tabs, list_tabs_with_identity, move_mouse,
     navigate, open_tab, press_key, type_text_element,
@@ -12,8 +13,6 @@ use crate::browser::protocol::{LIST_TABS_REQUEST_ID, read_frame, write_frame};
 use crate::browser::sockets::SKY_CUA_SOCKET_DIR_ENV;
 use crate::browser::tabs::parse_tabs;
 use crate::browser::transport::list_tabs_method;
-
-use super::helpers::*;
 
 #[test]
 fn user_chrome_lists_real_browser_tabs() {

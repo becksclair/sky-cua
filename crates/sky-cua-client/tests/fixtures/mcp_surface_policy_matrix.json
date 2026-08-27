@@ -100,7 +100,10 @@
         "phone_clipboard",
         "phone_editor",
         "phone_camera",
-        "phone_storage"
+        "phone_storage",
+        "phone_node_action",
+        "phone_global_action",
+        "phone_key_event"
       ]
     },
     {
@@ -292,7 +295,10 @@
         "phone_clipboard",
         "phone_editor",
         "phone_camera",
-        "phone_storage"
+        "phone_storage",
+        "phone_node_action",
+        "phone_global_action",
+        "phone_key_event"
       ]
     },
     {
@@ -493,7 +499,10 @@
         "phone_clipboard",
         "phone_editor",
         "phone_camera",
-        "phone_storage"
+        "phone_storage",
+        "phone_node_action",
+        "phone_global_action",
+        "phone_key_event"
       ]
     },
     {
@@ -744,7 +753,10 @@
         "phone_clipboard",
         "phone_editor",
         "phone_camera",
-        "phone_storage"
+        "phone_storage",
+        "phone_node_action",
+        "phone_global_action",
+        "phone_key_event"
       ]
     }
   ],

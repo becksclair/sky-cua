@@ -5,9 +5,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::env_probe::non_empty_env;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{AppInfo, CoordinateSpace, RectF};
+
+use crate::env_probe::non_empty_env;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct X11WindowInfo {

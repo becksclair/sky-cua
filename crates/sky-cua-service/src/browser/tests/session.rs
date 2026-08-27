@@ -7,11 +7,10 @@ use serde_json::{Value, json};
 use sky_cua_platform::model::BrowserTargetKind;
 use tokio::net::UnixListener;
 
+use super::helpers::*;
 use crate::browser::bridge::{claim_tab, move_mouse};
 use crate::browser::protocol::{read_frame, write_frame};
 use crate::browser::sockets::SKY_CUA_SOCKET_DIR_ENV;
-
-use super::helpers::*;
 
 #[tokio::test]
 async fn claim_tab_adopts_existing_user_chrome_tab() {

@@ -279,12 +279,13 @@ fn describe_matching_nodes(nodes: &[&ElementNode]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::Utc;
     use sky_cua_platform::model::{
         CaptureBackendKind, EnvironmentInfo, InputBackendKind, PortalCapabilities,
         SemanticBackendKind, SessionKind, ToolAvailability, ToolCapabilities,
     };
+
+    use super::*;
 
     #[test]
     fn semantic_selector_resolves_unique_node() {

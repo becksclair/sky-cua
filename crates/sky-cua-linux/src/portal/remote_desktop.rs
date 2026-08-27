@@ -10,14 +10,13 @@ use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 use crate::portal::eis_input::EisWorkerHandle;
+// Backward-compatible re-exports of items that were previously declared in this module.
+pub use crate::portal::eis_keymap::{keysym_for_char, keysym_for_key_name};
 use crate::portal::legacy_input;
 use crate::portal::pipewire::{self, PipeWireFrameCapture};
 use crate::portal::portal_session::{preauthorize_with_timeout, start_session_with_timeout};
 use crate::portal::session::portal_u32_property;
 use crate::portal::token_store::PortalTokenStore;
-
-// Backward-compatible re-exports of items that were previously declared in this module.
-pub use crate::portal::eis_keymap::{keysym_for_char, keysym_for_key_name};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PortalStreamInfo {

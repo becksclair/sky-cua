@@ -347,8 +347,9 @@ pub(super) fn selector_or_window_summary(selector: Option<&AppSelector>, app: &A
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sky_cua_platform::model::CoordinateSpace;
+
+    use super::*;
 
     fn element(index: usize, parent_index: Option<usize>, bounds: RectF) -> ElementNode {
         ElementNode {

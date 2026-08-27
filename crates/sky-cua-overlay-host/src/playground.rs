@@ -23,7 +23,13 @@
 //! canvas makes the pink effects pop, while `transparent` overlays the effects
 //! on the live desktop.
 
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
 use anyhow::{Context, Result, bail};
+use sky_cua_platform::{
+    model::{AgentOverlayGestureKind, CoordinateSpace},
+    overlay_spec,
+};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_seat,
@@ -40,7 +46,6 @@ use smithay_client_toolkit::{
         },
     },
 };
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use wayland_client::{
     Connection, Dispatch, QueueHandle,
     globals::{GlobalListContents, registry_queue_init},
@@ -55,10 +60,6 @@ use crate::{
         CursorImage, CursorPoint, EffectScene, SurfaceDrawRequest, SurfaceDrawSpec, SurfaceGuard,
         WgpuOverlayInstance, WgpuOverlayRenderer,
     },
-};
-use sky_cua_platform::{
-    model::{AgentOverlayGestureKind, CoordinateSpace},
-    overlay_spec,
 };
 
 const INITIAL_ROUNDTRIPS: usize = 4;

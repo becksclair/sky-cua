@@ -850,11 +850,8 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
-    use super::test_support::write_fake_overlay_host;
-    use super::{
-        OVERLAY_IDLE_CLEANUP_MS, OverlayController, gesture_from_action_request, now_ms,
-        state_from_action_request,
-    };
+    use std::process::Command;
+
     use image::{ImageBuffer, Rgba};
     use sky_cua_overlay_host::{
         OVERLAY_HOST_PROTOCOL_VERSION, OverlayArrivalOutcome, OverlayHostReply,
@@ -863,8 +860,13 @@ mod tests {
         ActionName, ActionOutcome, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope,
         CoordinateSpace, ElementNode, ModelImageFormat, PixelSize, RectF,
     };
+
     #[cfg(unix)]
-    use std::process::Command;
+    use super::test_support::write_fake_overlay_host;
+    use super::{
+        OVERLAY_IDLE_CLEANUP_MS, OverlayController, gesture_from_action_request, now_ms,
+        state_from_action_request,
+    };
 
     #[test]
     fn set_state_normalizes_sequence_and_timestamps() {

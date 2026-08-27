@@ -1,5 +1,3 @@
-use async_trait::async_trait;
-use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -8,6 +6,9 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use async_trait::async_trait;
+use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Child;
 use tokio::process::Command as TokioCommand;
@@ -620,10 +621,11 @@ fn write_last_attempt(lock: &mut RepairLock, now: i64) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::os::unix::net::UnixListener;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+    use super::*;
 
     static TEST_ID: AtomicU64 = AtomicU64::new(0);
 

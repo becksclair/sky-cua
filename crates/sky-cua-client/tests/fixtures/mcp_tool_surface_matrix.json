@@ -4,11 +4,11 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": false,
-      "description_bytes": 5404,
+      "description_bytes": 5919,
       "largest_schema_bytes": 3846,
-      "serialized_bytes": 69140,
+      "serialized_bytes": 74440,
       "surface": "grouped",
-      "tool_count": 40,
+      "tool_count": 43,
       "tools_list": {
         "tools": [
           {
@@ -2896,10 +2896,24 @@
                   "minimum": 0,
                   "type": "number"
                 },
+                "interval_ms": {
+                  "anyOf": [
+                    {
+                      "description": "Interval between taps for double_tap.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "operation": {
                   "enum": [
                     "tap",
-                    "swipe"
+                    "swipe",
+                    "long_press",
+                    "double_tap"
                   ],
                   "type": "string"
                 },
@@ -5487,6 +5501,356 @@
               "type": "object"
             },
             "name": "phone_storage"
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false
+            },
+            "description": "Perform a semantic accessibility action on a phone node (long_click for Telegram selection, click, scroll, etc.). Prefer stable view_id for playground targets; appshot_id+node_id requires a fresh AppShot.",
+            "inputSchema": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "enum": [
+                    "click",
+                    "long_click",
+                    "context_click",
+                    "dismiss",
+                    "expand",
+                    "collapse",
+                    "scroll_forward",
+                    "scroll_backward",
+                    "scroll_up",
+                    "scroll_down",
+                    "scroll_left",
+                    "scroll_right",
+                    "page_up",
+                    "page_down",
+                    "page_left",
+                    "page_right",
+                    "scroll_to_position",
+                    "focus",
+                    "clear_focus",
+                    "accessibility_focus",
+                    "clear_accessibility_focus",
+                    "select",
+                    "clear_selection",
+                    "show_on_screen",
+                    "set_progress",
+                    "set_text",
+                    "set_selection",
+                    "copy",
+                    "cut",
+                    "paste",
+                    "next_at_movement_granularity",
+                    "previous_at_movement_granularity",
+                    "next_html_element",
+                    "previous_html_element",
+                    "press_and_hold",
+                    "ime_enter",
+                    "move_window",
+                    "show_tooltip",
+                    "hide_tooltip"
+                  ],
+                  "type": "string"
+                },
+                "alias": {
+                  "anyOf": [
+                    {
+                      "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*",
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "appshot_id": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "args": {
+                  "anyOf": [
+                    {
+                      "description": "Action-specific bundle args like {\"text\":\"hi\"} for set_text or {\"progress\":0.5} for set_progress",
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "device_id": {
+                  "anyOf": [
+                    {
+                      "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "session_id": {
+                  "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "view_id": {
+                  "anyOf": [
+                    {
+                      "description": "viewIdResourceName like com.skycua.phonecompanion:id/playground_click_button",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "type": "object"
+            },
+            "name": "phone_node_action"
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false
+            },
+            "description": "Perform a global accessibility action (back, home, notifications, lock_screen, etc.). Fails visibly with permission_denied if not allowed.",
+            "inputSchema": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "enum": [
+                    "back",
+                    "home",
+                    "recents",
+                    "notifications",
+                    "quick_settings",
+                    "power_dialog",
+                    "toggle_split_screen",
+                    "lock_screen",
+                    "take_screenshot",
+                    "keycode_headset_hook",
+                    "accessibility_button",
+                    "accessibility_button_chooser",
+                    "accessibility_shortcut",
+                    "accessibility_all_apps",
+                    "dismiss_notification_shade",
+                    "dpad_up",
+                    "dpad_down",
+                    "dpad_left",
+                    "dpad_right",
+                    "dpad_center",
+                    "menu"
+                  ],
+                  "type": "string"
+                },
+                "alias": {
+                  "anyOf": [
+                    {
+                      "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*",
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "appshot_id": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "device_id": {
+                  "anyOf": [
+                    {
+                      "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "session_id": {
+                  "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "type": "object"
+            },
+            "name": "phone_global_action"
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false
+            },
+            "description": "Inject a raw Android keycode (KEYCODE_VOLUME_UP or numeric 24) on a connected phone. Direct global keys work over CompanionDirect; volume/media keys fall back to ADB serial.",
+            "inputSchema": {
+              "additionalProperties": false,
+              "properties": {
+                "alias": {
+                  "anyOf": [
+                    {
+                      "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*",
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "appshot_id": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "device_id": {
+                  "anyOf": [
+                    {
+                      "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "key_code": {
+                  "description": "Android keycode name (KEYCODE_VOLUME_UP) or numeric string (24)",
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "meta_state": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "repeat_count": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "session_id": {
+                  "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key_code"
+              ],
+              "type": "object"
+            },
+            "name": "phone_key_event"
           }
         ]
       }
@@ -5494,11 +5858,11 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": false,
-      "description_bytes": 5507,
+      "description_bytes": 6022,
       "largest_schema_bytes": 3846,
-      "serialized_bytes": 70011,
+      "serialized_bytes": 75311,
       "surface": "grouped",
-      "tool_count": 41,
+      "tool_count": 44,
       "tools_list": {
         "tools": [
           {
@@ -8386,10 +8750,24 @@
                   "minimum": 0,
                   "type": "number"
                 },
+                "interval_ms": {
+                  "anyOf": [
+                    {
+                      "description": "Interval between taps for double_tap.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "operation": {
                   "enum": [
                     "tap",
-                    "swipe"
+                    "swipe",
+                    "long_press",
+                    "double_tap"
                   ],
                   "type": "string"
                 },
@@ -10977,6 +11355,356 @@
               "type": "object"
             },
             "name": "phone_storage"
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false
+            },
+            "description": "Perform a semantic accessibility action on a phone node (long_click for Telegram selection, click, scroll, etc.). Prefer stable view_id for playground targets; appshot_id+node_id requires a fresh AppShot.",
+            "inputSchema": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "enum": [
+                    "click",
+                    "long_click",
+                    "context_click",
+                    "dismiss",
+                    "expand",
+                    "collapse",
+                    "scroll_forward",
+                    "scroll_backward",
+                    "scroll_up",
+                    "scroll_down",
+                    "scroll_left",
+                    "scroll_right",
+                    "page_up",
+                    "page_down",
+                    "page_left",
+                    "page_right",
+                    "scroll_to_position",
+                    "focus",
+                    "clear_focus",
+                    "accessibility_focus",
+                    "clear_accessibility_focus",
+                    "select",
+                    "clear_selection",
+                    "show_on_screen",
+                    "set_progress",
+                    "set_text",
+                    "set_selection",
+                    "copy",
+                    "cut",
+                    "paste",
+                    "next_at_movement_granularity",
+                    "previous_at_movement_granularity",
+                    "next_html_element",
+                    "previous_html_element",
+                    "press_and_hold",
+                    "ime_enter",
+                    "move_window",
+                    "show_tooltip",
+                    "hide_tooltip"
+                  ],
+                  "type": "string"
+                },
+                "alias": {
+                  "anyOf": [
+                    {
+                      "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*",
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "appshot_id": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "args": {
+                  "anyOf": [
+                    {
+                      "description": "Action-specific bundle args like {\"text\":\"hi\"} for set_text or {\"progress\":0.5} for set_progress",
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "device_id": {
+                  "anyOf": [
+                    {
+                      "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "session_id": {
+                  "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "view_id": {
+                  "anyOf": [
+                    {
+                      "description": "viewIdResourceName like com.skycua.phonecompanion:id/playground_click_button",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "type": "object"
+            },
+            "name": "phone_node_action"
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false
+            },
+            "description": "Perform a global accessibility action (back, home, notifications, lock_screen, etc.). Fails visibly with permission_denied if not allowed.",
+            "inputSchema": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "enum": [
+                    "back",
+                    "home",
+                    "recents",
+                    "notifications",
+                    "quick_settings",
+                    "power_dialog",
+                    "toggle_split_screen",
+                    "lock_screen",
+                    "take_screenshot",
+                    "keycode_headset_hook",
+                    "accessibility_button",
+                    "accessibility_button_chooser",
+                    "accessibility_shortcut",
+                    "accessibility_all_apps",
+                    "dismiss_notification_shade",
+                    "dpad_up",
+                    "dpad_down",
+                    "dpad_left",
+                    "dpad_right",
+                    "dpad_center",
+                    "menu"
+                  ],
+                  "type": "string"
+                },
+                "alias": {
+                  "anyOf": [
+                    {
+                      "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*",
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "appshot_id": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "device_id": {
+                  "anyOf": [
+                    {
+                      "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "session_id": {
+                  "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "type": "object"
+            },
+            "name": "phone_global_action"
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false
+            },
+            "description": "Inject a raw Android keycode (KEYCODE_VOLUME_UP or numeric 24) on a connected phone. Direct global keys work over CompanionDirect; volume/media keys fall back to ADB serial.",
+            "inputSchema": {
+              "additionalProperties": false,
+              "properties": {
+                "alias": {
+                  "anyOf": [
+                    {
+                      "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*",
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "appshot_id": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "device_id": {
+                  "anyOf": [
+                    {
+                      "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "key_code": {
+                  "description": "Android keycode name (KEYCODE_VOLUME_UP) or numeric string (24)",
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "meta_state": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "repeat_count": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "session_id": {
+                  "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key_code"
+              ],
+              "type": "object"
+            },
+            "name": "phone_key_event"
           },
           {
             "annotations": {
@@ -11038,11 +11766,11 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": true,
-      "description_bytes": 5404,
+      "description_bytes": 5919,
       "largest_schema_bytes": 3846,
-      "serialized_bytes": 69351,
+      "serialized_bytes": 74651,
       "surface": "grouped",
-      "tool_count": 40,
+      "tool_count": 43,
       "tools_list": {
         "tools": [
           {
@@ -13945,10 +14673,24 @@
                   "minimum": 0,
                   "type": "number"
                 },
+                "interval_ms": {
+                  "anyOf": [
+                    {
+                      "description": "Interval between taps for double_tap.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "operation": {
                   "enum": [
                     "tap",
-                    "swipe"
+                    "swipe",
+                    "long_press",
+                    "double_tap"
                   ],
                   "type": "string"
                 },
@@ -16536,6 +17278,356 @@
               "type": "object"
             },
             "name": "phone_storage"
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false
+            },
+            "description": "Perform a semantic accessibility action on a phone node (long_click for Telegram selection, click, scroll, etc.). Prefer stable view_id for playground targets; appshot_id+node_id requires a fresh AppShot.",
+            "inputSchema": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "enum": [
+                    "click",
+                    "long_click",
+                    "context_click",
+                    "dismiss",
+                    "expand",
+                    "collapse",
+                    "scroll_forward",
+                    "scroll_backward",
+                    "scroll_up",
+                    "scroll_down",
+                    "scroll_left",
+                    "scroll_right",
+                    "page_up",
+                    "page_down",
+                    "page_left",
+                    "page_right",
+                    "scroll_to_position",
+                    "focus",
+                    "clear_focus",
+                    "accessibility_focus",
+                    "clear_accessibility_focus",
+                    "select",
+                    "clear_selection",
+                    "show_on_screen",
+                    "set_progress",
+                    "set_text",
+                    "set_selection",
+                    "copy",
+                    "cut",
+                    "paste",
+                    "next_at_movement_granularity",
+                    "previous_at_movement_granularity",
+                    "next_html_element",
+                    "previous_html_element",
+                    "press_and_hold",
+                    "ime_enter",
+                    "move_window",
+                    "show_tooltip",
+                    "hide_tooltip"
+                  ],
+                  "type": "string"
+                },
+                "alias": {
+                  "anyOf": [
+                    {
+                      "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*",
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "appshot_id": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "args": {
+                  "anyOf": [
+                    {
+                      "description": "Action-specific bundle args like {\"text\":\"hi\"} for set_text or {\"progress\":0.5} for set_progress",
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "device_id": {
+                  "anyOf": [
+                    {
+                      "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "session_id": {
+                  "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "view_id": {
+                  "anyOf": [
+                    {
+                      "description": "viewIdResourceName like com.skycua.phonecompanion:id/playground_click_button",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "type": "object"
+            },
+            "name": "phone_node_action"
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false
+            },
+            "description": "Perform a global accessibility action (back, home, notifications, lock_screen, etc.). Fails visibly with permission_denied if not allowed.",
+            "inputSchema": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "enum": [
+                    "back",
+                    "home",
+                    "recents",
+                    "notifications",
+                    "quick_settings",
+                    "power_dialog",
+                    "toggle_split_screen",
+                    "lock_screen",
+                    "take_screenshot",
+                    "keycode_headset_hook",
+                    "accessibility_button",
+                    "accessibility_button_chooser",
+                    "accessibility_shortcut",
+                    "accessibility_all_apps",
+                    "dismiss_notification_shade",
+                    "dpad_up",
+                    "dpad_down",
+                    "dpad_left",
+                    "dpad_right",
+                    "dpad_center",
+                    "menu"
+                  ],
+                  "type": "string"
+                },
+                "alias": {
+                  "anyOf": [
+                    {
+                      "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*",
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "appshot_id": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "device_id": {
+                  "anyOf": [
+                    {
+                      "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "session_id": {
+                  "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "type": "object"
+            },
+            "name": "phone_global_action"
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false
+            },
+            "description": "Inject a raw Android keycode (KEYCODE_VOLUME_UP or numeric 24) on a connected phone. Direct global keys work over CompanionDirect; volume/media keys fall back to ADB serial.",
+            "inputSchema": {
+              "additionalProperties": false,
+              "properties": {
+                "alias": {
+                  "anyOf": [
+                    {
+                      "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*",
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "appshot_id": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "device_id": {
+                  "anyOf": [
+                    {
+                      "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "key_code": {
+                  "description": "Android keycode name (KEYCODE_VOLUME_UP) or numeric string (24)",
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "meta_state": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "repeat_count": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "session_id": {
+                  "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key_code"
+              ],
+              "type": "object"
+            },
+            "name": "phone_key_event"
           }
         ]
       }
@@ -16543,11 +17635,11 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": true,
-      "description_bytes": 5507,
+      "description_bytes": 6022,
       "largest_schema_bytes": 3846,
-      "serialized_bytes": 70222,
+      "serialized_bytes": 75522,
       "surface": "grouped",
-      "tool_count": 41,
+      "tool_count": 44,
       "tools_list": {
         "tools": [
           {
@@ -19450,10 +20542,24 @@
                   "minimum": 0,
                   "type": "number"
                 },
+                "interval_ms": {
+                  "anyOf": [
+                    {
+                      "description": "Interval between taps for double_tap.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "operation": {
                   "enum": [
                     "tap",
-                    "swipe"
+                    "swipe",
+                    "long_press",
+                    "double_tap"
                   ],
                   "type": "string"
                 },
@@ -22041,6 +23147,356 @@
               "type": "object"
             },
             "name": "phone_storage"
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false
+            },
+            "description": "Perform a semantic accessibility action on a phone node (long_click for Telegram selection, click, scroll, etc.). Prefer stable view_id for playground targets; appshot_id+node_id requires a fresh AppShot.",
+            "inputSchema": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "enum": [
+                    "click",
+                    "long_click",
+                    "context_click",
+                    "dismiss",
+                    "expand",
+                    "collapse",
+                    "scroll_forward",
+                    "scroll_backward",
+                    "scroll_up",
+                    "scroll_down",
+                    "scroll_left",
+                    "scroll_right",
+                    "page_up",
+                    "page_down",
+                    "page_left",
+                    "page_right",
+                    "scroll_to_position",
+                    "focus",
+                    "clear_focus",
+                    "accessibility_focus",
+                    "clear_accessibility_focus",
+                    "select",
+                    "clear_selection",
+                    "show_on_screen",
+                    "set_progress",
+                    "set_text",
+                    "set_selection",
+                    "copy",
+                    "cut",
+                    "paste",
+                    "next_at_movement_granularity",
+                    "previous_at_movement_granularity",
+                    "next_html_element",
+                    "previous_html_element",
+                    "press_and_hold",
+                    "ime_enter",
+                    "move_window",
+                    "show_tooltip",
+                    "hide_tooltip"
+                  ],
+                  "type": "string"
+                },
+                "alias": {
+                  "anyOf": [
+                    {
+                      "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*",
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "appshot_id": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "args": {
+                  "anyOf": [
+                    {
+                      "description": "Action-specific bundle args like {\"text\":\"hi\"} for set_text or {\"progress\":0.5} for set_progress",
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "device_id": {
+                  "anyOf": [
+                    {
+                      "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "session_id": {
+                  "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "view_id": {
+                  "anyOf": [
+                    {
+                      "description": "viewIdResourceName like com.skycua.phonecompanion:id/playground_click_button",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "type": "object"
+            },
+            "name": "phone_node_action"
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false
+            },
+            "description": "Perform a global accessibility action (back, home, notifications, lock_screen, etc.). Fails visibly with permission_denied if not allowed.",
+            "inputSchema": {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "enum": [
+                    "back",
+                    "home",
+                    "recents",
+                    "notifications",
+                    "quick_settings",
+                    "power_dialog",
+                    "toggle_split_screen",
+                    "lock_screen",
+                    "take_screenshot",
+                    "keycode_headset_hook",
+                    "accessibility_button",
+                    "accessibility_button_chooser",
+                    "accessibility_shortcut",
+                    "accessibility_all_apps",
+                    "dismiss_notification_shade",
+                    "dpad_up",
+                    "dpad_down",
+                    "dpad_left",
+                    "dpad_right",
+                    "dpad_center",
+                    "menu"
+                  ],
+                  "type": "string"
+                },
+                "alias": {
+                  "anyOf": [
+                    {
+                      "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*",
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "appshot_id": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "device_id": {
+                  "anyOf": [
+                    {
+                      "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "session_id": {
+                  "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "type": "object"
+            },
+            "name": "phone_global_action"
+          },
+          {
+            "annotations": {
+              "destructiveHint": true,
+              "idempotentHint": false,
+              "openWorldHint": false,
+              "readOnlyHint": false
+            },
+            "description": "Inject a raw Android keycode (KEYCODE_VOLUME_UP or numeric 24) on a connected phone. Direct global keys work over CompanionDirect; volume/media keys fall back to ADB serial.",
+            "inputSchema": {
+              "additionalProperties": false,
+              "properties": {
+                "alias": {
+                  "anyOf": [
+                    {
+                      "description": "Human alias from [phone.aliases] mapping to a device_id or ADB serial (e.g. \"phone\", \"tablet\").",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*",
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "appshot_id": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "device_id": {
+                  "anyOf": [
+                    {
+                      "description": "Stable CompanionDirect device id; direct links do not have an ADB serial.",
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "const": "",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "key_code": {
+                  "description": "Android keycode name (KEYCODE_VOLUME_UP) or numeric string (24)",
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "meta_state": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "repeat_count": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "session_id": {
+                  "description": "Phone session_id returned by phone_connection(operation=\"connect\") or status(component=\"phone\") active sessions; required after connect.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key_code"
+              ],
+              "type": "object"
+            },
+            "name": "phone_key_event"
           },
           {
             "annotations": {

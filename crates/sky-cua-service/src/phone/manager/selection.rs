@@ -1,15 +1,16 @@
 #![allow(clippy::empty_line_after_doc_comments)]
 //! Session selection, profile cache, and backend capability helpers.
 
-use super::helpers::{DefaultBackendKind, now_ms};
-use super::{ActionContext, CachedProfile, PhoneManager};
-use crate::phone::manager::routing;
-use crate::phone::{adb, protocol};
 use sky_cua_platform::model::{
     PhoneBackendCapabilities, PhoneBackendKind, PhoneCapabilityProfile,
     PhoneCapabilityRefreshState, PhoneConnectionIdentity, PhoneConnectionKind, PhoneResponse,
     PhoneSessionSelector, PixelSize,
 };
+
+use super::helpers::{DefaultBackendKind, now_ms};
+use super::{ActionContext, CachedProfile, PhoneManager};
+use crate::phone::manager::routing;
+use crate::phone::{adb, protocol};
 
 impl PhoneManager {
     pub(crate) fn cached_profile(

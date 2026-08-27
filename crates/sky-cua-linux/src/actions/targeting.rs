@@ -543,18 +543,19 @@ fn missing_linux_virtual_logical_rect_error() -> BackendError {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        action_point_for_backend, drag_from_point, drag_to_point,
-        effective_pointer_input_backend_for_target, explicit_point, point_for_element_for_backend,
-        point_for_x11_element_through_portal, point_from_screenshot_pixels,
-        virtual_scroll_steps_from_delta,
-    };
     use serde_json::json;
     use sky_cua_platform::diagnostics::BackendErrorCode;
     use sky_cua_platform::model::test_support::wayland_pipewire_environment;
     use sky_cua_platform::model::{
         ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
         ElementNode, EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, RectF,
+    };
+
+    use super::{
+        action_point_for_backend, drag_from_point, drag_to_point,
+        effective_pointer_input_backend_for_target, explicit_point, point_for_element_for_backend,
+        point_for_x11_element_through_portal, point_from_screenshot_pixels,
+        virtual_scroll_steps_from_delta,
     };
 
     #[test]

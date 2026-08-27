@@ -312,13 +312,14 @@ fn diagnostic(code: &str, message: &str, details: Option<String>) -> DiagnosticE
 
 #[cfg(test)]
 mod tests {
-    use super::{compose_synthetic_cursor, compose_synthetic_cursor_with_size};
     use image::{ImageBuffer, Rgba};
     use sky_cua_overlay_host::cursor_asset;
     use sky_cua_platform::model::{
         AgentCursorPoint, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
         ModelImageFormat, PixelSize,
     };
+
+    use super::{compose_synthetic_cursor, compose_synthetic_cursor_with_size};
 
     #[test]
     fn composites_chrome_cursor_asset_into_png_screenshot_near_requested_point() {

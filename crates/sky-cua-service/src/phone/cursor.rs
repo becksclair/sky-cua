@@ -312,8 +312,9 @@ fn diagnostic(code: &str, message: &str, details: Option<String>) -> DiagnosticE
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use image::ImageBuffer;
+
+    use super::*;
 
     fn pt(x: f64, y: f64) -> PhonePoint {
         PhonePoint { x, y }

@@ -12,9 +12,10 @@ mod operator_cli;
 mod output_shapes;
 mod service_launcher;
 
+use std::process::ExitCode;
+
 use anyhow::Result;
 use heuristics::HeuristicsRegistry;
-use std::process::ExitCode;
 
 fn main() -> ExitCode {
     // The MCP client is spawned by arbitrary hosts (Codex Desktop, app

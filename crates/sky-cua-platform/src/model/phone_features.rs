@@ -1,7 +1,8 @@
 //! Grouped direct-Companion feature request contracts.
 
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
 
 use super::{ContentRef, PhoneSessionSelector};
 

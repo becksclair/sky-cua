@@ -172,6 +172,7 @@ pub struct AppShotEnvelope {
 pub enum AppShotRejectionReason {
     Missing,
     Stale,
+    Expired,
     WrongSurface,
     WrongTarget,
     WrongSession,

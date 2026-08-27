@@ -1,14 +1,15 @@
 #![allow(clippy::empty_line_after_doc_comments)]
 //! Host status, device listing, direct reconciliation, and Appshot helpers.
 
-use super::helpers::{now_ms, phone_disabled_diagnostic};
-use super::{PhoneManager, ScrcpyAdoptionCandidate};
-use crate::phone::{adb, scrcpy};
 use sky_cua_platform::model::{
     DiagnosticEntry, PhoneCapabilityRefreshState, PhoneConnectionIdentity, PhoneConnectionKind,
     PhoneDeviceState, PhoneListDevicesResponse, PhonePairWirelessRequest,
     PhonePairWirelessResponse, PhoneSessionSelector, PhoneStatusReport,
 };
+
+use super::helpers::{now_ms, phone_disabled_diagnostic};
+use super::{PhoneManager, ScrcpyAdoptionCandidate};
+use crate::phone::{adb, scrcpy};
 
 impl PhoneManager {
     pub(crate) fn drain_direct_events(&mut self) {

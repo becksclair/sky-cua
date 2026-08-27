@@ -41,12 +41,6 @@ pub(super) use install::{
     InstallOutcome, forward_tcp, install_multi_package, install_multiple, install_replace,
     install_single, uninstall_package,
 };
-// Re-export the companion secure-settings enablement surface the companion lane
-// consumes as `adb::*` to make a freshly deployed companion immediately usable.
-pub(super) use permissions::{
-    ACCESSIBILITY_SERVICE_CLASS_SUFFIX, NOTIFICATION_LISTENER_CLASS_SUFFIX, SecureServiceOutcome,
-    SecureServiceState, ensure_notification_listener, ensure_secure_list_service,
-};
 // Re-export the parser surface the sibling `device` lane and the integrator
 // consume as `adb::*`. The remaining parsers (`parse_server_status`,
 // `classify_device_state`, `AdbDeviceLine`) are reachable to the child `tests`
@@ -55,6 +49,12 @@ pub(super) use parse::{
     DeviceRotation, ForegroundApp, classify_connection_kind, parse_current_focus, parse_devices_l,
     parse_mdns_services, parse_package_list, parse_rotation, parse_version, parse_wm_density,
     parse_wm_size,
+};
+// Re-export the companion secure-settings enablement surface the companion lane
+// consumes as `adb::*` to make a freshly deployed companion immediately usable.
+pub(super) use permissions::{
+    ACCESSIBILITY_SERVICE_CLASS_SUFFIX, NOTIFICATION_LISTENER_CLASS_SUFFIX, SecureServiceOutcome,
+    SecureServiceState, ensure_notification_listener, ensure_secure_list_service,
 };
 
 /// Stable `PhoneAdbNotImplemented` diagnostic. Retained for the ADB lane's own

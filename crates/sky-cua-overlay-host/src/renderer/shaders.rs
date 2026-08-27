@@ -679,6 +679,8 @@ pub fn create_effect_bind_group_layout(device: &::wgpu::Device) -> ::wgpu::BindG
 
 #[cfg(test)]
 mod tests {
+    use sky_cua_platform::model::AgentOverlayGestureKind;
+
     use super::{EFFECT_SHADER, create_effect_bind_group_layout, create_effect_pipeline};
     use crate::renderer::{
         CursorImage,
@@ -691,7 +693,6 @@ mod tests {
             FrameRenderInput, read_bytes, read_f32_buffer, render_frame_rgba, test_device,
         },
     };
-    use sky_cua_platform::model::AgentOverlayGestureKind;
 
     #[test]
     fn shader_contains_phase_four_effect_entry_points() {

@@ -100,6 +100,12 @@
             android:theme="@style/Theme.SkyPhoneCompanion" />
 
         <activity
+            android:name=".ui.InteractionPlaygroundActivity"
+            android:exported="true"
+            android:label="Interaction Playground"
+            android:theme="@style/Theme.SkyPhoneCompanion" />
+
+        <activity
             android:name=".HostListActivity"
             android:exported="false"
             android:label="@string/host_list_activity_label"

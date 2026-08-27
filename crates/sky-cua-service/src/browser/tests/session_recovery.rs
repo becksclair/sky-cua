@@ -6,11 +6,10 @@ use serde_json::{Value, json};
 use sky_cua_platform::model::BrowserTargetKind;
 use tokio::net::UnixListener;
 
+use super::helpers::*;
 use crate::browser::bridge::{claim_tab, click, press_key, screenshot, snapshot};
 use crate::browser::protocol::{read_frame, write_frame};
 use crate::browser::sockets::SKY_CUA_SOCKET_DIR_ENV;
-
-use super::helpers::*;
 
 #[tokio::test]
 async fn cdp_action_recovers_when_tab_is_not_in_browser_session() {

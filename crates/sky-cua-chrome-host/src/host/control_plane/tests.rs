@@ -1,7 +1,8 @@
+use std::cmp::Ordering;
+
 use super::super::*;
 use super::*;
 use crate::frame::read_frame;
-use std::cmp::Ordering;
 
 #[test]
 fn canonical_extension_session_does_not_infer_control_plane_role() {

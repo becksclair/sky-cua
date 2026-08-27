@@ -6,11 +6,11 @@ use sky_cua_platform::model::{
     CaptureBackendKind, EnvironmentInfo, InputBackendKind, PortalCapabilities, SemanticBackendKind,
     SessionKind,
 };
+use tracing::debug;
 
 use crate::portal::{remote_desktop, screencast, screenshot};
 use crate::virtual_input;
 use crate::x11;
-use tracing::debug;
 
 pub async fn probe_environment() -> Result<EnvironmentInfo, BackendError> {
     debug!("probing Linux desktop environment");
@@ -365,14 +365,15 @@ pub fn require_supported_environment(environment: &EnvironmentInfo) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        infer_session_kind, probe_environment, require_supported_environment,
-        select_capture_backend, select_input_backend,
-    };
     use serial_test::serial;
     use sky_cua_platform::model::{
         CaptureBackendKind, EnvironmentInfo, InputBackendKind, PortalCapabilities,
         SemanticBackendKind, SessionKind,
+    };
+
+    use super::{
+        infer_session_kind, probe_environment, require_supported_environment,
+        select_capture_backend, select_input_backend,
     };
 
     #[tokio::test]

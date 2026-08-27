@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use sky_cua_platform::model::{BrowserControlEventKind, BrowserTabKey};
 use tokio::sync::mpsc;
 
 use super::{
@@ -13,7 +14,6 @@ use crate::browser::control_plane::{
     operation::{Executor, OperationScope, SettlementResult},
     persistence::JournalWriter,
 };
-use sky_cua_platform::model::{BrowserControlEventKind, BrowserTabKey};
 
 fn admit_submission(state: &mut State, (request, reply): SubmitCommand) {
     let context = EventContext {

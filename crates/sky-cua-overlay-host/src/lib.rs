@@ -688,15 +688,16 @@ pub(crate) fn diagnostic(code: &str, message: &str, details: Option<String>) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        NoopOverlayBackend, OVERLAY_HOST_PROTOCOL_VERSION, OverlayArrivalCondition,
-        OverlayArrivalOutcome, OverlayArrivalWaitRequest, OverlayHostMessage,
-        OverlayHostMessageKind, cursor_asset, probe_reply,
-    };
     use image::GenericImageView;
     use sky_cua_platform::model::{
         ActionName, AgentCursorBackendKind, AgentCursorPoint, AgentCursorState,
         AgentOverlayGestureEvent, AgentOverlayGestureKind, CoordinateSpace, Point2,
+    };
+
+    use super::{
+        NoopOverlayBackend, OVERLAY_HOST_PROTOCOL_VERSION, OverlayArrivalCondition,
+        OverlayArrivalOutcome, OverlayArrivalWaitRequest, OverlayHostMessage,
+        OverlayHostMessageKind, cursor_asset, probe_reply,
     };
 
     #[test]

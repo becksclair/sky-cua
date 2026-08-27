@@ -125,8 +125,9 @@ fn browser_target_availability(
 
 #[cfg(test)]
 mod tests {
-    use super::browser_target_availability;
     use sky_cua_platform::model::{BrowserIntegrationReport, BrowserTargetKind, DoctorCheck};
+
+    use super::browser_target_availability;
 
     #[test]
     fn browser_status_reports_only_the_user_chrome_target() {

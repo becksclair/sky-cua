@@ -1,9 +1,10 @@
+use std::fs;
+
 use sky_cua_platform::{
     AppInstructionEntry, AppInstructionIndex, SetValueFallbackMode, SetValueRouting,
     app_instruction_entry_matches, app_instructions_index_path, focused_app_instruction_keys,
     model::FocusedApp, normalize_app_instruction_key,
 };
-use std::fs;
 
 #[derive(Debug, Clone, Default)]
 pub struct AppActionPolicies {
@@ -73,8 +74,9 @@ impl AppActionPolicies {
 
 #[cfg(test)]
 mod tests {
-    use super::AppActionPolicies;
     use sky_cua_platform::{SetValueFallbackMode, SetValueRouting, model::FocusedApp};
+
+    use super::AppActionPolicies;
 
     #[test]
     fn resolves_set_value_fallback_for_kate_by_desktop_file_id() {

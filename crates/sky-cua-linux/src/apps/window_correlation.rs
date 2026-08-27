@@ -268,10 +268,11 @@ pub(crate) fn normalize_title(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sky_cua_platform::AppInfo;
     use zbus::names::UniqueName;
     use zbus::zvariant::ObjectPath;
+
+    use super::*;
 
     fn object_ref(path: &str) -> atspi::ObjectRefOwned {
         atspi::ObjectRef::new_owned(

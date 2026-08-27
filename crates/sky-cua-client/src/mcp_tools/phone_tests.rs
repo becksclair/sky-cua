@@ -21,10 +21,9 @@ use sky_cua_platform::model::{
     RectF, ServiceRequest, ServiceResponse,
 };
 
+use super::{build_tool_definitions, handle_tool_call, validation_tool_definitions};
 use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_server::{ModelSessionInfo, with_phone_request_context};
-
-use super::{build_tool_definitions, handle_tool_call, validation_tool_definitions};
 
 const PHONE_TOOL_NAMES: &[&str] = &[
     "status",

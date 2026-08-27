@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use sky_cua_platform::model::{
@@ -6,7 +8,6 @@ use sky_cua_platform::model::{
     DoctorSessionEnvReport, ServiceRequest, ServiceResponse, SessionPresenceAction,
     SessionPresenceIntent, SessionPresenceStatus, WindowInfo, WindowTarget,
 };
-use std::fmt::Write as _;
 
 use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_server::ModelSessionInfo;
@@ -274,6 +275,8 @@ fn grouped_handler_call(tool_name: &str, arguments: Value) -> Result<GroupedHand
         "phone_pointer" => match take_required_branch(&mut arguments, "operation")?.as_str() {
             "tap" => ("phone_tap", "tap".to_string()),
             "swipe" => ("phone_swipe", "swipe".to_string()),
+            "long_press" => ("phone_long_press", "long_press".to_string()),
+            "double_tap" => ("phone_double_tap", "double_tap".to_string()),
             operation => return Err(anyhow!("unsupported phone_pointer operation: {operation}")),
         },
         "phone_keyboard" => match take_required_branch(&mut arguments, "operation")?.as_str() {
@@ -309,6 +312,9 @@ fn grouped_handler_call(tool_name: &str, arguments: Value) -> Result<GroupedHand
         "phone_editor" => preserve_operation(&mut arguments, "phone_editor")?,
         "phone_camera" => preserve_operation(&mut arguments, "phone_camera")?,
         "phone_storage" => preserve_operation(&mut arguments, "phone_storage")?,
+        "phone_node_action" => ("phone_node_action", "default".to_string()),
+        "phone_global_action" => ("phone_global_action", "default".to_string()),
+        "phone_key_event" => ("phone_key_event", "default".to_string()),
         "phone_accessibility_tree" => ("phone_accessibility_tree", "default".to_string()),
         "phone_notifications" => ("phone_notifications", "default".to_string()),
         name => return Err(anyhow!("unknown tool: {name}")),
@@ -1443,7 +1449,6 @@ mod tests {
     use std::collections::VecDeque;
 
     use chrono::Utc;
-
     use serde_json::{Value, json};
     use sky_cua_platform::model::{
         AccessibilitySetupReport, ActionName, ActionOutcome, ActionRequest, AgentCursorPoint,
@@ -1462,18 +1467,6 @@ mod tests {
         WindowTargetingSetupReport,
     };
 
-    use crate::app_state::{
-        APP_STATE_DEFAULT_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_LIMIT,
-        APP_STATE_MAX_ELEMENT_QUERY_CHARS, AppStateDetail,
-    };
-    use crate::heuristics::HeuristicsRegistry;
-    use crate::mcp_server::ModelSessionInfo;
-
-    use crate::output_shapes::{
-        list_apps_error_diagnostic, setup_accessibility_is_error, setup_window_targeting_is_error,
-        snapshot_summary, snapshot_text_content, summary_element, summary_snapshot,
-    };
-
     use super::definitions::schema_accepts;
     use super::{
         McpProcessConfig, McpService, action_summary, build_tool_definitions, build_tool_registry,
@@ -1481,6 +1474,16 @@ mod tests {
         handle_session_tool_call, handle_tool_call, invalid_request_tool_error, list_apps_summary,
         parse_app_selector, parse_app_state_detail, parse_screenshot_target, parse_window_target,
         tools_list_result, validation_tool_definitions,
+    };
+    use crate::app_state::{
+        APP_STATE_DEFAULT_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_LIMIT,
+        APP_STATE_MAX_ELEMENT_QUERY_CHARS, AppStateDetail,
+    };
+    use crate::heuristics::HeuristicsRegistry;
+    use crate::mcp_server::ModelSessionInfo;
+    use crate::output_shapes::{
+        list_apps_error_diagnostic, setup_accessibility_is_error, setup_window_targeting_is_error,
+        snapshot_summary, snapshot_text_content, summary_element, summary_snapshot,
     };
 
     const SNAPSHOT_TEXT_TEST_ELEMENT_COUNT: usize = 123;
@@ -5271,6 +5274,9 @@ mod tests {
                 "phone_editor",
                 "phone_camera",
                 "phone_storage",
+                "phone_node_action",
+                "phone_global_action",
+                "phone_key_event",
             ]
         );
 

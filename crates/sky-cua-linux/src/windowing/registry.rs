@@ -1,19 +1,17 @@
-use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
-use sky_cua_platform::model::EnvironmentInfo;
-
-use crate::kwin::{self, KWinWindowInfo};
-use crate::x11::windowing::{self, X11WindowInfo};
-
-use super::probe::{BackendDescriptor, BackendProbe};
-use super::terminal::enrich_terminal_windows;
-use super::types::LinuxWindowInfo;
-use super::{cosmic, gnome_extension, gnome_introspect, hyprland, i3};
-
 pub use cosmic::COSMIC_WAYLAND_BACKEND;
 pub use gnome_extension::GNOME_SHELL_EXTENSION_BACKEND;
 pub use gnome_introspect::GNOME_SHELL_INTROSPECT_BACKEND;
 pub use hyprland::HYPRLAND_BACKEND;
 pub use i3::I3_BACKEND;
+use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+use sky_cua_platform::model::EnvironmentInfo;
+
+use super::probe::{BackendDescriptor, BackendProbe};
+use super::terminal::enrich_terminal_windows;
+use super::types::LinuxWindowInfo;
+use super::{cosmic, gnome_extension, gnome_introspect, hyprland, i3};
+use crate::kwin::{self, KWinWindowInfo};
+use crate::x11::windowing::{self, X11WindowInfo};
 
 pub const KWIN_BACKEND: &str = "kwin";
 pub const X11_BACKEND: &str = "x11";
@@ -673,11 +671,12 @@ impl BackendKind {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sky_cua_platform::model::{
         AppInfo, CaptureBackendKind, CoordinateSpace, EnvironmentInfo, InputBackendKind,
         PortalCapabilities, RectF, SemanticBackendKind, SessionKind,
     };
+
+    use super::*;
 
     fn app(id: &str) -> AppInfo {
         AppInfo {

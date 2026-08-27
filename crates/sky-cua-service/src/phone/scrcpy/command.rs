@@ -301,8 +301,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sky_cua_platform::model::{CoordinateSpace, RectF};
+
+    use super::*;
 
     fn config_with_geometry() -> PhoneConfig {
         PhoneConfig {

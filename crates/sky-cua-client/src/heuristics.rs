@@ -62,8 +62,9 @@ impl HeuristicsRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::HeuristicsRegistry;
     use sky_cua_platform::model::FocusedApp;
+
+    use super::HeuristicsRegistry;
 
     #[test]
     fn resolves_by_desktop_file_id() {

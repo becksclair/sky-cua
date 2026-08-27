@@ -5,12 +5,11 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
+use super::wire::requires_settlement;
 use super::{
     BridgeActorConfig, BridgeActorError, BridgeActorRequest, BridgeRequestSize, OperationClass,
 };
 use crate::browser::protocol::CONTROL_PLANE_REQUEST_ID_PREFIX;
-
-use super::wire::requires_settlement;
 
 const ORDINARY_WIDTH: usize = 2;
 const TOMBSTONE_TTL: Duration = Duration::from_secs(10 * 60);

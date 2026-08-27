@@ -4,9 +4,8 @@
 
 use serde_json::{Value, json};
 
-use crate::app_state::APP_STATE_MAX_ELEMENT_QUERY_CHARS;
-
 use super::common::*;
+use crate::app_state::APP_STATE_MAX_ELEMENT_QUERY_CHARS;
 
 pub(super) fn browser_target_schema() -> Value {
     json!({

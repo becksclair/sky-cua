@@ -1,10 +1,8 @@
-use super::capture_reuse::reuse_unchanged_capture;
-use super::desktop::action_requires_snapshot_context;
-use super::session_presence::request_should_hold_presence;
-use super::{
-    CuaScreenshotCoordinatePlane, OverlayController, ServiceDaemon, SessionPresenceConfig,
-    SessionStore, SnapshotManager,
-};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
+
 use image::{ImageBuffer, Rgba};
 use serde_json::json;
 use sky_cua_platform::backend::DesktopBackend;
@@ -26,11 +24,15 @@ use sky_cua_platform::model::{
     ServiceRequest, ServiceResponse, SessionKind, SessionPresenceAction, SessionPresenceIntent,
     SessionPresenceStatus, ToolAvailability, ToolCapabilities, WindowInfo, WindowTarget,
 };
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::Duration;
 use tokio::sync::Notify;
+
+use super::capture_reuse::reuse_unchanged_capture;
+use super::desktop::action_requires_snapshot_context;
+use super::session_presence::request_should_hold_presence;
+use super::{
+    CuaScreenshotCoordinatePlane, OverlayController, ServiceDaemon, SessionPresenceConfig,
+    SessionStore, SnapshotManager,
+};
 
 #[derive(Debug, Clone)]
 struct FakeBackend {

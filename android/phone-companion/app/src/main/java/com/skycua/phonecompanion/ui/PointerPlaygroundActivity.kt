@@ -11,11 +11,7 @@ import android.os.Bundle
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
-import android.view.WindowManager
 import android.widget.FrameLayout
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.doOnLayout
 import com.skycua.phonecompanion.overlay.AgentOverlayController
 import com.skycua.phonecompanion.overlay.OverlayMath
@@ -44,18 +40,7 @@ class PointerPlaygroundActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        // Edge-to-edge with the system bars hidden and layout into the cutout, so
-        // the screen-edge glow reaches the true display edges and touch
-        // coordinates line up 1:1 with the overlay's device-pixel space.
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.attributes =
-            window.attributes.apply {
-                layoutInDisplayCutoutMode =
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-            }
-        WindowInsetsControllerCompat(window, window.decorView)
-            .hide(WindowInsetsCompat.Type.systemBars())
+        applyPlaygroundWindowDecor()
 
         val container = PlaygroundContainer(this)
         controller = AgentOverlayController(context = this, host = ViewOverlayHost(container))

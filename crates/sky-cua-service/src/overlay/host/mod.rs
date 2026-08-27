@@ -9,11 +9,10 @@ use lifecycle::TcpEndpoint;
 use lifecycle::UnixSocketEndpoint;
 use lifecycle::{ManagedOverlayHost, diagnostic};
 use sky_cua_overlay_host::{OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostReply};
+use sky_cua_platform::config::OVERLAY_BACKEND_ENV;
 use sky_cua_platform::model::DiagnosticEntry;
 #[cfg(not(unix))]
 use sky_cua_platform::overlay_host_tcp_addr;
-
-use sky_cua_platform::config::OVERLAY_BACKEND_ENV;
 const OVERLAY_HOST_PATH_ENV: &str = "SKY_CUA_OVERLAY_HOST_PATH";
 
 /// Endpoint the production connection uses on this platform.
@@ -224,11 +223,12 @@ fn overlay_host_binary_name() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::OverlayHostConnection;
-    use super::lifecycle::{ManagedOverlayHost, TcpEndpoint};
     use sky_cua_overlay_host::{
         OVERLAY_HOST_PROTOCOL_VERSION, OverlayHostMessage, OverlayHostMessageKind,
     };
+
+    use super::OverlayHostConnection;
+    use super::lifecycle::{ManagedOverlayHost, TcpEndpoint};
 
     #[test]
     fn disabled_host_without_reporting_acknowledges_request() {

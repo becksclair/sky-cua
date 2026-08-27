@@ -681,17 +681,18 @@ fn portal_approval_pending(error: Option<&BackendError>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        CAPTURE_BACKEND_DOWNGRADED_DETAILS, CapturePlanOutcome, CaptureRegionTarget,
-        compatible_dispatch_source, display_matches_raw_size, infer_capture_source_rect,
-        initial_capture, outcome_missing_capture_source_geometry, pixel_crop_for_target,
-        push_diagnostics, should_fallback_to_screenshot, virtual_desktop_rect,
-    };
     use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
     use sky_cua_platform::model::test_support::wayland_pipewire_environment;
     use sky_cua_platform::model::{
         CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode, CoordinateSpace,
         DisplayInfo, DisplayRef, EnvironmentInfo, InputBackendKind, PixelSize, RectF,
+    };
+
+    use super::{
+        CAPTURE_BACKEND_DOWNGRADED_DETAILS, CapturePlanOutcome, CaptureRegionTarget,
+        compatible_dispatch_source, display_matches_raw_size, infer_capture_source_rect,
+        initial_capture, outcome_missing_capture_source_geometry, pixel_crop_for_target,
+        push_diagnostics, should_fallback_to_screenshot, virtual_desktop_rect,
     };
 
     fn capture_with_backend(

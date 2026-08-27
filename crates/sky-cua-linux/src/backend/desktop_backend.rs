@@ -1000,8 +1000,9 @@ fn display_probe_details(display_topology: &DoctorDisplayTopologyReport) -> Stri
 
 #[cfg(test)]
 mod cua_coordinate_tests {
-    use super::cua_desktop_to_portal_stream;
     use sky_cua_platform::model::{CoordinateSpace, CuaActionRequest, CuaRequestContext, RectF};
+
+    use super::cua_desktop_to_portal_stream;
 
     #[test]
     fn portal_actions_subtract_nonzero_stream_origin() {

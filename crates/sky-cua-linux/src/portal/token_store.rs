@@ -157,12 +157,13 @@ fn set_owner_only_file_permissions(path: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+    use serial_test::serial;
+
     use super::{
         PersistedPortalToken, PortalCompositorFamily, PortalTokenStore, current_compositor_hint,
         portal_compositor_family, portal_token_compositor_mismatch,
     };
-    use chrono::Utc;
-    use serial_test::serial;
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(

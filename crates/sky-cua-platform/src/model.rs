@@ -17,7 +17,6 @@ pub use appshot::{
     AppShotCoverage, AppShotEnvelope, AppShotRejectionReason, AppShotRequired, AppShotSurface,
     AppShotTrigger,
 };
-
 pub use browser::{
     BROWSER_APPSHOT_MAX_CAPTURE_TIMEOUT_MS, BROWSER_APPSHOT_MIN_CAPTURE_TIMEOUT_MS,
     BROWSER_EVAL_ENV, BROWSER_SNAPSHOT_DEFAULT_ELEMENT_LIMIT, BROWSER_SNAPSHOT_DEFAULT_TEXT_LIMIT,
@@ -62,8 +61,10 @@ pub use phone::{
     PhoneCompanionCapabilities, PhoneCompanionStatusRequest, PhoneCompanionStatusResponse,
     PhoneConnectRequest, PhoneConnectionKind, PhoneCoordinateMapping, PhoneCursorCapabilities,
     PhoneCursorState, PhoneDevice, PhoneDeviceState, PhoneDisconnectRequest,
-    PhoneDisconnectResponse, PhoneImage, PhoneInstallCompanionRequest, PhoneInstallStrategy,
-    PhoneListDevicesRequest, PhoneListDevicesResponse, PhoneMcpClientInfo, PhoneNotificationAction,
+    PhoneDisconnectResponse, PhoneDoubleTapRequest, PhoneGlobalAction, PhoneGlobalActionRequest,
+    PhoneImage, PhoneInstallCompanionRequest, PhoneInstallStrategy, PhoneKeyEventRequest,
+    PhoneListDevicesRequest, PhoneListDevicesResponse, PhoneLongPressRequest, PhoneMcpClientInfo,
+    PhoneNodeAction, PhoneNodeActionArgs, PhoneNodeActionRequest, PhoneNotificationAction,
     PhoneNotificationActionRequest, PhoneNotificationDismissRequest, PhoneNotificationEvent,
     PhoneNotificationOpenRequest, PhoneNotificationRedaction, PhoneNotificationReplyRequest,
     PhoneNotificationsRequest, PhoneNotificationsResponse, PhoneObserveRequest,

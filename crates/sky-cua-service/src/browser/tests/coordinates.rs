@@ -4,11 +4,10 @@ use serde_json::{Value, json};
 use sky_cua_platform::model::{BrowserSessionIdentity, BrowserTargetKind};
 use tokio::net::UnixListener;
 
+use super::helpers::*;
 use crate::browser::bridge::{click, scroll};
 use crate::browser::protocol::{read_frame, write_frame};
 use crate::browser::sockets::SKY_CUA_SOCKET_DIR_ENV;
-
-use super::helpers::*;
 
 #[tokio::test]
 async fn click_dispatches_css_pixel_coordinates_directly() {

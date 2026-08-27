@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use sky_cua_platform::model::BrowserTargetKind;
 use tokio::net::UnixListener;
 
+use super::helpers::*;
 use crate::browser::affinity::{
     forget_tab_socket_if_owner, record_tab_socket, reset_tab_socket_affinity_for_tests,
     tab_socket_affinity,
@@ -15,8 +16,6 @@ use crate::browser::affinity::{
 use crate::browser::bridge::{click, snapshot};
 use crate::browser::protocol::{read_frame, write_frame};
 use crate::browser::sockets::SKY_CUA_SOCKET_DIR_ENV;
-
-use super::helpers::*;
 
 #[tokio::test]
 async fn bound_operation_routes_to_the_affinity_socket_only() {

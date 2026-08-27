@@ -29,8 +29,14 @@ mod geometry;
 mod process;
 mod resolve;
 
-use sky_cua_platform::model::{DiagnosticEntry, PhoneScrcpyCapabilities};
-
+// The host-display phone-scale sizing policy is reached by the daemon (outside
+// `crate::phone`), so it carries crate visibility rather than the phone-internal
+// re-export the rest of the command surface uses.
+pub(crate) use command::host_scrcpy_default_max_size;
+// `scrcpy_window_title` is consumed by the manager's window-adoption lane (match a
+// pre-existing mirror window by its deterministic title); `WINDOW_TITLE_PREFIX`
+// and `launch_with_retry` are wired only by the command-builder tests.
+pub(in crate::phone) use command::scrcpy_window_title;
 // Re-export the child surface so callers keep reaching every item through the
 // stable `crate::phone::scrcpy::X` path the integrator and tests already use. The
 // managed-launch lane (`manager::scrcpy_lane`) consumes the launch/codec/process
@@ -41,14 +47,6 @@ use sky_cua_platform::model::{DiagnosticEntry, PhoneScrcpyCapabilities};
 pub(in crate::phone) use command::{
     CODEC_RETRY_ORDER, LaunchAttempt, ScrcpyCodec, ScrcpyLaunchSpec,
 };
-// The host-display phone-scale sizing policy is reached by the daemon (outside
-// `crate::phone`), so it carries crate visibility rather than the phone-internal
-// re-export the rest of the command surface uses.
-pub(crate) use command::host_scrcpy_default_max_size;
-// `scrcpy_window_title` is consumed by the manager's window-adoption lane (match a
-// pre-existing mirror window by its deterministic title); `WINDOW_TITLE_PREFIX`
-// and `launch_with_retry` are wired only by the command-builder tests.
-pub(in crate::phone) use command::scrcpy_window_title;
 #[expect(unused_imports)]
 pub(in crate::phone) use command::{WINDOW_TITLE_PREFIX, launch_with_retry};
 // The host-window content-rect geometry is wired by the daemon's window-mapping
@@ -60,6 +58,7 @@ pub(in crate::phone) use process::ScrcpyProcess;
 // managed process for).
 pub(in crate::phone) use process::{ScrcpyLiveness, ScrcpyOwnership};
 pub(in crate::phone) use resolve::{ScrcpyResolution, probe_version, resolve_scrcpy};
+use sky_cua_platform::model::{DiagnosticEntry, PhoneScrcpyCapabilities};
 
 /// scrcpy capabilities for a session with no mirror active.
 ///

@@ -1,15 +1,16 @@
 //! Host-side finite inbound content transfers for phone-control.v2.
 
-use sha2::{Digest, Sha256};
-use sky_cua_platform::{
-    appshot_artifacts_dir,
-    model::{ContentChunkHeader, ContentTransferCommit, ContentTransferDeclaration},
-};
 use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     path::PathBuf,
+};
+
+use sha2::{Digest, Sha256};
+use sky_cua_platform::{
+    appshot_artifacts_dir,
+    model::{ContentChunkHeader, ContentTransferCommit, ContentTransferDeclaration},
 };
 use uuid::Uuid;
 fn now_ms() -> u64 {
@@ -425,10 +426,11 @@ impl Drop for InboundContentStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sky_cua_platform::model::{
         ContentPersistence, ContentRef, ContentSource, encode_content_chunk,
     };
+
+    use super::*;
 
     fn declaration(size: u64, sha: &str) -> ContentTransferDeclaration {
         ContentTransferDeclaration {

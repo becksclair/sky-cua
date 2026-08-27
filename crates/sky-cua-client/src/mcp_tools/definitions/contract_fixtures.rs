@@ -5,10 +5,9 @@
 
 use serde_json::{Value, json};
 
-use crate::mcp_server::ModelSessionInfo;
-
 use super::build_tool_registry;
 use super::fixture_tests::{process_config, process_config_with_surfaces};
+use crate::mcp_server::ModelSessionInfo;
 
 pub(super) fn generated_surface_matrix() -> Value {
     let mut rows = Vec::new();
@@ -152,8 +151,8 @@ pub(super) fn generated_tool_contract() -> Value {
     json!({
         "version": 1,
         "surface": "grouped",
-        "default_tool_count": 40,
-        "eval_tool_count": 41,
+        "default_tool_count": 43,
+        "eval_tool_count": 44,
         "tools": tools
     })
 }
@@ -536,6 +535,16 @@ fn grouped_contract_tools() -> Vec<Value> {
                     "phone_swipe",
                     json!({"operation": "swipe", "session_id": "phone-1", "phone_snapshot_id": "phone-snapshot-1", "start_x": 1, "start_y": 1, "end_x": 2, "end_y": 2}),
                 ),
+                branch(
+                    "long_press",
+                    "phone_long_press",
+                    json!({"operation": "long_press", "session_id": "phone-1", "phone_snapshot_id": "phone-snapshot-1", "x": 1, "y": 1}),
+                ),
+                branch(
+                    "double_tap",
+                    "phone_double_tap",
+                    json!({"operation": "double_tap", "session_id": "phone-1", "phone_snapshot_id": "phone-snapshot-1", "x": 1, "y": 1}),
+                ),
             ],
         ),
         contract_tool(
@@ -645,6 +654,30 @@ fn grouped_contract_tools() -> Vec<Value> {
             )],
         ),
         contract_tool(
+            "phone_node_action",
+            vec![branch(
+                "default",
+                "phone_node_action",
+                json!({"session_id": "phone-1", "action": "long_click", "view_id": "com.skycua.phonecompanion:id/playground_long_click_button"}),
+            )],
+        ),
+        contract_tool(
+            "phone_global_action",
+            vec![branch(
+                "default",
+                "phone_global_action",
+                json!({"session_id": "phone-1", "action": "back"}),
+            )],
+        ),
+        contract_tool(
+            "phone_key_event",
+            vec![branch(
+                "default",
+                "phone_key_event",
+                json!({"session_id": "phone-1", "key_code": "KEYCODE_VOLUME_UP"}),
+            )],
+        ),
+        contract_tool(
             "browser_eval",
             vec![branch(
                 "default",
@@ -688,8 +721,11 @@ fn branch(name: &'static str, handler_id: &'static str, minimal_valid_arguments:
             | "browser_eval"
             | "phone_tap"
             | "phone_swipe"
+            | "phone_long_press"
+            | "phone_double_tap"
             | "phone_type_text"
             | "phone_press_key"
+            | "phone_node_action"
             | "phone_notification_open"
             | "phone_notification_dismiss"
             | "phone_notification_action"

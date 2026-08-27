@@ -48,6 +48,7 @@ pub const PHONE_COMPANION_CERT_SHA256_ENV: &str = "SKY_CUA_PHONE_COMPANION_CERT_
 pub const PHONE_COMPANION_APK_SHA256_ENV: &str = "SKY_CUA_PHONE_COMPANION_APK_SHA256";
 pub const PHONE_COMPANION_ALLOW_DOWNGRADE_ENV: &str = "SKY_CUA_PHONE_COMPANION_ALLOW_DOWNGRADE";
 pub const PHONE_CAPABILITY_CACHE_TTL_MS_ENV: &str = "SKY_CUA_PHONE_CAPABILITY_CACHE_TTL_MS";
+pub const PHONE_APPSHOT_TTL_MS_ENV: &str = "SKY_CUA_PHONE_APPSHOT_TTL_MS";
 pub const PHONE_TARGET_MODELS_ENV: &str = "SKY_CUA_PHONE_TARGET_MODELS";
 pub const PHONE_DIRECT_ENABLED_ENV: &str = "SKY_CUA_PHONE_DIRECT";
 pub const PHONE_DIRECT_LISTEN_ADDR_ENV: &str = "SKY_CUA_PHONE_DIRECT_LISTEN_ADDR";
@@ -189,6 +190,7 @@ pub struct PhoneConfig {
     pub companion_apk_sha256: Option<String>,
     pub companion_allow_downgrade: Option<bool>,
     pub capability_cache_ttl_ms: Option<u64>,
+    pub appshot_ttl_ms: Option<u64>,
     pub direct_enabled: Option<bool>,
     pub direct_listen_addr: Option<String>,
     pub direct_advertised_endpoint: Option<String>,
@@ -228,6 +230,9 @@ pub const PHONE_DEFAULT_COMPANION_PACKAGE: &str = "com.skycua.phonecompanion";
 pub const PHONE_DEFAULT_COMPANION_APK_PATH: &str = "resources/android/phone-companion.apk";
 /// Default capability-cache soft refresh hint (30 seconds).
 pub const PHONE_DEFAULT_CAPABILITY_CACHE_TTL_MS: u64 = 30_000;
+/// Default AppShot freshness window (30 seconds). Tunable via
+/// `SKY_CUA_PHONE_APPSHOT_TTL_MS` / `[phone].appshot_ttl_ms`.
+pub const PHONE_DEFAULT_APPSHOT_TTL_MS: u64 = 30_000;
 /// Direct enrollment codes are single-use and expire after five minutes.
 pub const PHONE_DEFAULT_DIRECT_ENROLLMENT_TTL_MS: u64 = 300_000;
 
@@ -335,6 +340,7 @@ pub struct ResolvedPhoneSelection {
     pub companion_apk_sha256: Option<String>,
     pub companion_allow_downgrade: bool,
     pub capability_cache_ttl_ms: u64,
+    pub appshot_ttl_ms: u64,
     pub primary_target_models: Vec<String>,
     /// Explicit opt-in for the phone-initiated `phone-control.v2` listener.
     pub direct_enabled: bool,
@@ -383,6 +389,7 @@ pub fn all_env_keys() -> &'static [&'static str] {
         PHONE_COMPANION_APK_SHA256_ENV,
         PHONE_COMPANION_ALLOW_DOWNGRADE_ENV,
         PHONE_CAPABILITY_CACHE_TTL_MS_ENV,
+        PHONE_APPSHOT_TTL_MS_ENV,
         PHONE_TARGET_MODELS_ENV,
         PHONE_DIRECT_ENABLED_ENV,
         PHONE_DIRECT_LISTEN_ADDR_ENV,
@@ -727,6 +734,9 @@ pub fn resolve_phone_selection(phone: &PhoneConfig) -> ResolvedPhoneSelection {
         capability_cache_ttl_ms: env_u64(PHONE_CAPABILITY_CACHE_TTL_MS_ENV)
             .or(phone.capability_cache_ttl_ms)
             .unwrap_or(PHONE_DEFAULT_CAPABILITY_CACHE_TTL_MS),
+        appshot_ttl_ms: env_u64(PHONE_APPSHOT_TTL_MS_ENV)
+            .or(phone.appshot_ttl_ms)
+            .unwrap_or(PHONE_DEFAULT_APPSHOT_TTL_MS),
         primary_target_models: target_models,
         direct_enabled: env_bool(PHONE_DIRECT_ENABLED_ENV)
             .or(phone.direct_enabled)

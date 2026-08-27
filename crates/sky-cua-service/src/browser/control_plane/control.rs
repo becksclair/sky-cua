@@ -4,9 +4,8 @@ use std::{
     sync::Arc,
 };
 
-use tokio::sync::{mpsc, oneshot};
-
 use sky_cua_platform::model::BrowserControlSchedulerSnapshot;
+use tokio::sync::{mpsc, oneshot};
 
 use super::{
     group::{GroupError, GroupRegistry, GroupSnapshot},

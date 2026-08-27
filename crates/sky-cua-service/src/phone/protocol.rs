@@ -42,6 +42,11 @@ pub(crate) mod methods {
     pub(crate) const CURRENT_APP: &str = "current_app";
     pub(crate) const APP_LIST: &str = "app_list";
     pub(crate) const APP_OP: &str = "app_op";
+    pub(crate) const NODE_ACTION: &str = "node_action";
+    pub(crate) const GLOBAL_ACTION: &str = "global_action";
+    pub(crate) const KEY_EVENT: &str = "key_event";
+    pub(crate) const LONG_PRESS: &str = "long_press";
+    pub(crate) const DOUBLE_TAP: &str = "double_tap";
 }
 
 /// Per-method error codes the companion may return in `error.code`, plus the
@@ -79,6 +84,13 @@ pub(crate) mod error_codes {
     pub(crate) const IMMUTABLE: &str = "immutable";
     pub(crate) const REPLY_UNAVAILABLE: &str = "reply_unavailable";
     pub(crate) const OEM_FILTERED: &str = "oem_filtered";
+
+    // node_action / global_action / key_event
+    pub(crate) const UNSUPPORTED_ACTION: &str = "unsupported_action";
+    pub(crate) const NODE_NOT_FOUND: &str = "node_not_found";
+    pub(crate) const ACTION_FAILED: &str = "action_failed";
+    pub(crate) const PERMISSION_DENIED: &str = "permission_denied";
+    pub(crate) const APPSHOT_EXPIRED: &str = "appshot_expired";
 }
 
 // ===========================================================================
@@ -253,6 +265,54 @@ pub(crate) struct GestureParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct GestureResult {
+    pub(crate) dispatched: bool,
+}
+
+// ===========================================================================
+// node_action / global_action / key_event
+// ===========================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct NodeActionParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) appshot_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) node_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) view_id: Option<String>,
+    pub(crate) action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) args: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct NodeActionResult {
+    pub(crate) dispatched: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) success: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct GlobalActionParams {
+    pub(crate) action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct GlobalActionResult {
+    pub(crate) dispatched: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct KeyEventParams {
+    pub(crate) key_code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) meta_state: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) repeat_count: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct KeyEventResult {
     pub(crate) dispatched: bool,
 }
 

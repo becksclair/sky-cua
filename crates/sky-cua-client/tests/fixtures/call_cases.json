@@ -829,6 +829,48 @@
       }
     },
     {
+      "branch": "long_press",
+      "handler_id": "phone_long_press",
+      "invalid": {
+        "appshot_id": "appshot-1",
+        "operation": "__invalid__",
+        "phone_snapshot_id": "phone-snapshot-1",
+        "session_id": "phone-1",
+        "x": 1,
+        "y": 1
+      },
+      "tool": "phone_pointer",
+      "valid": {
+        "appshot_id": "appshot-1",
+        "operation": "long_press",
+        "phone_snapshot_id": "phone-snapshot-1",
+        "session_id": "phone-1",
+        "x": 1,
+        "y": 1
+      }
+    },
+    {
+      "branch": "double_tap",
+      "handler_id": "phone_double_tap",
+      "invalid": {
+        "appshot_id": "appshot-1",
+        "operation": "__invalid__",
+        "phone_snapshot_id": "phone-snapshot-1",
+        "session_id": "phone-1",
+        "x": 1,
+        "y": 1
+      },
+      "tool": "phone_pointer",
+      "valid": {
+        "appshot_id": "appshot-1",
+        "operation": "double_tap",
+        "phone_snapshot_id": "phone-snapshot-1",
+        "session_id": "phone-1",
+        "x": 1,
+        "y": 1
+      }
+    },
+    {
       "branch": "type_text",
       "handler_id": "phone_type_text",
       "invalid": {
@@ -1045,6 +1087,49 @@
       "tool": "phone_storage",
       "valid": {
         "operation": "roots",
+        "session_id": "phone-1"
+      }
+    },
+    {
+      "branch": "default",
+      "handler_id": "phone_node_action",
+      "invalid": {
+        "action": false,
+        "appshot_id": "appshot-1",
+        "session_id": "phone-1",
+        "view_id": "com.skycua.phonecompanion:id/playground_long_click_button"
+      },
+      "tool": "phone_node_action",
+      "valid": {
+        "action": "long_click",
+        "appshot_id": "appshot-1",
+        "session_id": "phone-1",
+        "view_id": "com.skycua.phonecompanion:id/playground_long_click_button"
+      }
+    },
+    {
+      "branch": "default",
+      "handler_id": "phone_global_action",
+      "invalid": {
+        "action": false,
+        "session_id": "phone-1"
+      },
+      "tool": "phone_global_action",
+      "valid": {
+        "action": "back",
+        "session_id": "phone-1"
+      }
+    },
+    {
+      "branch": "default",
+      "handler_id": "phone_key_event",
+      "invalid": {
+        "key_code": false,
+        "session_id": "phone-1"
+      },
+      "tool": "phone_key_event",
+      "valid": {
+        "key_code": "KEYCODE_VOLUME_UP",
         "session_id": "phone-1"
       }
     },

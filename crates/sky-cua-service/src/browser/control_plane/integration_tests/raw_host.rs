@@ -2,13 +2,14 @@ use super::*;
 
 #[tokio::test]
 async fn raw_host_seams_enforce_ownership_provenance_validation_and_no_replay() {
+    use sky_cua_platform::model::{
+        BrowserCallerKind, BrowserCallerProvenance, BrowserMcpClientInfo, BrowserProvenanceSource,
+    };
+
     use super::super::integration::{ActorEntry, BrowserControlRuntime, spawn_actor_events};
     use crate::codex_browser_compat::{
         CodexBackendReply, CodexBrowserBackend, CodexConnectionContext, CodexLogicalIdentity,
         CodexNormalizedRequest, CodexOperationClass, CodexOperationScope,
-    };
-    use sky_cua_platform::model::{
-        BrowserCallerKind, BrowserCallerProvenance, BrowserMcpClientInfo, BrowserProvenanceSource,
     };
 
     fn request(

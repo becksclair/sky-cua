@@ -1,3 +1,15 @@
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
+
+use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
+use sky_cua_platform::model::test_support::wayland_pipewire_environment;
+use sky_cua_platform::model::{
+    CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode, CoordinateSpace, DisplayInfo,
+    DisplayRef, DoctorDisplayTopologyReport, DoctorSessionEnvRepair, DoctorSessionEnvReport,
+    ElementNode, ElementNumericValueReadback, EnvironmentInfo, InputBackendKind, PixelSize,
+    PortalCapabilities, RectF, ScrollDirection, SemanticBackendKind, SessionKind,
+};
+
 use super::action_runtime::{scroll_target_value, vertical_scrollbar_for_point};
 use super::elements::{
     fallback_window_elements_with_x11_detail, linux_fallback_snapshot, linux_window_elements,
@@ -15,16 +27,6 @@ use crate::app_match::{
 use crate::capture_plan::{CapturePlanOutcome, CaptureRegionTarget, should_attempt_x11_capture};
 use crate::windowing::LinuxWindowInfo;
 use crate::x11::windowing::{X11WindowInfo, X11WindowRegion};
-use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
-use sky_cua_platform::model::test_support::wayland_pipewire_environment;
-use sky_cua_platform::model::{
-    CaptureBackendKind, CaptureInfo, CaptureScope, CaptureScreenMode, CoordinateSpace, DisplayInfo,
-    DisplayRef, DoctorDisplayTopologyReport, DoctorSessionEnvRepair, DoctorSessionEnvReport,
-    ElementNode, ElementNumericValueReadback, EnvironmentInfo, InputBackendKind, PixelSize,
-    PortalCapabilities, RectF, ScrollDirection, SemanticBackendKind, SessionKind,
-};
-use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, Instant};
 
 #[test]
 fn multi_action_cached_path_does_not_rerun_proc_or_systemctl_hydration() {

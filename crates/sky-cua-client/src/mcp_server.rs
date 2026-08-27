@@ -1,11 +1,3 @@
-use anyhow::{Context, Result, anyhow};
-use serde_json::{Map, Value, json};
-use sky_cua_platform::{
-    BrowserCallerKind, BrowserCallerProvenance, BrowserLogicalIdentity, BrowserMcpClientInfo,
-    BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequestContext,
-    BrowserSessionIdentity, PhoneCallerProvenance, PhoneMcpClientInfo, PhoneRequestContext,
-    ServiceRequest,
-};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -14,6 +6,15 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
+};
+
+use anyhow::{Context, Result, anyhow};
+use serde_json::{Map, Value, json};
+use sky_cua_platform::{
+    BrowserCallerKind, BrowserCallerProvenance, BrowserLogicalIdentity, BrowserMcpClientInfo,
+    BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequestContext,
+    BrowserSessionIdentity, PhoneCallerProvenance, PhoneMcpClientInfo, PhoneRequestContext,
+    ServiceRequest,
 };
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
@@ -1203,8 +1204,6 @@ mod tests {
         config::AgentSurfacePolicy,
     };
 
-    use crate::mcp_tools::{McpProcessConfig, build_tool_registry, tool_definitions};
-
     use super::{
         InFlightBrowserCalls, JsonRpcRequestId, McpSessionConfig, MessageFraming, ModelSessionInfo,
         ServerSession, browser_call_context, browser_caller_provenance,
@@ -1215,6 +1214,7 @@ mod tests {
         phone_session_and_turn_from_tool_call, prepare_browser_call, read_message,
         read_message_with_limit, with_browser_request_context, write_message,
     };
+    use crate::mcp_tools::{McpProcessConfig, build_tool_registry, tool_definitions};
 
     // Provenance must be derivable from the MCP `initialize` clientInfo without
     // any `SKY_CUA_MCP_CALLER_PROVENANCE` forward in the host config. The env

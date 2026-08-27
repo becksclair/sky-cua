@@ -2,7 +2,9 @@
 	"mcpServers": {
 		"computer-use": {
 			"command": "sky-cua-client",
-			"args": ["mcp"],
+			"args": [
+				"mcp"
+			],
 			"env_vars": [
 				"CODEX_COMPUTER_USE_COSMIC_HELPER",
 				"DBUS_SESSION_BUS_ADDRESS",
@@ -39,6 +41,7 @@
 				"SKY_CUA_OVERLAY_HOST_PATH",
 				"SKY_CUA_OVERLAY_HOST_TCP_ADDR",
 				"SKY_CUA_PHONE",
+				"SKY_CUA_PHONE_APPSHOT_TTL_MS",
 				"SKY_CUA_PHONE_BACKEND",
 				"SKY_CUA_PHONE_CAPABILITY_CACHE_TTL_MS",
 				"SKY_CUA_PHONE_COMPANION",

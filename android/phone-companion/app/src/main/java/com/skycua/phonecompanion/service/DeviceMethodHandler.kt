@@ -16,8 +16,11 @@ import com.skycua.phonecompanion.protocol.CapabilitiesState
 import com.skycua.phonecompanion.protocol.CurrentAppResult
 import com.skycua.phonecompanion.protocol.CursorOverlayParams
 import com.skycua.phonecompanion.protocol.GestureParams
+import com.skycua.phonecompanion.protocol.GlobalActionParams
 import com.skycua.phonecompanion.protocol.HealthState
+import com.skycua.phonecompanion.protocol.KeyEventParams
 import com.skycua.phonecompanion.protocol.MethodApplicationException
+import com.skycua.phonecompanion.protocol.NodeActionParams
 import com.skycua.phonecompanion.protocol.MethodHandler
 import com.skycua.phonecompanion.protocol.NotificationOpParams
 import com.skycua.phonecompanion.protocol.NotificationsParams
@@ -235,6 +238,15 @@ class DeviceMethodHandler(
 
     override fun key(params: JsonValue.Obj): JsonValue.Obj =
         requireAccessibility().performKey(params.string("key") ?: "")
+
+    override fun nodeAction(params: NodeActionParams): JsonValue.Obj =
+        requireAccessibility().performNodeAction(params)
+
+    override fun globalAction(params: GlobalActionParams): JsonValue.Obj =
+        requireAccessibility().performGlobalActionExtended(params)
+
+    override fun keyEvent(params: KeyEventParams): JsonValue.Obj =
+        requireAccessibility().performKeyEvent(params)
 
     override fun smsQuery(params: JsonValue.Obj): JsonValue.Obj = smsController.query(params)
 

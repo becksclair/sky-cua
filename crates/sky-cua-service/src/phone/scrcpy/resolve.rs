@@ -108,8 +108,9 @@ fn parse_scrcpy_version(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sky_cua_platform::config::PhoneConfig;
+
+    use super::*;
 
     #[test]
     fn resolve_scrcpy_reports_missing_when_configured_path_absent() {

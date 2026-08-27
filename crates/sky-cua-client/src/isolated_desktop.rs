@@ -29,10 +29,6 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use sky_cua_platform::config::{
-    CODEX_BROWSER_SOCKET_PATH_ENV, Lifecycle, ResolvedIsolatedDesktop, ViewerMode,
-};
-
 // The client-owned sandbox-bus fallback (spawn/persist/recover/reap) lives in its
 // own submodule; the parent drives it from `ensure`/`stop`.
 #[cfg(target_os = "linux")]
@@ -49,6 +45,9 @@ use probe::{
     first_free_display_number, parse_display_number, parse_resolution, parse_xdpyinfo_dimensions,
     parse_xpra_info_dbus_address, parse_xpra_info_xauthority, read_x_lock_names,
     xpra_list_has_live_display,
+};
+use sky_cua_platform::config::{
+    CODEX_BROWSER_SOCKET_PATH_ENV, Lifecycle, ResolvedIsolatedDesktop, ViewerMode,
 };
 
 /// Bounded poll budget waiting for `xdpyinfo` to reach a freshly started

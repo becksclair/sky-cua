@@ -15,13 +15,13 @@
 //! cursor, and the dynamic action menu.
 
 #![allow(clippy::empty_line_after_doc_comments)]
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use image::ImageFormat;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use image::ImageFormat;
 use sky_cua_platform::model::{
     DiagnosticEntry, PhoneBackendCapabilities, PhoneBackendKind, PhoneCapabilityProfile,
     PhoneCapabilityRefreshState, PhoneImage, PhoneObserveRequest, PhoneObserveResponse, PhonePoint,

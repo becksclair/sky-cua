@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
@@ -6,7 +8,6 @@ use sky_cua_platform::model::{
     DoctorReport, ElementNode, ElementNumericValueReadback, ElementTextReadback, EnvironmentInfo,
     FocusedApp, HeuristicMatch, RectF, ToolCapabilities, WindowTargetingSetupReport,
 };
-use std::fmt::Write as _;
 
 use crate::app_state::{APP_STATE_DEFAULT_ELEMENT_LIMIT, AppStateElementOptions};
 
@@ -726,17 +727,18 @@ pub(crate) fn list_apps_error_diagnostic(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        full_snapshot_with_element_selection, select_app_state_elements, string_matches_query,
-        summary_snapshot, summary_text_field,
-    };
-    use crate::app_state::AppStateElementOptions;
     use chrono::Utc;
     use sky_cua_platform::model::{
         AppStateSnapshot, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
         EnvironmentInfo, InputBackendKind, ModelImageFormat, PixelSize, PortalCapabilities, RectF,
         ScrollDirection, SemanticBackendKind, SessionKind, ToolAvailability, ToolCapabilities,
     };
+
+    use super::{
+        full_snapshot_with_element_selection, select_app_state_elements, string_matches_query,
+        summary_snapshot, summary_text_field,
+    };
+    use crate::app_state::AppStateElementOptions;
 
     #[test]
     fn summary_text_field_preserves_normalized_truncation_shape() {

@@ -1,6 +1,7 @@
+use serde_json::json;
+
 use super::*;
 use crate::{PhoneCameraRequest, PhoneFeatureCall};
-use serde_json::json;
 
 fn sample_companion() -> PhoneCompanionCapabilities {
     PhoneCompanionCapabilities {

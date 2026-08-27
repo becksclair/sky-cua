@@ -668,9 +668,10 @@ async fn remove_browser_connection_association(
 
 #[cfg(test)]
 mod tests {
-    use super::enrich_codex_get_info;
     use serde_json::json;
     use sky_cua_platform::model::BrowserCallerKind;
+
+    use super::enrich_codex_get_info;
 
     #[test]
     fn get_info_metadata_preserves_truthful_extension_identity_for_codex() {

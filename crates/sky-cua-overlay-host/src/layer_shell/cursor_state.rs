@@ -49,9 +49,10 @@ pub(super) fn apply_system_pointer_position(
 
 #[cfg(test)]
 mod tests {
+    use sky_cua_platform::model::{AgentCursorPoint, AgentCursorState, CoordinateSpace};
+
     use super::{apply_system_pointer_position, cursor_point, state_needs_system_pointer_update};
     use crate::system_cursor::SystemPointerPosition;
-    use sky_cua_platform::model::{AgentCursorPoint, AgentCursorState, CoordinateSpace};
 
     #[test]
     fn cursor_point_prefers_native_coordinates_for_visible_overlay() {

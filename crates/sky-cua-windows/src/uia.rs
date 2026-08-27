@@ -1085,11 +1085,6 @@ impl Drop for ComApartment {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DesktopRect, UiaActionCall, UiaActionKind, UiaElementInfo, backend_ref,
-        desktop_rect_to_stream_rect, element_node_from_info, parse_backend_ref,
-        role_for_control_type, uia_action_for_request,
-    };
     use sky_cua_platform::model::{
         ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
         ElementNode, PixelSize, RectF,
@@ -1097,6 +1092,12 @@ mod tests {
     use windows::Win32::UI::Accessibility::{
         UIA_ButtonControlTypeId, UIA_EditControlTypeId, UIA_PaneControlTypeId,
         UIA_TabItemControlTypeId,
+    };
+
+    use super::{
+        DesktopRect, UiaActionCall, UiaActionKind, UiaElementInfo, backend_ref,
+        desktop_rect_to_stream_rect, element_node_from_info, parse_backend_ref,
+        role_for_control_type, uia_action_for_request,
     };
 
     #[test]

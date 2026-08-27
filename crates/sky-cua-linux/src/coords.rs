@@ -54,8 +54,9 @@ pub fn desktop_to_stream(point: (f64, f64), logical_rect: &RectF) -> Option<(f64
 
 #[cfg(test)]
 mod tests {
-    use super::{center_of, desktop_to_stream, logical_to_pixel};
     use sky_cua_platform::model::{CoordinateSpace, PixelSize, RectF};
+
+    use super::{center_of, desktop_to_stream, logical_to_pixel};
 
     #[test]
     fn maps_center_into_pixels() {

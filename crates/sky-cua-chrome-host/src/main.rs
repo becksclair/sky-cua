@@ -4,9 +4,10 @@ mod frame;
 mod host;
 mod manifest;
 
+use std::path::PathBuf;
+
 use anyhow::{Context, Result, bail};
 use manifest::{Browser, HostManifest, host_manifest_path};
-use std::path::PathBuf;
 
 const CODEX_COMPAT_HOST_NAME: &str = "com.openai.codexextension";
 const SKY_CUA_ALIAS_HOST_NAME: &str = "io.github.becksclair.sky_cua_extension";

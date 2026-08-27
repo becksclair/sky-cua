@@ -14,11 +14,10 @@ use serde_json::{Value, json};
 use sky_cua_platform::model::BrowserTargetKind;
 use tokio::net::UnixListener;
 
+use super::helpers::*;
 use crate::browser::bridge::{click, press_key, type_text};
 use crate::browser::protocol::{read_frame, write_frame};
 use crate::browser::sockets::SKY_CUA_SOCKET_DIR_ENV;
-
-use super::helpers::*;
 
 const TAB_ID: &str = "515";
 /// CDP `modifiers` bit for Ctrl (Alt=1, Ctrl=2, Meta=4, Shift=8).

@@ -992,8 +992,9 @@ fn strip_ansi(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::os::unix::process::ExitStatusExt;
+
+    use super::*;
 
     #[test]
     fn parses_xrandr_multiple_displays() {

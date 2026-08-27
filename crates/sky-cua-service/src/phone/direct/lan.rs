@@ -155,8 +155,9 @@ pub fn candidates_are_bindable(candidates: &[LanCandidate], port: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
+
+    use super::*;
 
     #[test]
     fn scoring_prefers_192_168() {

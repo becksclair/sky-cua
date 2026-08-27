@@ -1709,6 +1709,8 @@ mod tests {
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
 
+    use sky_cua_input_helper::uinput::DesktopBounds;
+
     use super::{
         ClickAction, LinuxVirtualInput, VirtualInputAdapterKind, VirtualInputCoordinatePlane,
         VirtualInputProbe, click_code, desktop_name_is_cosmic, helper_keyboard_only_probe,
@@ -1717,7 +1719,6 @@ mod tests {
         type_text_args,
     };
     use crate::portal::remote_desktop::MouseButton;
-    use sky_cua_input_helper::uinput::DesktopBounds;
 
     #[test]
     fn builds_ydotool_click_codes() {
@@ -1735,11 +1736,13 @@ mod tests {
 
     #[test]
     fn helper_read_timeout_scales_with_pointer_settles() {
+        use std::time::Duration;
+
+        use sky_cua_input_helper::protocol::{HelperCommand, PointerAction};
+
         use super::{
             HELPER_COMMAND_TIMEOUT, HELPER_DEVICE_REBUILD_ALLOWANCE, helper_command_read_timeout,
         };
-        use sky_cua_input_helper::protocol::{HelperCommand, PointerAction};
-        use std::time::Duration;
 
         let drag = HelperCommand::PointerActions {
             bounds: DesktopBounds {

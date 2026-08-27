@@ -6,10 +6,7 @@ use std::sync::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::BrowserControlMode;
-
 use super::browser::BrowserRequestContext;
-
 use super::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AgentCursorCapabilities,
     AgentCursorState, AppInfo, AppSelector, AppShotEnvelope, AppShotRequired, AppStateSnapshot,
@@ -19,6 +16,7 @@ use super::{
     SessionPresenceIntent, SessionPresenceStatus, WindowInfo, WindowTarget,
     WindowTargetingSetupReport,
 };
+use crate::config::BrowserControlMode;
 
 pub const CUA_SERVICE_PROTOCOL_VERSION: u32 = 1;
 pub const CUA_SERVICE_VERSION: &str = "0.1.0";
@@ -815,6 +813,8 @@ pub enum SessionPresenceAction {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::super::test_support::{
         action_outcome, app_state_snapshot, cursor_capabilities, cursor_state, doctor_report,
         environment_info, setup_command_report, window_info,
@@ -828,7 +828,6 @@ mod tests {
         PhoneMcpClientInfo, PhoneRequest, PhoneRequestContext, PhoneResponse, PhoneSessionSelector,
         PhoneStatusReport, PhoneStatusRequest, PhoneTapRequest, WindowTargetingSetupReport,
     };
-    use serde_json::json;
 
     #[test]
     fn browser_control_mode_capability_round_trips_and_ignores_legacy_health() {

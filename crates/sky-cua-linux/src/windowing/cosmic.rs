@@ -1,11 +1,10 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use crate::cosmic_helper;
-
 use super::common::{CompatBounds, normalize_window_id};
 use super::probe::BackendProbe;
 use super::types::LinuxWindowInfo;
+use crate::cosmic_helper;
 
 pub const COSMIC_WAYLAND_BACKEND: &str = "cosmic-wayland";
 

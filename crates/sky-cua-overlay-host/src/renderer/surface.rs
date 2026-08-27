@@ -4,8 +4,9 @@
 //! the Wayland display and `wl_surface` alive while the guard exists, and the
 //! guard's drop ensures the wgpu surface is released before those native
 //! objects.
-use crate::renderer::wgpu::WgpuOverlayInstance;
 use anyhow::{Context, Result};
+
+use crate::renderer::wgpu::WgpuOverlayInstance;
 
 /// A configured (or configurable) wgpu surface plus its current config.
 #[derive(Debug)]

@@ -1,16 +1,15 @@
 use std::path::{Path, PathBuf};
 
 use ashpd::desktop::screenshot::Screenshot;
-use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
-use sky_cua_platform::model::PixelSize;
-
-use crate::portal::session::portal_u32_property;
-
 // The model-image preparation core (downscale, encode, format/quality/bounds
 // resolution) is shared with the Windows backend via `sky-cua-capture`. This
 // module keeps the portal-specific raw capture and crop logic, plus thin
 // wrappers that supply the Linux captures directory.
 pub use sky_cua_capture::{ModelCaptureImage, ModelScreenshotFormat, pixel_size_from_path};
+use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+use sky_cua_platform::model::PixelSize;
+
+use crate::portal::session::portal_u32_property;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PixelRect {

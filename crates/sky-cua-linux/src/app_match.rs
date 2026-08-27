@@ -627,6 +627,11 @@ pub(crate) fn selector_summary(selector: &AppSelector) -> String {
 
 #[cfg(test)]
 mod tests {
+    use sky_cua_platform::AppInfo;
+    use sky_cua_platform::model::{AppSelector, RectF};
+    use zbus::names::UniqueName;
+    use zbus::zvariant::ObjectPath;
+
     use super::{
         app_from_linux_window, apps_matching_window_or_all, enrich_accessible_apps_from_windows,
         linux_window_matches_app, merge_app_lists, preferred_linux_window, select_app,
@@ -634,10 +639,6 @@ mod tests {
     };
     use crate::apps::discovery::DiscoveredApp;
     use crate::windowing::LinuxWindowInfo;
-    use sky_cua_platform::AppInfo;
-    use sky_cua_platform::model::{AppSelector, RectF};
-    use zbus::names::UniqueName;
-    use zbus::zvariant::ObjectPath;
 
     fn object_ref(path: &str) -> atspi::ObjectRefOwned {
         atspi::ObjectRef::new_owned(

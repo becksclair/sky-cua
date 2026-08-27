@@ -14,8 +14,10 @@
 //! feedback stays coupled to real input.
 
 use sky_cua_platform::model::{
-    DiagnosticEntry, PhoneActionResponse, PhoneBackendKind, PhonePoint, PhonePressKeyRequest,
-    PhoneSwipeRequest, PhoneTapRequest, PhoneTypeTextRequest,
+    DiagnosticEntry, PhoneActionResponse, PhoneBackendKind, PhoneDoubleTapRequest,
+    PhoneGlobalActionRequest, PhoneKeyEventRequest, PhoneLongPressRequest, PhoneNodeActionRequest,
+    PhonePoint, PhonePressKeyRequest, PhoneSessionSelector, PhoneSwipeRequest, PhoneTapRequest,
+    PhoneTypeTextRequest,
 };
 
 pub(crate) use super::routing_backend::{
@@ -45,6 +47,12 @@ const OVERLAY_TAP_DURATION_MS: u32 = 250;
 /// ADB/companion swipe default so the trail tracks the dispatched motion.
 const OVERLAY_SWIPE_DEFAULT_DURATION_MS: u32 = 300;
 
+/// Default hold duration for a long-press coordinate gesture.
+const COMPANION_LONG_PRESS_DURATION_MS: u32 = 800;
+
+/// Default interval between the two taps of a double-tap.
+const COMPANION_DOUBLE_TAP_INTERVAL_MS: u32 = 200;
+
 /// A description of the phone-side overlay animation for one coordinate action,
 /// in device pixels. Built by the coordinate paths and handed to `finish_action`,
 /// which fires it on the companion overlay after a successful dispatch. The
@@ -65,41 +73,19 @@ impl PhoneManager {
     /// raw device coordinates), dispatch through the companion gesture lane, and
     /// update the cursor on success.
     pub(super) async fn tap(&mut self, request: PhoneTapRequest) -> PhoneActionResponse {
-        let Some(pre_ctx) = self.action_context(&request.session) else {
-            return action_no_session(&request.session, "phone_tap");
-        };
-        if let Err(diag) = self.device_point_for(
-            &pre_ctx,
-            request.phone_snapshot_id.as_deref(),
-            request.x,
-            request.y,
-            request.use_device_coordinates,
-        ) {
-            return action_failure(&pre_ctx, "phone_tap", diag);
-        }
-
-        let Some(ctx) = self.fresh_action_context(&request.session).await else {
-            return action_no_session(&request.session, "phone_tap");
-        };
-
-        let device_point = match self.device_point_for(
-            &ctx,
-            request.phone_snapshot_id.as_deref(),
-            request.x,
-            request.y,
-            request.use_device_coordinates,
-        ) {
-            Ok(point) => point,
-            Err(diag) => return action_failure(&ctx, "phone_tap", diag),
-        };
-        let screenshot_point = (!request.use_device_coordinates).then_some(PhonePoint {
-            x: request.x,
-            y: request.y,
-        });
-
-        let backend = match self.coordinate_backend(&ctx.profile) {
-            Ok(backend) => backend,
-            Err(diag) => return action_failure(&ctx, "phone_tap", diag),
+        let (ctx, device_point, screenshot_point, backend) = match self
+            .prepare_single_point(
+                &request.session,
+                request.phone_snapshot_id.as_deref(),
+                request.x,
+                request.y,
+                request.use_device_coordinates,
+                "phone_tap",
+            )
+            .await
+        {
+            Ok(v) => v,
+            Err(resp) => return resp,
         };
         let result = self.dispatch_tap(&ctx, backend, device_point).await;
         let overlay_gesture = Some(OverlayGestureSpec {
@@ -122,57 +108,23 @@ impl PhoneManager {
 
     /// `phone_swipe`: same translation/routing as tap, over a start/end pair.
     pub(super) async fn swipe(&mut self, request: PhoneSwipeRequest) -> PhoneActionResponse {
-        let Some(pre_ctx) = self.action_context(&request.session) else {
-            return action_no_session(&request.session, "phone_swipe");
-        };
-        for (x, y) in [
-            (request.start_x, request.start_y),
-            (request.end_x, request.end_y),
-        ] {
-            if let Err(diag) = self.device_point_for(
-                &pre_ctx,
+        let (ctx, start, end, _start_screenshot, screenshot_point, backend) = match self
+            .prepare_two_points(
+                &request.session,
                 request.phone_snapshot_id.as_deref(),
-                x,
-                y,
+                request.start_x,
+                request.start_y,
+                request.end_x,
+                request.end_y,
                 request.use_device_coordinates,
-            ) {
-                return action_failure(&pre_ctx, "phone_swipe", diag);
-            }
-        }
-
-        let Some(ctx) = self.fresh_action_context(&request.session).await else {
-            return action_no_session(&request.session, "phone_swipe");
+                "phone_swipe",
+            )
+            .await
+        {
+            Ok(v) => v,
+            Err(resp) => return resp,
         };
 
-        let start = match self.device_point_for(
-            &ctx,
-            request.phone_snapshot_id.as_deref(),
-            request.start_x,
-            request.start_y,
-            request.use_device_coordinates,
-        ) {
-            Ok(point) => point,
-            Err(diag) => return action_failure(&ctx, "phone_swipe", diag),
-        };
-        let end = match self.device_point_for(
-            &ctx,
-            request.phone_snapshot_id.as_deref(),
-            request.end_x,
-            request.end_y,
-            request.use_device_coordinates,
-        ) {
-            Ok(point) => point,
-            Err(diag) => return action_failure(&ctx, "phone_swipe", diag),
-        };
-        let screenshot_point = (!request.use_device_coordinates).then_some(PhonePoint {
-            x: request.end_x,
-            y: request.end_y,
-        });
-
-        let backend = match self.coordinate_backend(&ctx.profile) {
-            Ok(backend) => backend,
-            Err(diag) => return action_failure(&ctx, "phone_swipe", diag),
-        };
         let result = self
             .dispatch_swipe(&ctx, backend, start, end, request.duration_ms)
             .await;
@@ -204,20 +156,13 @@ impl PhoneManager {
         };
         if let Some((device_id, epoch)) = self.direct_identity(&ctx.session_id) {
             let result = self
-                .direct_provider
-                .as_ref()
-                .expect("direct identity requires provider")
-                .dispatch(
+                .dispatch_direct(
                     &device_id,
                     epoch,
                     "input.text",
                     serde_json::json!({"text": request.text}),
-                    false,
-                    std::time::Duration::from_secs(5),
                 )
-                .await
-                .map(|_| true)
-                .map_err(direct_error_diagnostic);
+                .await;
             return self
                 .finish_action(
                     &ctx,
@@ -263,20 +208,13 @@ impl PhoneManager {
         };
         if let Some((device_id, epoch)) = self.direct_identity(&ctx.session_id) {
             let result = self
-                .direct_provider
-                .as_ref()
-                .expect("direct identity requires provider")
-                .dispatch(
+                .dispatch_direct(
                     &device_id,
                     epoch,
                     "input.key",
                     serde_json::json!({"key": request.key}),
-                    false,
-                    std::time::Duration::from_secs(5),
                 )
-                .await
-                .map(|_| true)
-                .map_err(direct_error_diagnostic);
+                .await;
             return self
                 .finish_action(
                     &ctx,
@@ -303,6 +241,224 @@ impl PhoneManager {
         self.finish_action(
             &ctx,
             "phone_press_key",
+            backend,
+            None,
+            None,
+            None,
+            None,
+            result,
+        )
+        .await
+    }
+
+    /// `phone_long_press`: single-point hold via the companion gesture lane.
+    pub(super) async fn long_press(
+        &mut self,
+        request: PhoneLongPressRequest,
+    ) -> PhoneActionResponse {
+        let (ctx, device_point, screenshot_point, backend) = match self
+            .prepare_single_point(
+                &request.session,
+                request.phone_snapshot_id.as_deref(),
+                request.x,
+                request.y,
+                request.use_device_coordinates,
+                "phone_long_press",
+            )
+            .await
+        {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let duration = request
+            .duration_ms
+            .unwrap_or(COMPANION_LONG_PRESS_DURATION_MS)
+            .clamp(200, 2000);
+        let result = self
+            .dispatch_long_press(&ctx, backend, device_point, duration)
+            .await;
+        let overlay_gesture = Some(OverlayGestureSpec {
+            kind: "tap",
+            points: vec![device_point],
+            duration_ms: duration,
+        });
+        self.finish_action(
+            &ctx,
+            "phone_long_press",
+            backend,
+            request.phone_snapshot_id.clone(),
+            Some(device_point),
+            screenshot_point,
+            overlay_gesture,
+            result,
+        )
+        .await
+    }
+
+    /// `phone_double_tap`: two taps with interval via companion lane.
+    pub(super) async fn double_tap(
+        &mut self,
+        request: PhoneDoubleTapRequest,
+    ) -> PhoneActionResponse {
+        let (ctx, device_point, screenshot_point, backend) = match self
+            .prepare_single_point(
+                &request.session,
+                request.phone_snapshot_id.as_deref(),
+                request.x,
+                request.y,
+                request.use_device_coordinates,
+                "phone_double_tap",
+            )
+            .await
+        {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let interval = request
+            .interval_ms
+            .unwrap_or(COMPANION_DOUBLE_TAP_INTERVAL_MS)
+            .clamp(50, 500);
+        let result = self
+            .dispatch_double_tap(&ctx, backend, device_point, interval)
+            .await;
+        let overlay_gesture = Some(OverlayGestureSpec {
+            kind: "tap",
+            points: vec![device_point],
+            duration_ms: OVERLAY_TAP_DURATION_MS,
+        });
+        self.finish_action(
+            &ctx,
+            "phone_double_tap",
+            backend,
+            request.phone_snapshot_id.clone(),
+            Some(device_point),
+            screenshot_point,
+            overlay_gesture,
+            result,
+        )
+        .await
+    }
+
+    /// `phone_node_action`: semantic accessibility action on a node via Direct.
+    pub(super) async fn node_action(
+        &mut self,
+        request: PhoneNodeActionRequest,
+    ) -> PhoneActionResponse {
+        let Some(ctx) = self.action_context(&request.session) else {
+            return action_no_session(&request.session, "phone_node_action");
+        };
+        let Some((device_id, epoch)) = self.direct_identity(&ctx.session_id) else {
+            return action_failure(&ctx, "phone_node_action", no_companion_diagnostic());
+        };
+        let wire_action = Self::wire_action(&request.action);
+        let mut params = serde_json::json!({
+            "action": wire_action,
+        });
+        if let Some(ref appshot_id) = request.appshot_id {
+            params["appshot_id"] = serde_json::json!(appshot_id);
+        }
+        if let Some(node_id) = request.node_id {
+            params["node_id"] = serde_json::json!(node_id);
+        }
+        if let Some(ref view_id) = request.view_id {
+            params["view_id"] = serde_json::json!(view_id);
+        }
+        if let Some(ref args) = request.args {
+            params["args"] = serde_json::to_value(args).unwrap_or(serde_json::json!({}));
+        }
+        let result = self
+            .dispatch_direct(&device_id, epoch, "node_action", params)
+            .await;
+        self.finish_action(
+            &ctx,
+            "phone_node_action",
+            PhoneBackendKind::Companion,
+            request.appshot_id.clone(),
+            None,
+            None,
+            None,
+            result,
+        )
+        .await
+    }
+
+    /// `phone_global_action`: global accessibility action via Direct.
+    pub(super) async fn global_action(
+        &mut self,
+        request: PhoneGlobalActionRequest,
+    ) -> PhoneActionResponse {
+        let Some(ctx) = self.action_context(&request.session) else {
+            return action_no_session(&request.session, "phone_global_action");
+        };
+        let Some((device_id, epoch)) = self.direct_identity(&ctx.session_id) else {
+            return action_failure(&ctx, "phone_global_action", no_companion_diagnostic());
+        };
+        let wire_action = Self::wire_action(&request.action);
+        let result = self
+            .dispatch_direct(
+                &device_id,
+                epoch,
+                "global_action",
+                serde_json::json!({"action": wire_action}),
+            )
+            .await;
+        self.finish_action(
+            &ctx,
+            "phone_global_action",
+            PhoneBackendKind::Companion,
+            None,
+            None,
+            None,
+            None,
+            result,
+        )
+        .await
+    }
+
+    /// `phone_key_event`: raw keycode dispatch via Direct or ADB fallback.
+    pub(super) async fn key_event(&mut self, request: PhoneKeyEventRequest) -> PhoneActionResponse {
+        let Some(ctx) = self.action_context(&request.session) else {
+            return action_no_session(&request.session, "phone_key_event");
+        };
+        if let Some((device_id, epoch)) = self.direct_identity(&ctx.session_id) {
+            let result = self
+                .dispatch_direct(
+                    &device_id,
+                    epoch,
+                    "key_event",
+                    serde_json::json!({
+                        "key_code": request.key_code,
+                        "meta_state": request.meta_state,
+                        "repeat_count": request.repeat_count,
+                    }),
+                )
+                .await;
+            return self
+                .finish_action(
+                    &ctx,
+                    "phone_key_event",
+                    PhoneBackendKind::Companion,
+                    None,
+                    None,
+                    None,
+                    None,
+                    result,
+                )
+                .await;
+        }
+        let backend = PhoneBackendKind::Adb;
+        let result = adb::input_keyevent(
+            self.runner.as_ref(),
+            self.configured_adb_path(),
+            &ctx.serial,
+            &request.key_code,
+        )
+        .await
+        .map(|outcome| outcome.success)
+        .map_err(|error| adb::command_error_diagnostic("adb shell input keyevent", &error));
+        self.finish_action(
+            &ctx,
+            "phone_key_event",
             backend,
             None,
             None,
@@ -352,6 +508,52 @@ impl PhoneManager {
                     GestureKind::Swipe,
                     vec![start, end],
                     duration_ms.unwrap_or(300),
+                )
+                .await
+            }
+            _ => Err(companion_required_diagnostic()),
+        }
+    }
+
+    async fn dispatch_long_press(
+        &mut self,
+        ctx: &ActionContext,
+        backend: PhoneBackendKind,
+        point: PhonePoint,
+        duration_ms: u32,
+    ) -> Result<bool, DiagnosticEntry> {
+        match backend {
+            PhoneBackendKind::Companion => {
+                // Long press is a tap with extended duration.
+                self.companion_gesture(ctx, GestureKind::Tap, vec![point], duration_ms)
+                    .await
+            }
+            _ => Err(companion_required_diagnostic()),
+        }
+    }
+
+    async fn dispatch_double_tap(
+        &mut self,
+        ctx: &ActionContext,
+        backend: PhoneBackendKind,
+        point: PhonePoint,
+        interval_ms: u32,
+    ) -> Result<bool, DiagnosticEntry> {
+        match backend {
+            PhoneBackendKind::Companion => {
+                self.companion_gesture(
+                    ctx,
+                    GestureKind::Tap,
+                    vec![point],
+                    COMPANION_TAP_DURATION_MS,
+                )
+                .await?;
+                tokio::time::sleep(std::time::Duration::from_millis(interval_ms as u64)).await;
+                self.companion_gesture(
+                    ctx,
+                    GestureKind::Tap,
+                    vec![point],
+                    COMPANION_TAP_DURATION_MS,
                 )
                 .await
             }
@@ -613,6 +815,150 @@ impl PhoneManager {
                 details: None,
             }
         })
+    }
+
+    /// S-001: deduped single-point coordinate preamble (tap/long_press/double_tap).
+    async fn prepare_single_point(
+        &mut self,
+        session: &PhoneSessionSelector,
+        snapshot_id: Option<&str>,
+        x: f64,
+        y: f64,
+        use_device_coordinates: bool,
+        method: &str,
+    ) -> Result<
+        (
+            ActionContext,
+            PhonePoint,
+            Option<PhonePoint>,
+            PhoneBackendKind,
+        ),
+        PhoneActionResponse,
+    > {
+        let Some(pre_ctx) = self.action_context(session) else {
+            return Err(action_no_session(session, method));
+        };
+        if let Err(diag) =
+            self.device_point_for(&pre_ctx, snapshot_id, x, y, use_device_coordinates)
+        {
+            return Err(action_failure(&pre_ctx, method, diag));
+        }
+        let Some(ctx) = self.fresh_action_context(session).await else {
+            return Err(action_no_session(session, method));
+        };
+        let device_point =
+            match self.device_point_for(&ctx, snapshot_id, x, y, use_device_coordinates) {
+                Ok(p) => p,
+                Err(diag) => return Err(action_failure(&ctx, method, diag)),
+            };
+        let screenshot_point = (!use_device_coordinates).then_some(PhonePoint { x, y });
+        let backend = match self.coordinate_backend(&ctx.profile) {
+            Ok(b) => b,
+            Err(diag) => return Err(action_failure(&ctx, method, diag)),
+        };
+        Ok((ctx, device_point, screenshot_point, backend))
+    }
+
+    /// S-001: deduped two-point preamble for swipe.
+    #[allow(clippy::too_many_arguments)]
+    async fn prepare_two_points(
+        &mut self,
+        session: &PhoneSessionSelector,
+        snapshot_id: Option<&str>,
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        use_device_coordinates: bool,
+        method: &str,
+    ) -> Result<
+        (
+            ActionContext,
+            PhonePoint,
+            PhonePoint,
+            Option<PhonePoint>,
+            Option<PhonePoint>,
+            PhoneBackendKind,
+        ),
+        PhoneActionResponse,
+    > {
+        let Some(pre_ctx) = self.action_context(session) else {
+            return Err(action_no_session(session, method));
+        };
+        if let Err(diag) = self.device_point_for(
+            &pre_ctx,
+            snapshot_id,
+            start_x,
+            start_y,
+            use_device_coordinates,
+        ) {
+            return Err(action_failure(&pre_ctx, method, diag));
+        }
+        if let Err(diag) =
+            self.device_point_for(&pre_ctx, snapshot_id, end_x, end_y, use_device_coordinates)
+        {
+            return Err(action_failure(&pre_ctx, method, diag));
+        }
+        let Some(ctx) = self.fresh_action_context(session).await else {
+            return Err(action_no_session(session, method));
+        };
+        let start = match self.device_point_for(
+            &ctx,
+            snapshot_id,
+            start_x,
+            start_y,
+            use_device_coordinates,
+        ) {
+            Ok(p) => p,
+            Err(diag) => return Err(action_failure(&ctx, method, diag)),
+        };
+        let end =
+            match self.device_point_for(&ctx, snapshot_id, end_x, end_y, use_device_coordinates) {
+                Ok(p) => p,
+                Err(diag) => return Err(action_failure(&ctx, method, diag)),
+            };
+        let start_screenshot = (!use_device_coordinates).then_some(PhonePoint {
+            x: start_x,
+            y: start_y,
+        });
+        let end_screenshot = (!use_device_coordinates).then_some(PhonePoint { x: end_x, y: end_y });
+        let backend = match self.coordinate_backend(&ctx.profile) {
+            Ok(b) => b,
+            Err(diag) => return Err(action_failure(&ctx, method, diag)),
+        };
+        Ok((ctx, start, end, start_screenshot, end_screenshot, backend))
+    }
+
+    /// S-003: single helper for wire snake_case conversion.
+    #[allow(clippy::redundant_closure)]
+    fn wire_action<T: serde::Serialize + std::fmt::Debug>(value: &T) -> String {
+        serde_json::to_value(value)
+            .and_then(|v| serde_json::from_value::<String>(v))
+            .unwrap_or_else(|_| format!("{value:?}").to_ascii_lowercase())
+    }
+
+    /// S-004: centralised Direct dispatch (single timeout, single error mapping).
+    async fn dispatch_direct(
+        &self,
+        device_id: &str,
+        epoch: u64,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<bool, DiagnosticEntry> {
+        self.direct_provider
+            .as_ref()
+            .expect("direct identity requires provider")
+            .dispatch(
+                device_id,
+                epoch,
+                method,
+                params,
+                false,
+                std::time::Duration::from_secs(5),
+            )
+            .await
+            .map(|_| true)
+            .map_err(direct_error_diagnostic)
     }
 
     /// Finalize an action: build the response, on success update the cursor

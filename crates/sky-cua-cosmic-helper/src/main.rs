@@ -1,9 +1,3 @@
-use anyhow::{Context, Result, anyhow, bail};
-use cosmic_protocols::{
-    toplevel_info::v1::client::{zcosmic_toplevel_handle_v1, zcosmic_toplevel_info_v1},
-    toplevel_management::v1::client::zcosmic_toplevel_manager_v1,
-};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -11,6 +5,13 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context, Result, anyhow, bail};
+use cosmic_protocols::{
+    toplevel_info::v1::client::{zcosmic_toplevel_handle_v1, zcosmic_toplevel_info_v1},
+    toplevel_management::v1::client::zcosmic_toplevel_manager_v1,
+};
+use serde::{Deserialize, Serialize};
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle, WEnum, event_created_child,
     globals::{GlobalListContents, registry_queue_init},

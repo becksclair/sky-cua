@@ -1,6 +1,7 @@
+use std::{env, path::PathBuf, process::Command};
+
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::{env, path::PathBuf, process::Command};
 
 use crate::windowing::common::is_executable;
 

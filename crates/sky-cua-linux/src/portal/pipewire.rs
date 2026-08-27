@@ -289,11 +289,12 @@ pub(crate) fn duplicate_remote_fd(remote_fd: &OwnedFd) -> Result<OwnedFd, Backen
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
+    use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+
     use super::{
         FORCE_FAILURE_ENV, PipeWireFrameCapture, join_capture_task, should_force_capture_failure,
     };
-    use serial_test::serial;
-    use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 
     #[test]
     fn capture_struct_holds_a_path() {

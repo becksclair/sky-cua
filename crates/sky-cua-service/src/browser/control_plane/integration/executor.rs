@@ -1,12 +1,14 @@
-use super::*;
-use crate::browser::control_plane::DispatchOperation;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 use sha2::{Digest, Sha256};
 use sky_cua_platform::model::{
     AppShotCapture, AppShotEnvelope, AppShotRejectionReason, AppShotRequired, AppShotTrigger,
     BrowserNavigateResponse, BrowserOpenResponse, BrowserTargetKind,
 };
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+
+use super::*;
+use crate::browser::control_plane::DispatchOperation;
 
 #[derive(Clone)]
 struct RegisteredAppShot {
@@ -686,12 +688,13 @@ pub(crate) async fn execute_high_level(
 
 #[cfg(test)]
 mod appshot_fence_tests {
-    use super::*;
     use sky_cua_platform::model::{
         AppShotActionSnapshot, AppShotConsistency, AppShotCoverage, AppShotTrigger,
         BrowserNavigateResponse, BrowserOpenResponse, BrowserTab, ContentPersistence, ContentRef,
         ContentSource, PixelSize,
     };
+
+    use super::*;
 
     fn entry(
         target: BrowserTargetKind,

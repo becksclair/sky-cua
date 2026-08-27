@@ -13,11 +13,16 @@ import android.util.Base64
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.KeyEvent
 import com.skycua.phonecompanion.overlay.AgentOverlayController
 import com.skycua.phonecompanion.direct.DirectLinkServiceOwner
 import com.skycua.phonecompanion.overlay.OverlayMath
 import com.skycua.phonecompanion.overlay.WindowOverlayHost
 import com.skycua.phonecompanion.protocol.AccessibilityNode
+import com.skycua.phonecompanion.protocol.GlobalActionParams
+import com.skycua.phonecompanion.protocol.KeyEventParams
+import com.skycua.phonecompanion.protocol.NodeActionParams
+import com.skycua.phonecompanion.protocol.NodeActionKind
 import com.skycua.phonecompanion.protocol.AccessibilityTreeParams
 import com.skycua.phonecompanion.protocol.AccessibilityTreeResult
 import com.skycua.phonecompanion.protocol.GestureKind
@@ -633,6 +638,340 @@ class SkyAccessibilityService : AccessibilityService() {
         if (!performGlobalAction(action)) throw MethodApplicationException(Protocol.ErrorCodes.TRANSIENT, "global key action was rejected")
         return jsonObject { put("dispatched", true); put("provider", "accessibility_global_action") }
     }
+
+    fun performNodeAction(params: NodeActionParams): JsonValue.Obj {
+        if (!canRetrieveWindowContent()) {
+            throw MethodApplicationException(
+                Protocol.ErrorCodes.DISABLED_SERVICE,
+                "accessibility service cannot retrieve window content",
+            )
+        }
+        val target = findNodeForAction(params)
+            ?: throw MethodApplicationException(Protocol.ErrorCodes.NODE_NOT_FOUND, "node not found for ${params.viewId ?: params.nodeId}")
+        val (actionId, bundle) = resolveNodeAction(params)
+        val ok = try {
+            target.performAction(actionId, bundle)
+        } catch (e: SecurityException) {
+            throw MethodApplicationException(Protocol.ErrorCodes.PERMISSION_DENIED, "performAction denied: ${e.message}")
+        } catch (e: Exception) {
+            throw MethodApplicationException(Protocol.ErrorCodes.ACTION_FAILED, "performAction failed: ${e.message}")
+        }
+        if (!ok) {
+            throw MethodApplicationException(Protocol.ErrorCodes.ACTION_FAILED, "node action ${params.action.wire} was rejected by the view")
+        }
+        return jsonObject { put("dispatched", true); put("success", true) }
+    }
+
+    fun performGlobalActionExtended(params: GlobalActionParams): JsonValue.Obj {
+        val action = when (params.action.wire) {
+            "back" -> GLOBAL_ACTION_BACK
+            "home" -> GLOBAL_ACTION_HOME
+            "recents" -> GLOBAL_ACTION_RECENTS
+            "notifications" -> GLOBAL_ACTION_NOTIFICATIONS
+            "quick_settings" -> GLOBAL_ACTION_QUICK_SETTINGS
+            "power_dialog" -> GLOBAL_ACTION_POWER_DIALOG
+            "toggle_split_screen" -> GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN
+            "lock_screen" -> GLOBAL_ACTION_LOCK_SCREEN
+            "take_screenshot" -> GLOBAL_ACTION_TAKE_SCREENSHOT
+            "keycode_headset_hook" -> GLOBAL_ACTION_KEYCODE_HEADSETHOOK
+            "accessibility_button" -> GLOBAL_ACTION_ACCESSIBILITY_BUTTON
+            "accessibility_button_chooser" -> GLOBAL_ACTION_ACCESSIBILITY_BUTTON_CHOOSER
+            "accessibility_shortcut" -> GLOBAL_ACTION_ACCESSIBILITY_SHORTCUT
+            "accessibility_all_apps" -> GLOBAL_ACTION_ACCESSIBILITY_ALL_APPS
+            "dismiss_notification_shade" -> GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE
+            "dpad_up" -> GLOBAL_ACTION_DPAD_UP
+            "dpad_down" -> GLOBAL_ACTION_DPAD_DOWN
+            "dpad_left" -> GLOBAL_ACTION_DPAD_LEFT
+            "dpad_right" -> GLOBAL_ACTION_DPAD_RIGHT
+            "dpad_center" -> GLOBAL_ACTION_DPAD_CENTER
+            "menu" -> throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_ACTION, "global action menu has no platform constant")
+            else -> throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_ACTION, "unsupported global action ${params.action.wire}")
+        }
+        val ok = try {
+            performGlobalAction(action)
+        } catch (e: SecurityException) {
+            throw MethodApplicationException(Protocol.ErrorCodes.PERMISSION_DENIED, "global action denied: ${e.message}")
+        } catch (e: Exception) {
+            throw MethodApplicationException(Protocol.ErrorCodes.ACTION_FAILED, "global action failed: ${e.message}")
+        }
+        if (!ok) throw MethodApplicationException(Protocol.ErrorCodes.ACTION_FAILED, "global action ${params.action.wire} was rejected")
+        return jsonObject { put("dispatched", true) }
+    }
+
+    fun performKeyEvent(params: KeyEventParams): JsonValue.Obj {
+        val code = try {
+            val named = params.keyCode.uppercase()
+            when {
+                named.startsWith("KEYCODE_") -> KeyEvent.keyCodeFromString(named)
+                named.toIntOrNull() != null -> named.toInt()
+                else -> KeyEvent.keyCodeFromString("KEYCODE_${named}") // fallback like "VOLUME_UP" -> KEYCODE_VOLUME_UP
+            }
+        } catch (_: Exception) {
+            throw MethodParamException(Protocol.ErrorCodes.BAD_REQUEST, "invalid key_code ${params.keyCode}")
+        }
+        if (code == KeyEvent.KEYCODE_UNKNOWN) {
+            throw MethodParamException(Protocol.ErrorCodes.BAD_REQUEST, "unknown key_code ${params.keyCode}")
+        }
+        // Try to inject via direct input if service can; otherwise report permission visibly.
+        val down = KeyEvent(KeyEvent.ACTION_DOWN, code).apply {
+            // metaState / repeat not critical for Lane 0
+        }
+        val up = KeyEvent(KeyEvent.ACTION_UP, code)
+        val ok = try {
+            // AccessibilityService has no direct key injection; attempt via Instrumentation fallback
+            // and surface permission failure explicitly as required.
+            false // placeholder: Direct key injection over accessibility requires privileged helper; not yet wired.
+        } catch (e: SecurityException) {
+            throw MethodApplicationException(Protocol.ErrorCodes.PERMISSION_DENIED, "key injection denied: ${e.message}")
+        }
+        if (!ok) {
+            throw MethodApplicationException(
+                Protocol.ErrorCodes.PERMISSION_DENIED,
+                "key_event for ${params.keyCode} not supported over CompanionDirect; use ADB serial input keyevent",
+            )
+        }
+        return jsonObject { put("dispatched", true) }
+    }
+
+    private fun findNodeForAction(params: NodeActionParams): AccessibilityNodeInfo? {
+        params.viewId?.let { viewId ->
+            findNodeByViewId(viewId)?.let { return it }
+        }
+        params.nodeId?.let { nodeId ->
+            findNodeBySyntheticId(nodeId)?.let { return it }
+        }
+        // Fallback: if nodeId provided without viewId, try synthetic lookup already.
+        // No generic bounds/text matching in Lane 0; viewId is required for playground.
+        return null
+    }
+
+    private fun findNodeByViewId(viewId: String): AccessibilityNodeInfo? {
+        val roots = mutableListOf<AccessibilityNodeInfo>()
+        runCatching { rootInActiveWindow?.let { roots.add(it) } }
+        windows?.forEach { w -> runCatching { w.root?.let { roots.add(it) } } }
+        for (root in roots) {
+            val found = findNodeByViewIdRecursive(root, viewId)
+            if (found != null) return found
+        }
+        // Also try system-wide search
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+            for (root in roots) {
+                val list = root.findAccessibilityNodeInfosByViewId(viewId)
+                if (!list.isNullOrEmpty()) return list[0]
+            }
+        }
+        return null
+    }
+
+    private fun findNodeByViewIdRecursive(node: AccessibilityNodeInfo, viewId: String): AccessibilityNodeInfo? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+            if (node.viewIdResourceName == viewId) return node
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findNodeByViewIdRecursive(child, viewId)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun findNodeBySyntheticId(targetId: Long): AccessibilityNodeInfo? {
+        val counter = java.util.concurrent.atomic.AtomicLong(1)
+        val winList = windows ?: return null
+        for (win in winList) {
+            val root = runCatching { win.root }.getOrNull() ?: continue
+            findNodeBySyntheticIdWithCounter(root, targetId, counter)?.let { return it }
+        }
+        return null
+    }
+
+    private fun findNodeBySyntheticIdWithCounter(
+        node: AccessibilityNodeInfo,
+        targetId: Long,
+        counter: java.util.concurrent.atomic.AtomicLong,
+    ): AccessibilityNodeInfo? {
+        if (counter.getAndIncrement() == targetId) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            findNodeBySyntheticIdWithCounter(child, targetId, counter)?.let { return it }
+        }
+        return null
+    }
+
+    private fun resolveNodeAction(params: NodeActionParams): Pair<Int, Bundle?> {
+        val bundle = Bundle()
+        val args = params.args
+        val actionId = when (params.action) {
+            NodeActionKind.CLICK -> AccessibilityNodeInfo.ACTION_CLICK
+            NodeActionKind.LONG_CLICK -> AccessibilityNodeInfo.ACTION_LONG_CLICK
+            NodeActionKind.DISMISS -> AccessibilityNodeInfo.ACTION_DISMISS
+            NodeActionKind.EXPAND -> AccessibilityNodeInfo.ACTION_EXPAND
+            NodeActionKind.COLLAPSE -> AccessibilityNodeInfo.ACTION_COLLAPSE
+            NodeActionKind.SCROLL_FORWARD -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+            NodeActionKind.SCROLL_BACKWARD -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            NodeActionKind.FOCUS -> AccessibilityNodeInfo.ACTION_FOCUS
+            NodeActionKind.CLEAR_FOCUS -> AccessibilityNodeInfo.ACTION_CLEAR_FOCUS
+            NodeActionKind.ACCESSIBILITY_FOCUS -> AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS
+            NodeActionKind.CLEAR_ACCESSIBILITY_FOCUS -> AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
+            NodeActionKind.SELECT -> AccessibilityNodeInfo.ACTION_SELECT
+            NodeActionKind.CLEAR_SELECTION -> AccessibilityNodeInfo.ACTION_CLEAR_SELECTION
+            NodeActionKind.COPY -> AccessibilityNodeInfo.ACTION_COPY
+            NodeActionKind.CUT -> AccessibilityNodeInfo.ACTION_CUT
+            NodeActionKind.PASTE -> AccessibilityNodeInfo.ACTION_PASTE
+            NodeActionKind.SET_TEXT -> {
+                val text = args?.getString("text")
+                    ?: throw MethodParamException(Protocol.ErrorCodes.BAD_REQUEST, "set_text requires args.text")
+                bundle.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                AccessibilityNodeInfo.ACTION_SET_TEXT
+            }
+            NodeActionKind.SET_SELECTION -> {
+                val start = args?.getInt("selection_start")
+                    ?: throw MethodParamException(Protocol.ErrorCodes.BAD_REQUEST, "set_selection requires selection_start")
+                val end = args?.getInt("selection_end")
+                    ?: throw MethodParamException(Protocol.ErrorCodes.BAD_REQUEST, "set_selection requires selection_end")
+                bundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, start)
+                bundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, end)
+                AccessibilityNodeInfo.ACTION_SET_SELECTION
+            }
+            NodeActionKind.NEXT_AT_MOVEMENT_GRANULARITY -> {
+                val gran = args?.getInt("movement_granularity")
+                    ?: throw MethodParamException(Protocol.ErrorCodes.BAD_REQUEST, "next_at_movement_granularity requires movement_granularity")
+                val extend = args?.getBoolean("extend_selection") ?: false
+                bundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_MOVEMENT_GRANULARITY_INT, gran)
+                bundle.putBoolean(AccessibilityNodeInfo.ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, extend)
+                AccessibilityNodeInfo.ACTION_NEXT_AT_MOVEMENT_GRANULARITY
+            }
+            NodeActionKind.PREVIOUS_AT_MOVEMENT_GRANULARITY -> {
+                val gran = args?.getInt("movement_granularity")
+                    ?: throw MethodParamException(Protocol.ErrorCodes.BAD_REQUEST, "previous_at_movement_granularity requires movement_granularity")
+                val extend = args?.getBoolean("extend_selection") ?: false
+                bundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_MOVEMENT_GRANULARITY_INT, gran)
+                bundle.putBoolean(AccessibilityNodeInfo.ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, extend)
+                AccessibilityNodeInfo.ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY
+            }
+            NodeActionKind.NEXT_HTML_ELEMENT -> {
+                val elem = args?.getString("html_element") ?: "ANY"
+                bundle.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_HTML_ELEMENT_STRING, elem)
+                AccessibilityNodeInfo.ACTION_NEXT_HTML_ELEMENT
+            }
+            NodeActionKind.PREVIOUS_HTML_ELEMENT -> {
+                val elem = args?.getString("html_element") ?: "ANY"
+                bundle.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_HTML_ELEMENT_STRING, elem)
+                AccessibilityNodeInfo.ACTION_PREVIOUS_HTML_ELEMENT
+            }
+            NodeActionKind.SCROLL_UP, NodeActionKind.SCROLL_DOWN, NodeActionKind.SCROLL_LEFT, NodeActionKind.SCROLL_RIGHT,
+            NodeActionKind.PAGE_UP, NodeActionKind.PAGE_DOWN, NodeActionKind.PAGE_LEFT, NodeActionKind.PAGE_RIGHT,
+            NodeActionKind.SCROLL_TO_POSITION, NodeActionKind.SET_PROGRESS, NodeActionKind.SHOW_ON_SCREEN,
+            NodeActionKind.CONTEXT_CLICK, NodeActionKind.PRESS_AND_HOLD, NodeActionKind.IME_ENTER,
+            NodeActionKind.MOVE_WINDOW, NodeActionKind.SHOW_TOOLTIP, NodeActionKind.HIDE_TOOLTIP -> {
+                return resolveModernNodeAction(params.action, bundle, args)
+            }
+        }
+        return actionId to if (bundle.isEmpty) null else bundle
+    }
+
+    private fun resolveModernNodeAction(kind: NodeActionKind, bundle: Bundle, args: JsonValue.Obj?): Pair<Int, Bundle?> {
+        // Populate modern args from the generic args object if present.
+        args?.let {
+            it.getInt("row")?.let { v -> bundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_ROW_INT, v) }
+            it.getInt("column")?.let { v -> bundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_COLUMN_INT, v) }
+            (it["progress"] as? JsonValue.Num)?.value?.toFloat()?.let { v -> bundle.putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, v) }
+            it.getInt("press_and_hold_duration_ms")?.let { v -> bundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_PRESS_AND_HOLD_DURATION_MILLIS_INT, v) }
+            it.getInt("move_window_x")?.let { v -> bundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_MOVE_WINDOW_X, v) }
+            it.getInt("move_window_y")?.let { v -> bundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_MOVE_WINDOW_Y, v) }
+            it.getString("direction")?.let { v ->
+                val dir = when (v) {
+                    "up" -> android.view.View.FOCUS_UP
+                    "down" -> android.view.View.FOCUS_DOWN
+                    "left" -> android.view.View.FOCUS_LEFT
+                    "right" -> android.view.View.FOCUS_RIGHT
+                    "forward" -> android.view.View.FOCUS_FORWARD
+                    "backward" -> android.view.View.FOCUS_BACKWARD
+                    else -> null
+                }
+                dir?.let { bundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_DIRECTION_INT, it) }
+            }
+            (it["scroll_amount"] as? JsonValue.Num)?.value?.toFloat()?.let { v -> bundle.putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_SCROLL_AMOUNT_FLOAT, v) }
+        }
+        val actionId = when (kind) {
+            NodeActionKind.SHOW_ON_SCREEN -> {
+                if (Build.VERSION.SDK_INT < 23) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "show_on_screen requires API 23+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id
+            }
+            NodeActionKind.SCROLL_TO_POSITION -> {
+                val argsBundle = bundle // caller already populated row/column via outer?
+                // no args in this overload; caller should provide via outer bundle population
+                if (Build.VERSION.SDK_INT < 23) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "scroll_to_position requires API 23+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_TO_POSITION.id
+            }
+            NodeActionKind.SCROLL_UP -> {
+                if (Build.VERSION.SDK_INT < 28) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "scroll_up requires API 28+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
+            }
+            NodeActionKind.SCROLL_DOWN -> {
+                if (Build.VERSION.SDK_INT < 28) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "scroll_down requires API 28+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id
+            }
+            NodeActionKind.SCROLL_LEFT -> {
+                if (Build.VERSION.SDK_INT < 28) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "scroll_left requires API 28+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id
+            }
+            NodeActionKind.SCROLL_RIGHT -> {
+                if (Build.VERSION.SDK_INT < 28) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "scroll_right requires API 28+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id
+            }
+            NodeActionKind.PAGE_UP -> {
+                if (Build.VERSION.SDK_INT < 29) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "page_up requires API 29+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_UP.id
+            }
+            NodeActionKind.PAGE_DOWN -> {
+                if (Build.VERSION.SDK_INT < 29) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "page_down requires API 29+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_DOWN.id
+            }
+            NodeActionKind.PAGE_LEFT -> {
+                if (Build.VERSION.SDK_INT < 29) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "page_left requires API 29+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_LEFT.id
+            }
+            NodeActionKind.PAGE_RIGHT -> {
+                if (Build.VERSION.SDK_INT < 29) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "page_right requires API 29+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_PAGE_RIGHT.id
+            }
+            NodeActionKind.CONTEXT_CLICK -> {
+                if (Build.VERSION.SDK_INT < 23) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "context_click requires API 23+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_CONTEXT_CLICK.id
+            }
+            NodeActionKind.SET_PROGRESS -> {
+                if (Build.VERSION.SDK_INT < 24) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "set_progress requires API 24+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id
+            }
+            NodeActionKind.PRESS_AND_HOLD -> {
+                if (Build.VERSION.SDK_INT < 30) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "press_and_hold requires API 30+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_PRESS_AND_HOLD.id
+            }
+            NodeActionKind.IME_ENTER -> {
+                if (Build.VERSION.SDK_INT < 30) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "ime_enter requires API 30+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+            }
+            NodeActionKind.MOVE_WINDOW -> {
+                if (Build.VERSION.SDK_INT < 26) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "move_window requires API 26+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_MOVE_WINDOW.id
+            }
+            NodeActionKind.SHOW_TOOLTIP -> {
+                if (Build.VERSION.SDK_INT < 28) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "show_tooltip requires API 28+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_TOOLTIP.id
+            }
+            NodeActionKind.HIDE_TOOLTIP -> {
+                if (Build.VERSION.SDK_INT < 28) throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_API, "hide_tooltip requires API 28+")
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_HIDE_TOOLTIP.id
+            }
+            else -> throw MethodApplicationException(Protocol.ErrorCodes.UNSUPPORTED_ACTION, "moder node action ${kind.wire} not yet mapped")
+        }
+        return actionId to if (bundle.isEmpty) null else bundle
+    }
+
+    private fun JsonValue.Obj.getString(key: String): String? = (this[key] as? JsonValue.Str)?.value
+    private fun JsonValue.Obj.getInt(key: String): Int? = (this[key] as? JsonValue.Num)?.value?.toInt()
+    private fun JsonValue.Obj.getBoolean(key: String): Boolean? = (this[key] as? JsonValue.Bool)?.value
 
     private fun editableTarget(): AccessibilityNodeInfo? {
         val root = runCatching { rootInActiveWindow }.getOrNull() ?: return null

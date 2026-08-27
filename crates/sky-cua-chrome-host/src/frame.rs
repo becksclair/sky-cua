@@ -105,8 +105,9 @@ fn write_deadline_exceeded() -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn frame_round_trip_uses_native_length_prefix() {

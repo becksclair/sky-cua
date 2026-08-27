@@ -84,8 +84,9 @@ fn normalized_key_eq(key: &str, candidate: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_key_sequence;
     use serde_json::json;
+
+    use super::parse_key_sequence;
 
     #[test]
     fn parses_key_chord_string() {

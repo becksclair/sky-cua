@@ -332,8 +332,9 @@ fn path_to_string(path: PathBuf) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sky_cua_platform::model::{CoordinateSpace, RectF};
+
+    use super::*;
 
     fn terminal_window(window_id: &str, pid: u32) -> LinuxWindowInfo {
         LinuxWindowInfo {

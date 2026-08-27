@@ -1,10 +1,10 @@
-use base64::Engine as _;
-use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine as _;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use sky_cua_platform::appshot_artifacts_dir;
 use sky_cua_platform::model::{
     APPSHOT_ARTIFACT_DEFAULT_LEASE_MS, AppShotActionSnapshot, AppShotBrowserCaptureOutcome,
@@ -1761,8 +1761,9 @@ async fn run_cdp_action_until(
 
 #[cfg(test)]
 mod appshot_capture_tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     fn prepared_capture(bytes: &[u8]) -> super::super::model_image::PreparedBrowserCapture {
         super::super::model_image::PreparedBrowserCapture {

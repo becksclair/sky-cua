@@ -3,13 +3,14 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::phone::direct::DirectRuntimeError;
 use sky_cua_platform::config::ResolvedPhoneSelection;
 use sky_cua_platform::model::{
     DiagnosticEntry, PHONE_SMS_QUERY_SCHEMA, PhoneBackendKind, PhoneCompanionCapabilities,
     PhoneConnectRequest, PhoneRequest, PhoneSessionSelector, PhoneSmsQueryError,
     PhoneSmsQueryResponse,
 };
+
+use crate::phone::direct::DirectRuntimeError;
 /// Whether a `phone_connect` request asks for a managed scrcpy mirror: an
 /// explicit `start_scrcpy` flag, or a request that selects the scrcpy backend.
 pub(crate) fn request_wants_scrcpy(request: &PhoneConnectRequest) -> bool {
@@ -242,6 +243,11 @@ pub(crate) fn phone_request_activity_selector(
         PhoneRequest::Editor(call) => Some(&call.session),
         PhoneRequest::Camera(call) => Some(&call.session),
         PhoneRequest::Storage(call) => Some(&call.session),
+        PhoneRequest::LongPress(req) => Some(&req.session),
+        PhoneRequest::DoubleTap(req) => Some(&req.session),
+        PhoneRequest::NodeAction(req) => Some(&req.session),
+        PhoneRequest::GlobalAction(req) => Some(&req.session),
+        PhoneRequest::KeyEvent(req) => Some(&req.session),
     }
 }
 

@@ -287,7 +287,7 @@ pub(super) fn phone_setup_constraints() -> Value {
 
 pub(super) fn phone_pointer_properties() -> Value {
     with_phone_action_selector(json!({
-        "operation": {"type": "string", "enum": ["tap", "swipe"]},
+        "operation": {"type": "string", "enum": ["tap", "swipe", "long_press", "double_tap"]},
         "phone_snapshot_id": {
             "type": "string",
             "minLength": 1,
@@ -301,6 +301,7 @@ pub(super) fn phone_pointer_properties() -> Value {
         "end_x": {"type": "number", "minimum": 0, "description": "Swipe end x coordinate in snapshot pixels, or raw device pixels when use_device_coordinates=true."},
         "end_y": {"type": "number", "minimum": 0, "description": "Swipe end y coordinate in snapshot pixels, or raw device pixels when use_device_coordinates=true."},
         "duration_ms": optional_null_schema(json!({"type": "integer", "minimum": 0})),
+        "interval_ms": optional_null_schema(json!({"type": "integer", "minimum": 0, "description": "Interval between taps for double_tap."})),
         "use_device_coordinates": optional_bool_schema(json!({"type": "boolean", "description": "When true, x/y or start/end coordinates are raw device pixels and phone_snapshot_id is not required."}))
     }))
 }
@@ -342,6 +343,48 @@ pub(super) fn phone_pointer_constraints() -> Value {
                 "end_x",
                 "end_y",
                 "duration_ms",
+                "use_device_coordinates",
+            ],
+            json!({
+                "anyOf": [
+                    {"required": ["phone_snapshot_id"]},
+                    {"properties": {"use_device_coordinates": {"const": true}}, "required": ["use_device_coordinates"]}
+                ]
+            }),
+        ),
+        exact_branch_schema_with_constraints(
+            &properties,
+            &[("operation", "long_press")],
+            &["session_id", "x", "y"],
+            &[
+                "operation",
+                "session_id",
+                "appshot_id",
+                "phone_snapshot_id",
+                "x",
+                "y",
+                "duration_ms",
+                "use_device_coordinates",
+            ],
+            json!({
+                "anyOf": [
+                    {"required": ["phone_snapshot_id"]},
+                    {"properties": {"use_device_coordinates": {"const": true}}, "required": ["use_device_coordinates"]}
+                ]
+            }),
+        ),
+        exact_branch_schema_with_constraints(
+            &properties,
+            &[("operation", "double_tap")],
+            &["session_id", "x", "y"],
+            &[
+                "operation",
+                "session_id",
+                "appshot_id",
+                "phone_snapshot_id",
+                "x",
+                "y",
+                "interval_ms",
                 "use_device_coordinates",
             ],
             json!({
@@ -687,4 +730,45 @@ pub(super) fn phone_feature_constraints(read_operations: &[&str]) -> Value {
             }
         ]
     })
+}
+
+pub(super) fn phone_node_action_properties() -> Value {
+    with_phone_action_selector(json!({
+        "action": {"type": "string", "enum": ["click","long_click","context_click","dismiss","expand","collapse","scroll_forward","scroll_backward","scroll_up","scroll_down","scroll_left","scroll_right","page_up","page_down","page_left","page_right","scroll_to_position","focus","clear_focus","accessibility_focus","clear_accessibility_focus","select","clear_selection","show_on_screen","set_progress","set_text","set_selection","copy","cut","paste","next_at_movement_granularity","previous_at_movement_granularity","next_html_element","previous_html_element","press_and_hold","ime_enter","move_window","show_tooltip","hide_tooltip"]},
+        "appshot_id": optional_absent_string_schema(json!({"type":"string", "minLength":1})),
+        "node_id": optional_null_schema(json!({"type":"integer"})),
+        "view_id": optional_absent_string_schema(json!({"type":"string", "minLength":1, "description":"viewIdResourceName like com.skycua.phonecompanion:id/playground_click_button"})),
+        "args": optional_null_schema(json!({"type":"object", "description":"Action-specific bundle args like {\"text\":\"hi\"} for set_text or {\"progress\":0.5} for set_progress"}))
+    }))
+}
+
+pub(super) fn phone_node_action_constraints() -> Value {
+    phone_selector_alternatives(json!({
+        "allOf": [
+            {"required": ["session_id", "action"]},
+            {"anyOf": [{"required": ["node_id"]}, {"required": ["view_id"]}]}
+        ]
+    }))
+}
+
+pub(super) fn phone_global_action_properties() -> Value {
+    with_phone_action_selector(json!({
+        "action": {"type": "string", "enum": ["back","home","recents","notifications","quick_settings","power_dialog","toggle_split_screen","lock_screen","take_screenshot","keycode_headset_hook","accessibility_button","accessibility_button_chooser","accessibility_shortcut","accessibility_all_apps","dismiss_notification_shade","dpad_up","dpad_down","dpad_left","dpad_right","dpad_center","menu"]}
+    }))
+}
+
+pub(super) fn phone_global_action_constraints() -> Value {
+    phone_selector_alternatives(json!({"required": ["session_id", "action"]}))
+}
+
+pub(super) fn phone_key_event_properties() -> Value {
+    with_phone_action_selector(json!({
+        "key_code": {"type":"string", "minLength":1, "description":"Android keycode name (KEYCODE_VOLUME_UP) or numeric string (24)"},
+        "meta_state": optional_null_schema(json!({"type":"integer", "minimum":0})),
+        "repeat_count": optional_null_schema(json!({"type":"integer", "minimum":0}))
+    }))
+}
+
+pub(super) fn phone_key_event_constraints() -> Value {
+    phone_selector_alternatives(json!({"required": ["session_id", "key_code"]}))
 }

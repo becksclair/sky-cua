@@ -277,13 +277,15 @@ fn reply_frame(id: u64, reply: CodexBackendReply) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{collections::VecDeque, os::unix::fs::PermissionsExt, sync::Arc};
+
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::UnixStream,
         sync::{Mutex, Notify},
     };
+
+    use super::*;
 
     #[derive(Default)]
     struct FakeState {

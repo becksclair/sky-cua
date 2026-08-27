@@ -6,8 +6,9 @@
 //! the box-filtered mip chain the GPU minifies trilinear. Pure CPU and
 //! platform-agnostic; no Wayland/wgpu types.
 
-use crate::cursor_asset;
 use anyhow::Result;
+
+use crate::cursor_asset;
 
 /// One downsampled level of the cursor texture mip chain.
 #[derive(Debug)]

@@ -5,13 +5,12 @@
 use serde_json::{Map, Value, json};
 use sky_cua_platform::config::AgentSurfacePolicy;
 
-use crate::app_state::{
-    APP_STATE_DEFAULT_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_QUERY_CHARS,
-};
-
 use super::browser::*;
 use super::common::*;
 use super::phone::*;
+use crate::app_state::{
+    APP_STATE_DEFAULT_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_LIMIT, APP_STATE_MAX_ELEMENT_QUERY_CHARS,
+};
 
 pub(super) fn observe_properties(can_receive_images: bool, surfaces: AgentSurfacePolicy) -> Value {
     let mut surface_values = Vec::new();

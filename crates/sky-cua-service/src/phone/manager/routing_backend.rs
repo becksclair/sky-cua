@@ -487,11 +487,12 @@ pub(crate) fn companion_required_diagnostic() -> DiagnosticEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sky_cua_platform::model::{
         PhoneCompanionCapabilities, PhoneConnectionKind, PhoneScrcpyCapabilities,
         PhoneTargetDeviceKind,
     };
+
+    use super::*;
 
     pub(crate) fn profile_with(companion: PhoneCompanionCapabilities) -> PhoneCapabilityProfile {
         PhoneCapabilityProfile {

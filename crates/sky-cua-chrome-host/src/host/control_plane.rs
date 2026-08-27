@@ -1,5 +1,6 @@
-use super::*;
 use std::cmp::Ordering;
+
+use super::*;
 
 pub(super) const SKY_CUA_HOST_HELLO_METHOD: &str = "skyCuaHost/hello";
 pub(super) const SKY_CUA_HOST_RELEASE_METHOD: &str = "skyCuaHost/release";

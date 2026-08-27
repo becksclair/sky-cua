@@ -1,11 +1,12 @@
-use super::agent_cursor::{AgentCursorResponseKind, agent_cursor_status_response};
-use super::capture_reuse::reuse_unchanged_capture;
-use super::session_presence::session_presence_disabled_response;
-use super::*;
 use sky_cua_overlay_host::OverlayArrivalOutcome;
 use sky_cua_platform::model::{
     AppShotCapture, AppShotRejectionReason, AppShotRequired, AppShotTrigger,
 };
+
+use super::agent_cursor::{AgentCursorResponseKind, agent_cursor_status_response};
+use super::capture_reuse::reuse_unchanged_capture;
+use super::session_presence::session_presence_disabled_response;
+use super::*;
 
 #[cfg(not(test))]
 const ACTION_VISUAL_ARRIVAL_TIMEOUT: Duration = Duration::from_secs(8);

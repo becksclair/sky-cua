@@ -1,3 +1,8 @@
+use sky_cua_platform::model::{
+    BrowserCompletionCertainty, BrowserControlEventKind, BrowserControlOperationSummary,
+    BrowserControlSchedulerSnapshot, BrowserOperationClass, BrowserTabKey,
+};
+
 use super::{OperationRecord, OperationState, State};
 use crate::browser::control_plane::{
     control::AdmissionError,
@@ -8,10 +13,6 @@ use crate::browser::control_plane::{
         OperationScope,
     },
     persistence::RecoveryJournal,
-};
-use sky_cua_platform::model::{
-    BrowserCompletionCertainty, BrowserControlEventKind, BrowserControlOperationSummary,
-    BrowserControlSchedulerSnapshot, BrowserOperationClass, BrowserTabKey,
 };
 
 impl State {

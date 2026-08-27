@@ -19,9 +19,8 @@ use sky_cua_platform::model::{
     PhoneStatusReport,
 };
 
-use crate::output_shapes::summary_text_field;
-
 use super::super::semantic_text::{append_appshot_semantics, append_semantic_value};
+use crate::output_shapes::summary_text_field;
 
 /// Diagnostic codes that mark a phone tool result as an MCP error. These are
 /// honest "could not do it" states, not informational context, so they flip

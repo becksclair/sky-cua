@@ -15,6 +15,8 @@ use anyhow::{Context, Result, anyhow};
 use sky_cua_platform::config::{
     BrowserControlMode as PlatformBrowserControlMode, resolved_browser_control_config,
 };
+#[cfg(unix)]
+use sky_cua_platform::config::{Lifecycle, ViewerMode, resolve_isolated_desktop_selection};
 use sky_cua_platform::{
     CLIENT_CLEARED_SESSION_ENV_KEYS_ENV,
     model::{
@@ -31,8 +33,6 @@ use sky_cua_platform::{SERVICE_TCP_ADDR_ENV, service_tcp_addr};
 #[cfg(unix)]
 use crate::isolated_desktop::IsolatedDesktopHandle;
 use crate::launch_environment::LaunchEnvironment;
-#[cfg(unix)]
-use sky_cua_platform::config::{Lifecycle, ViewerMode, resolve_isolated_desktop_selection};
 
 /// Cap on a single IPC line (request or response). Must match the daemon's
 /// `MAX_IPC_LINE_BYTES` in `sky-cua-service`: screenshots travel base64-inline

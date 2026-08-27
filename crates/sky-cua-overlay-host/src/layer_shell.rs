@@ -57,13 +57,11 @@ use capture_barrier::CaptureBarrierState;
 use cursor_state::{
     apply_system_pointer_position, cursor_point, state_needs_system_pointer_update,
 };
-use renderer_selection::LayerShellRenderer;
-
-use wayland::create_cursor_layer;
-pub(crate) use wayland::{wayland_display_handle, wayland_window_handle};
-
 pub(crate) use geometry::output_render_scale;
 use geometry::{FALLBACK_PX_PER_MM, OutputGeometry, box_reaches_output, translate_to_output_local};
+use renderer_selection::LayerShellRenderer;
+use wayland::create_cursor_layer;
+pub(crate) use wayland::{wayland_display_handle, wayland_window_handle};
 
 const INITIAL_ROUNDTRIPS: usize = 4;
 

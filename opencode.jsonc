@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "references": {
+    "devspace": {
+      "path": "../devspace",
+      "description": "Devspace remote action gateway for agents, uses sky-cua to provide phone-use"
+    }
+
+  }
+}

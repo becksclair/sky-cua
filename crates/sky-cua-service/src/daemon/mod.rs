@@ -16,6 +16,7 @@ use sky_cua_platform::model::{
     ServiceRequest, ServiceResponse, SessionPresenceAction, SessionPresenceIntent, WindowInfo,
     WindowTarget, browser_control_mode_capability, browser_eval_enabled,
 };
+use tracing::debug;
 
 use crate::action_router::route_action;
 use crate::approval_store::ApprovalStore;
@@ -26,7 +27,6 @@ use crate::overlay::{AgentCursorStatus, OverlayController};
 use crate::phone::host_scrcpy_default_max_size;
 use crate::session_store::SessionStore;
 use crate::snapshot_manager::SnapshotManager;
-use tracing::debug;
 
 /// Deadline for a single read-only desktop backend call made while holding
 /// `desktop_lane` (see [`ServiceDaemon::with_desktop_deadline`]). Bounds the

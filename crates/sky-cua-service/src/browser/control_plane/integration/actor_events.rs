@@ -1,6 +1,7 @@
+use sky_cua_platform::model::BrowserControlEventKind;
+
 use super::*;
 use crate::browser::control_plane::SETTLEMENT_DEADLINE_MS;
-use sky_cua_platform::model::BrowserControlEventKind;
 
 const HANDLED_SETTLEMENT_LIMIT: usize = 2_048;
 

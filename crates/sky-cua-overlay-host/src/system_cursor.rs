@@ -1,5 +1,7 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code, unused_imports))]
 
+#[cfg(target_os = "linux")]
+use std::os::unix::net::UnixStream;
 use std::{
     env,
     ffi::OsStr,
@@ -14,9 +16,6 @@ use std::{
 use anyhow::{Context, Result, bail};
 #[cfg(target_os = "linux")]
 use serde::{Deserialize, Serialize};
-#[cfg(target_os = "linux")]
-use std::os::unix::net::UnixStream;
-
 use sky_cua_platform::model::AgentCursorSystemCursorBackendKind;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -893,10 +892,11 @@ fn command_detail(stdout: &[u8], stderr: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use sky_cua_platform::model::AgentCursorSystemCursorBackendKind;
+
     use super::SystemCursorAdapter;
     #[cfg(target_os = "linux")]
     use super::{environ_has_xcursor_theme, parse_hyprland_cursor_invisible};
-    use sky_cua_platform::model::AgentCursorSystemCursorBackendKind;
 
     #[test]
     fn unsupported_adapter_reports_no_effective_hide() {

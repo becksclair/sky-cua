@@ -3,10 +3,11 @@ mod repair;
 pub mod snapshot;
 pub mod tree;
 
+use std::time::Duration;
+
 use atspi_connection::AccessibilityConnection;
 pub(crate) use repair::{AccessibilityConnectFailure, RepairCoordinator, connect_with_repair};
 use sky_cua_platform::diagnostics::BackendError;
-use std::time::Duration;
 
 #[cfg(not(test))]
 const ACCESSIBILITY_CONNECTION_TIMEOUT: Duration = Duration::from_secs(2);

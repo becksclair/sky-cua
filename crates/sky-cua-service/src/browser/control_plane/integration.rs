@@ -21,6 +21,7 @@ use sky_cua_platform::model::{
 };
 use tokio::sync::{Mutex, mpsc};
 
+use super::introspection;
 use super::{
     AdmissionError, BridgeActor, BridgeActorConfig, BridgeActorError, BridgeActorEvent,
     BridgeActorRequest, BridgeActorState, BridgeOwnerMode, BrowserInstanceId, CancelResult,
@@ -37,8 +38,6 @@ use crate::{
         CodexNormalizedRequest, CodexOperationClass, CodexOperationScope,
     },
 };
-
-use super::introspection;
 
 mod actor_events;
 mod codex;

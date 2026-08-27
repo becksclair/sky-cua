@@ -1,7 +1,6 @@
+use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use zbus::Proxy;
 use zbus::zvariant::{OwnedFd, OwnedObjectPath};
-
-use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 
 const LOGIND_DEST: &str = "org.freedesktop.login1";
 const LOGIND_MANAGER_PATH: &str = "/org/freedesktop/login1";

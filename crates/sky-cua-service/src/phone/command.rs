@@ -25,10 +25,10 @@ use std::process::Stdio;
 #[cfg(test)]
 use std::sync::Mutex;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
 
 /// Environment variable that overrides the configured `adb` binary path.
 pub(crate) use sky_cua_platform::config::PHONE_ADB_ENV as SKY_CUA_ADB_ENV;
+use tokio::io::AsyncWriteExt;
 /// Environment variable that bounds real external phone backend commands.
 pub(crate) const SKY_CUA_COMMAND_TIMEOUT_MS_ENV: &str = "SKY_CUA_PHONE_COMMAND_TIMEOUT_MS";
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
@@ -384,8 +384,9 @@ impl CommandRunner for FakeCommandRunner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Mutex;
+
+    use super::*;
 
     static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 

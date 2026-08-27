@@ -1,6 +1,5 @@
-use zbus::Proxy;
-
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+use zbus::Proxy;
 
 pub const SCREENSAVER_DEST: &str = "org.freedesktop.ScreenSaver";
 const SCREENSAVER_PATH: &str = "/org/freedesktop/ScreenSaver";

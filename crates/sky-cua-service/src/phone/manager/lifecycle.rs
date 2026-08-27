@@ -1,6 +1,13 @@
 #![allow(clippy::empty_line_after_doc_comments)]
 //! Session lifecycle: connect (ADB + direct), disconnect, and refresh.
 
+use sky_cua_platform::model::{
+    DiagnosticEntry, PhoneBackendKind, PhoneCapabilityProfile, PhoneCapabilityRefreshState,
+    PhoneConnectRequest, PhoneConnectionIdentity, PhoneConnectionKind, PhoneDisconnectRequest,
+    PhoneDisconnectResponse, PhoneResponse, PhoneScrcpyCapabilities, PhoneSession,
+    PhoneSessionSelector, PhoneStatusReport, PhoneTargetDeviceKind,
+};
+
 use super::helpers::{
     companion_from_direct_health, is_uuid_format, new_session_id, no_session_diagnostic, now_ms,
     request_wants_scrcpy, selector_ids,
@@ -12,12 +19,6 @@ use crate::phone::device;
 use crate::phone::manager::routing;
 use crate::phone::protocol::identity::CompanionBootstrapOptions;
 use crate::phone::snapshot::{DEFAULT_SNAPSHOT_CAPACITY, PhoneSnapshotRegistry};
-use sky_cua_platform::model::{
-    DiagnosticEntry, PhoneBackendKind, PhoneCapabilityProfile, PhoneCapabilityRefreshState,
-    PhoneConnectRequest, PhoneConnectionIdentity, PhoneConnectionKind, PhoneDisconnectRequest,
-    PhoneDisconnectResponse, PhoneResponse, PhoneScrcpyCapabilities, PhoneSession,
-    PhoneSessionSelector, PhoneStatusReport, PhoneTargetDeviceKind,
-};
 
 impl PhoneManager {
     pub(crate) async fn connect(&mut self, request: PhoneConnectRequest) -> PhoneResponse {

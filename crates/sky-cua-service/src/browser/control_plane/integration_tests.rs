@@ -191,12 +191,13 @@ async fn ambiguous_claim_reservations_survive_until_definitive_settlement() {
 
 #[tokio::test]
 async fn mcp_disconnect_orders_cleanup_after_started_requests_and_rejects_late_requests() {
-    use super::integration::BrowserControlRuntime;
-    use super::{GroupAdmission, GroupId, LeaseState, Principal};
     use sky_cua_platform::model::{
         BrowserCallerKind, BrowserCallerProvenance, BrowserLogicalIdentity,
         BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequest, BrowserRequestContext,
     };
+
+    use super::integration::BrowserControlRuntime;
+    use super::{GroupAdmission, GroupId, LeaseState, Principal};
 
     let runtime = BrowserControlRuntime::new_with_limits(QueueLimits::default());
     let connection_id = "mcp-disconnect-race";
@@ -730,13 +731,14 @@ async fn extension_server_messages_round_trip_through_the_selected_codex_connect
 
 #[tokio::test]
 async fn codex_fetch_continuation_reenters_the_in_flight_tab_operation() {
+    use sky_cua_platform::model::{
+        BrowserCallerKind, BrowserCallerProvenance, BrowserProvenanceSource,
+    };
+
     use super::integration::{ActorEntry, BrowserControlRuntime, spawn_actor_events};
     use crate::codex_browser_compat::{
         CodexBackendReply, CodexBrowserBackend, CodexConnectionContext, CodexLogicalIdentity,
         CodexNormalizedRequest, CodexOperationClass, CodexOperationScope,
-    };
-    use sky_cua_platform::model::{
-        BrowserCallerKind, BrowserCallerProvenance, BrowserProvenanceSource,
     };
 
     fn request(
@@ -1562,14 +1564,15 @@ async fn late_mutation_response_preserves_identity_for_following_settlement_ack(
 
 #[tokio::test]
 async fn admission_rejections_leave_no_operation_correlation_leaks() {
+    use sky_cua_platform::model::{
+        BrowserCallerKind, BrowserCallerProvenance, BrowserLogicalIdentity,
+        BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequest, BrowserRequestContext,
+    };
+
     use super::integration::{ActorEntry, BrowserControlRuntime, correlation_counts};
     use crate::codex_browser_compat::{
         CodexBackendReply, CodexBrowserBackend, CodexConnectionContext, CodexLogicalIdentity,
         CodexNormalizedRequest, CodexOperationClass, CodexOperationScope,
-    };
-    use sky_cua_platform::model::{
-        BrowserCallerKind, BrowserCallerProvenance, BrowserLogicalIdentity,
-        BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequest, BrowserRequestContext,
     };
 
     let fixture = SocketFixture::new("admission-cleanup");
@@ -1965,12 +1968,13 @@ async fn closed_codex_connection_cleanup_reorphanes_a_late_group_renewal() {
 
 #[tokio::test]
 async fn normalized_session_principal_survives_reconnect_and_is_reference_counted() {
-    use super::LeaseState;
-    use super::integration::{BrowserControlRuntime, principal_from_mcp};
     use sky_cua_platform::model::{
         BrowserCallerKind, BrowserCallerProvenance, BrowserLogicalIdentity,
         BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequestContext,
     };
+
+    use super::LeaseState;
+    use super::integration::{BrowserControlRuntime, principal_from_mcp};
 
     let context = |connection_id: &str, session_id: &str| BrowserRequestContext {
         provenance: BrowserCallerProvenance {
@@ -2039,11 +2043,12 @@ async fn normalized_session_principal_survives_reconnect_and_is_reference_counte
 
 #[tokio::test]
 async fn caller_lanes_with_the_same_session_own_distinct_groups_on_one_browser() {
-    use super::integration::{BrowserControlRuntime, principal_from_mcp};
     use sky_cua_platform::model::{
         BrowserCallerKind, BrowserCallerProvenance, BrowserLogicalIdentity,
         BrowserOperationIdentity, BrowserProvenanceSource, BrowserRequestContext,
     };
+
+    use super::integration::{BrowserControlRuntime, principal_from_mcp};
 
     let runtime = BrowserControlRuntime::new();
     let browser = BrowserInstanceId::from("shared-extension-actor");
@@ -2096,9 +2101,10 @@ async fn caller_lanes_with_the_same_session_own_distinct_groups_on_one_browser()
 
 #[tokio::test]
 async fn actor_event_lag_records_diagnostic_and_continues_processing() {
-    use super::integration::{BrowserControlRuntime, spawn_actor_event_receiver_for_test};
     use sky_cua_platform::model::BrowserControlEventKind;
     use tokio::sync::broadcast;
+
+    use super::integration::{BrowserControlRuntime, spawn_actor_event_receiver_for_test};
 
     let runtime = BrowserControlRuntime::new();
     let actor = BridgeActor::spawn(BridgeActorConfig::new(
@@ -2230,10 +2236,11 @@ async fn integration_executor_ignores_selected_actor_until_it_is_ready() {
 
 #[tokio::test]
 async fn control_plane_snapshot_aggregates_actor_health_and_normalized_clients() {
-    use super::integration::{ActorEntry, BrowserControlRuntime};
     use sky_cua_platform::model::{
         BrowserCallerKind, BrowserCallerProvenance, BrowserMcpClientInfo, BrowserProvenanceSource,
     };
+
+    use super::integration::{ActorEntry, BrowserControlRuntime};
 
     let fixture = SocketFixture::new("introspection-health");
     let listener = UnixListener::bind(&fixture.0).unwrap();
@@ -2369,8 +2376,9 @@ async fn control_plane_snapshot_aggregates_actor_health_and_normalized_clients()
 
 #[test]
 fn installed_manifest_without_ready_actor_is_not_operational() {
-    use super::integration::persistent_target_availability;
     use sky_cua_platform::model::{BrowserIntegrationReport, DoctorCheck};
+
+    use super::integration::persistent_target_availability;
 
     let check = |name: &str, detail: &str| DoctorCheck {
         name: name.to_owned(),

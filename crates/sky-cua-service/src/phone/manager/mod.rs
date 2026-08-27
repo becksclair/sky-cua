@@ -259,7 +259,7 @@ impl PhoneManager {
                 .await;
             if let Some(appshot) = fresh.appshot.clone() {
                 self.appshots
-                    .insert(appshot.appshot_id.clone(), (*appshot.clone()).clone());
+                    .insert(appshot.appshot_id.clone(), (*appshot).clone());
                 return PhoneResponse::AppShotRequired(Box::new(
                     sky_cua_platform::model::AppShotRequired {
                         code: "AppShotRequired".into(),
@@ -389,6 +389,19 @@ impl PhoneManager {
                 .await
                 .map(PhoneResponse::Storage)
                 .unwrap_or_else(PhoneResponse::FeatureError),
+            PhoneRequest::LongPress(request) => {
+                PhoneResponse::Action(self.long_press(request).await)
+            }
+            PhoneRequest::DoubleTap(request) => {
+                PhoneResponse::Action(self.double_tap(request).await)
+            }
+            PhoneRequest::NodeAction(request) => {
+                PhoneResponse::Action(self.node_action(request).await)
+            }
+            PhoneRequest::GlobalAction(request) => {
+                PhoneResponse::Action(self.global_action(request).await)
+            }
+            PhoneRequest::KeyEvent(request) => PhoneResponse::Action(self.key_event(request).await),
         }
     }
 

@@ -715,9 +715,11 @@ fn create_private_dir(path: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use sky_cua_platform::model::ElementTextReadback;
     use std::io::Write;
+
+    use sky_cua_platform::model::ElementTextReadback;
+
+    use super::*;
 
     #[test]
     fn request_ids_are_safe_path_components() {

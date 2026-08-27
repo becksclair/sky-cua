@@ -7,6 +7,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use drag_path::drag_waypoints;
+use key_sequence::parse_key_sequence;
 use runtime::{LinuxActionRuntime, SemanticAtspiAction, SemanticSetValueResult};
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
@@ -29,7 +30,6 @@ use crate::atspi::normalize_action;
 use crate::portal::remote_desktop::MouseButton;
 use crate::windowing::common::command_exists;
 use crate::x11::windowing::X11WindowInfo;
-use key_sequence::parse_key_sequence;
 
 pub(crate) const SET_VALUE_PHYSICAL_FALLBACK_MESSAGE: &str =
     "Set the value through a heuristics-backed physical typing fallback.";
@@ -1962,6 +1962,21 @@ async fn kde_klipper_proxy(connection: &zbus::Connection) -> Result<Proxy<'_>, S
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use serde_json::json;
+    use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+    use sky_cua_platform::model::test_support::wayland_pipewire_environment;
+    use sky_cua_platform::model::{
+        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
+        CuaActionRequest, CuaCancellation, CuaMouseButton, CuaRequestContext, CuaScrollDirection,
+        DiagnosticEntry, DisplayInfo, ElementNode, EnvironmentInfo, FocusedApp, InputBackendKind,
+        PixelSize, RectF,
+    };
+    use sky_cua_platform::{SetValueFallbackMode, SetValueRouting};
+
     use super::{
         KdeClipboardPasteError, LinuxActionExecutor, SET_VALUE_PHYSICAL_FALLBACK_MESSAGE,
         action_name_matches, action_request_for_environment,
@@ -1975,19 +1990,6 @@ mod tests {
     use crate::portal::remote_desktop::MouseButton;
     use crate::windowing::LinuxWindowInfo;
     use crate::x11::windowing::X11WindowInfo;
-    use async_trait::async_trait;
-    use serde_json::json;
-    use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
-    use sky_cua_platform::model::test_support::wayland_pipewire_environment;
-    use sky_cua_platform::model::{
-        ActionName, ActionRequest, CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace,
-        CuaActionRequest, CuaCancellation, CuaMouseButton, CuaRequestContext, CuaScrollDirection,
-        DiagnosticEntry, DisplayInfo, ElementNode, EnvironmentInfo, FocusedApp, InputBackendKind,
-        PixelSize, RectF,
-    };
-    use sky_cua_platform::{SetValueFallbackMode, SetValueRouting};
-    use std::sync::Mutex;
-    use std::time::Duration;
 
     #[derive(Default)]
     struct FakeRuntime {

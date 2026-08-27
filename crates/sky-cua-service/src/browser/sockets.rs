@@ -7,11 +7,10 @@ use std::sync::{LazyLock, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use sky_cua_platform::BROWSER_ENV_HEALTH_KEYS;
+pub(super) use sky_cua_platform::config::BROWSER_USE_SOCKET_DIR_ENV as SKY_CUA_SOCKET_DIR_ENV;
 use sky_cua_platform::model::DiagnosticEntry;
 
 use super::diagnostics::browser_bridge_disconnected_diagnostic;
-
-pub(super) use sky_cua_platform::config::BROWSER_USE_SOCKET_DIR_ENV as SKY_CUA_SOCKET_DIR_ENV;
 pub(super) const CODEX_SOCKET_DIR_ENV: &str = "CODEX_BROWSER_USE_SOCKET_DIR";
 pub(super) use sky_cua_platform::config::BROWSER_SELECTION_ENV as SKY_CUA_BROWSER_ENV;
 const DEFAULT_SOCKET_DIR: &str = "/tmp/codex-browser-use";

@@ -15,9 +15,6 @@ use sky_cua_platform::model::{
     DiagnosticEntry, PixelSize, ServiceRequest, ServiceResponse,
 };
 
-use crate::heuristics::HeuristicsRegistry;
-use crate::mcp_server::ModelSessionInfo;
-
 use super::browser::{
     BROWSER_EVAL_ENV, BrowserTabTextFilter, browser_list_tabs_summary, browser_open_summary,
     browser_snapshot_summary, browser_status_summary, parse_browser_capture_timeout_ms,
@@ -26,6 +23,8 @@ use super::browser::{
     parse_required_string,
 };
 use super::{McpService, build_tool_definitions, handle_tool_call};
+use crate::heuristics::HeuristicsRegistry;
+use crate::mcp_server::ModelSessionInfo;
 
 /// Serializes the tests that toggle `SKY_CUA_BROWSER_EVAL`.
 static EVAL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

@@ -12,8 +12,9 @@ pub(crate) fn write_stalled_overlay_host(path: &std::path::Path) {
 
 #[cfg(unix)]
 fn write_overlay_host(path: &std::path::Path, wait_delay_seconds: f64, reply_to_wait: bool) {
-    use sky_cua_overlay_host::OVERLAY_HOST_PROTOCOL_VERSION;
     use std::os::unix::fs::PermissionsExt;
+
+    use sky_cua_overlay_host::OVERLAY_HOST_PROTOCOL_VERSION;
 
     let script = format!(
         r#"#!/usr/bin/env python3

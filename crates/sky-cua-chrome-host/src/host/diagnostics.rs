@@ -2,8 +2,9 @@
 //! on a best-effort, non-panicking basis. Field values are serializable JSON;
 //! event codes are stable strings so operators and the daemon can key on them.
 
-use serde_json::{Map, Value, json};
 use std::io::{self, Write};
+
+use serde_json::{Map, Value, json};
 
 pub(super) fn emit(event_type: &str, fields: Map<String, Value>) {
     let mut object = Map::new();

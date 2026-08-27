@@ -7,12 +7,11 @@ use sky_cua_platform::BrowserSessionIdentity;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 
+use super::helpers::env_lock;
 use crate::browser::protocol::{BRIDGE_INFO_REQUEST_ID, MAX_FRAME_SIZE, read_frame, write_frame};
 use crate::browser::transport::{
     bridge_request_timeout, browser_session_params, send_bridge_request,
 };
-
-use super::helpers::env_lock;
 
 fn test_identity() -> BrowserSessionIdentity {
     BrowserSessionIdentity {

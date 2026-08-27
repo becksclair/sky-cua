@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item type="id" name="playground_click_button" />
+    <item type="id" name="playground_long_click_button" />
+    <item type="id" name="playground_context_click_button" />
+    <item type="id" name="playground_summary" />
+    <item type="id" name="playground_event_log" />
+    <item type="id" name="playground_reset" />
+    <item type="id" name="playground_scroll_container" />
+</resources>

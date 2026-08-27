@@ -5,6 +5,14 @@
 //! A websocket adapter can consume these primitives without ever reusing the
 //! legacy ADB serial as a device identity.
 
+use std::{
+    collections::{BTreeSet, HashMap},
+    fs, io,
+    net::{IpAddr, SocketAddr},
+    sync::{Arc, Mutex, OnceLock},
+    time::{Duration, Instant, SystemTime},
+};
+
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use futures_util::{SinkExt, StreamExt};
 use hmac::{Hmac, Mac};
@@ -15,13 +23,6 @@ use sky_cua_platform::model::{
     PHONE_CONTENT_DEFAULT_CHUNK_BYTES, PHONE_CONTROL_MAX_JSON_BYTES, PHONE_CONTROL_PROTOCOL_V2,
     PHONE_ENROLLMENT_PENDING_TTL_MS, PhoneDirectControlFrame, PhoneDirectRole, PhoneEnrollmentAck,
     PhoneEnrollmentCommitted,
-};
-use std::{
-    collections::{BTreeSet, HashMap},
-    fs, io,
-    net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex, OnceLock},
-    time::{Duration, Instant, SystemTime},
 };
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -2189,8 +2190,9 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::net::{Ipv4Addr, SocketAddr};
+
+    use super::*;
 
     #[derive(Clone, Default)]
     struct FailingStore;

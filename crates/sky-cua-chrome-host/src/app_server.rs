@@ -1,9 +1,5 @@
 mod proxy;
 
-use self::proxy::ProxyServer;
-use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use std::env;
 use std::fmt;
 use std::fs;
@@ -14,7 +10,13 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use url::Url;
+
+use self::proxy::ProxyServer;
 
 const RESOURCES_FILE_NAME: &str = "chrome-native-hosts-v2.json";
 const REQUIRED_SCHEMA_VERSION: u64 = 2;
@@ -507,10 +509,11 @@ fn status_value(process: &AppServerProcess, response_url_scheme: ResponseUrlSche
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
 
     fn fixture_paths(root: &Path) -> AppServerPaths {
         let files = [
