@@ -7,4 +7,13 @@
     <item type="id" name="playground_event_log" />
     <item type="id" name="playground_reset" />
     <item type="id" name="playground_scroll_container" />
+    <item type="id" name="playground_scroll_view" />
+    <item type="id" name="playground_expand_view" />
+    <item type="id" name="playground_seekbar" />
+    <item type="id" name="playground_edit_text" />
+    <item type="id" name="playground_dismiss_view" />
+    <item type="id" name="playground_select_view" />
+    <item type="id" name="playground_global_status" />
+    <item type="id" name="playground_scroll_content" />
+    <item type="id" name="playground_expand_toggle" />
 </resources>
