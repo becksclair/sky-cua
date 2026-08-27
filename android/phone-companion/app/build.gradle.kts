@@ -2,9 +2,155 @@ import java.io.File
 import java.security.MessageDigest
 import java.security.cert.CertificateFactory
 import java.util.zip.ZipFile
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.TaskAction
 
 plugins {
     alias(libs.plugins.android.application)
+}
+
+/**
+ * Configuration-cache compatible task to emit companion build metadata.
+ * All inputs are declared as task properties so the configuration cache can serialize the task graph.
+ */
+abstract class EmitBuildMetadataTask : DefaultTask() {
+    @get:Input
+    abstract val packageName: Property<String>
+
+    @get:Input
+    abstract val versionCode: Property<Int>
+
+    @get:Input
+    abstract val versionName: Property<String>
+
+    @get:InputFile
+    @get:Optional
+    abstract val apkFile: RegularFileProperty
+
+    @get:Input
+    abstract val repoRootPath: Property<String>
+
+    @get:Input
+    @get:Optional
+    abstract val sdkDirPath: Property<String>
+
+    @get:OutputFile
+    abstract val metadataOut: RegularFileProperty
+
+    @TaskAction
+    fun emit() {
+        val apk = apkFile.orNull?.asFile
+        if (apk == null || !apk.exists()) {
+            logger.warn("emitBuildMetadata: APK not found at ${apk?.absolutePath}; skipping.")
+            return
+        }
+
+        fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
+
+        fun sha256OfFile(file: File): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            return hex(digest.digest())
+        }
+
+        fun signingCertSha256FromV1(file: File): String? {
+            ZipFile(file).use { zip ->
+                val sigEntry =
+                    zip.entries().toList().firstOrNull { entry ->
+                        val name = entry.name.uppercase()
+                        name.startsWith("META-INF/") &&
+                            (name.endsWith(".RSA") || name.endsWith(".DSA") || name.endsWith(".EC"))
+                    } ?: return null
+                val pkcs7Bytes = zip.getInputStream(sigEntry).use { it.readBytes() }
+                val factory = CertificateFactory.getInstance("X.509")
+                val certs = factory.generateCertificates(pkcs7Bytes.inputStream())
+                val cert = certs.firstOrNull() ?: return null
+                return hex(MessageDigest.getInstance("SHA-256").digest(cert.encoded))
+            }
+        }
+
+        fun resolveApksigner(): File? {
+            val sdkDirString = sdkDirPath.orNull ?: return null
+            val sdkDir = File(sdkDirString)
+            if (!sdkDir.isDirectory) return null
+            val buildTools = File(sdkDir, "build-tools")
+            if (!buildTools.isDirectory) return null
+            return buildTools.listFiles { f -> f.isDirectory }
+                ?.sortedByDescending { it.name }
+                ?.firstNotNullOfOrNull { dir -> File(dir, "apksigner").takeIf { it.canExecute() } }
+        }
+
+        fun signingCertSha256ViaApksigner(file: File): String? {
+            val apksigner = resolveApksigner() ?: return null
+            return try {
+                val process =
+                    ProcessBuilder(apksigner.absolutePath, "verify", "--print-certs", file.absolutePath)
+                        .redirectErrorStream(true).start()
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                process.waitFor()
+                if (process.exitValue() != 0) return null
+                output.lineSequence()
+                    .firstOrNull { line -> line.contains("certificate SHA-256 digest:") }
+                    ?.substringAfterLast(':')
+                    ?.trim()
+                    ?.lowercase()
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        fun signingCertSha256(file: File): String? =
+            signingCertSha256ViaApksigner(file) ?: signingCertSha256FromV1(file)
+
+        fun jsonString(value: String?): String {
+            if (value == null) return "null"
+            val sb = StringBuilder("\"")
+            for (ch in value) {
+                when (ch) {
+                    '\\' -> sb.append("\\\\")
+                    '"' -> sb.append("\\\"")
+                    '\n' -> sb.append("\\n")
+                    '\r' -> sb.append("\\r")
+                    '\t' -> sb.append("\\t")
+                    else -> sb.append(ch)
+                }
+            }
+            sb.append("\"")
+            return sb.toString()
+        }
+
+        val apkSha256 = sha256OfFile(apk)
+        val certSha256 = signingCertSha256(apk)
+        val repoRoot = File(repoRootPath.get())
+        val relPath = repoRoot.toPath().relativize(apk.toPath()).toString()
+
+        val json = buildString {
+            append("{\n")
+            append("  \"package\": ${jsonString(packageName.get())},\n")
+            append("  \"version_code\": ${versionCode.get()},\n")
+            append("  \"version_name\": ${jsonString(versionName.get())},\n")
+            append("  \"apk_relative_path\": ${jsonString(relPath)},\n")
+            append("  \"apk_sha256\": ${jsonString(apkSha256)},\n")
+            append("  \"signing_cert_sha256\": ${jsonString(certSha256 ?: "")}\n")
+            append("}\n")
+        }
+        val outFile = metadataOut.get().asFile
+        outFile.writeText(json)
+        logger.lifecycle("emitBuildMetadata: wrote ${outFile.absolutePath}")
+    }
 }
 
 android {
@@ -90,158 +236,38 @@ dependencies {
  * The certificate fingerprint is read from the actual built APK so it always
  * reflects the signer that produced the artifact (debug keystore for local
  * sideloading), matching the host signature-comparison contract.
+ *
+ * This task is configuration-cache compatible: all inputs are declared as
+ * isolated properties (no Project references leak into the action).
  */
 val emitBuildMetadata =
-    tasks.register("emitBuildMetadata") {
+    tasks.register<EmitBuildMetadataTask>("emitBuildMetadata") {
         description = "Writes build-metadata.json for the sky-cua host."
         group = "sky-cua"
 
-        val pkg = android.defaultConfig.applicationId ?: "com.skycua.phonecompanion"
-        val versionCode = android.defaultConfig.versionCode ?: 0
-        val versionName = android.defaultConfig.versionName ?: ""
-        val apkFile = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk")
-        val repoRoot = rootProject.projectDir.parentFile.parentFile
-        val metadataOut = File(rootProject.projectDir, "build-metadata.json")
+        packageName.set(android.defaultConfig.applicationId ?: "com.skycua.phonecompanion")
+        versionCode.set(android.defaultConfig.versionCode ?: 0)
+        versionName.set(android.defaultConfig.versionName ?: "")
+        apkFile.set(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
+        repoRootPath.set(rootProject.projectDir.parentFile.parentFile.absolutePath)
+        metadataOut.set(File(rootProject.projectDir, "build-metadata.json"))
 
-        inputs.files(apkFile).optional()
-        outputs.file(metadataOut)
-
-        doLast {
-            val apk = apkFile.get().asFile
-            if (!apk.exists()) {
-                logger.warn("emitBuildMetadata: APK not found at ${apk.absolutePath}; skipping.")
-                return@doLast
-            }
-
-            fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
-
-            fun sha256OfFile(file: File): String {
-                val digest = MessageDigest.getInstance("SHA-256")
-                file.inputStream().use { input ->
-                    val buffer = ByteArray(64 * 1024)
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        digest.update(buffer, 0, read)
-                    }
-                }
-                return hex(digest.digest())
-            }
-
-            // Reads the v1 (JAR) signing certificate from META-INF, used as a
-            // fallback when apksigner is unavailable. Modern APKs are signed with
-            // v2/v3 schemes and may not carry a v1 block, so this can return null.
-            fun signingCertSha256FromV1(file: File): String? {
-                ZipFile(file).use { zip ->
-                    val sigEntry =
-                        zip.entries().toList().firstOrNull { entry ->
-                            val name = entry.name.uppercase()
-                            name.startsWith("META-INF/") &&
-                                (
-                                    name.endsWith(".RSA") ||
-                                        name.endsWith(".DSA") ||
-                                        name.endsWith(".EC")
-                                )
-                        } ?: return null
-                    val pkcs7Bytes = zip.getInputStream(sigEntry).use { it.readBytes() }
-                    val factory = CertificateFactory.getInstance("X.509")
-                    val certs = factory.generateCertificates(pkcs7Bytes.inputStream())
-                    val cert = certs.firstOrNull() ?: return null
-                    return hex(MessageDigest.getInstance("SHA-256").digest(cert.encoded))
-                }
-            }
-
-            // Resolves the newest apksigner from the SDK build-tools so the cert
-            // fingerprint reflects the v2/v3 signer that actually signed the APK.
-            fun sdkDirFromLocalProperties(): File? {
-                val props = File(rootProject.projectDir, "local.properties")
-                if (!props.isFile) return null
-                return props
-                    .readLines()
-                    .firstOrNull { it.trimStart().startsWith("sdk.dir=") }
-                    ?.substringAfter("sdk.dir=")
-                    ?.trim()
-                    ?.let { File(it) }
-            }
-
-            fun resolveApksigner(): File? {
-                val sdkDir =
-                    System.getenv("ANDROID_SDK_ROOT")?.let { File(it) }
-                        ?: System.getenv("ANDROID_HOME")?.let { File(it) }
-                        ?: sdkDirFromLocalProperties()
-                        ?: return null
-                val buildTools = File(sdkDir, "build-tools")
-                if (!buildTools.isDirectory) return null
-                return buildTools
-                    .listFiles { f -> f.isDirectory }
-                    ?.sortedByDescending { it.name }
-                    ?.firstNotNullOfOrNull { dir ->
-                        File(dir, "apksigner").takeIf { it.canExecute() }
-                    }
-            }
-
-            fun signingCertSha256ViaApksigner(file: File): String? {
-                val apksigner = resolveApksigner() ?: return null
-                return try {
-                    val process =
-                        ProcessBuilder(
-                            apksigner.absolutePath,
-                            "verify",
-                            "--print-certs",
-                            file.absolutePath,
-                        ).redirectErrorStream(true).start()
-                    val output = process.inputStream.bufferedReader().use { it.readText() }
-                    process.waitFor()
-                    if (process.exitValue() != 0) return null
-                    output
-                        .lineSequence()
-                        .firstOrNull { line -> line.contains("certificate SHA-256 digest:") }
-                        ?.substringAfterLast(':')
+        // Resolve SDK dir at configuration time so the action remains cache-compatible
+        // (no Project/System.getenv lookups in the isolated action beyond the captured string).
+        val sdkDir: File? =
+            System.getenv("ANDROID_SDK_ROOT")?.let { File(it) }
+                ?: System.getenv("ANDROID_HOME")?.let { File(it) }
+                ?: File(rootProject.projectDir, "local.properties").takeIf { it.isFile }?.let { props ->
+                    props.readLines()
+                        .firstOrNull { it.trimStart().startsWith("sdk.dir=") }
+                        ?.substringAfter("sdk.dir=")
                         ?.trim()
-                        ?.lowercase()
-                } catch (_: Exception) {
-                    null
+                        ?.let { File(it) }
                 }
-            }
+        if (sdkDir != null) sdkDirPath.set(sdkDir.absolutePath)
 
-            fun signingCertSha256(file: File): String? =
-                signingCertSha256ViaApksigner(file) ?: signingCertSha256FromV1(file)
-
-            fun jsonString(value: String?): String {
-                if (value == null) return "null"
-                val sb = StringBuilder("\"")
-                for (ch in value) {
-                    when (ch) {
-                        '\\' -> sb.append("\\\\")
-                        '"' -> sb.append("\\\"")
-                        '\n' -> sb.append("\\n")
-                        '\r' -> sb.append("\\r")
-                        '\t' -> sb.append("\\t")
-                        else -> sb.append(ch)
-                    }
-                }
-                sb.append("\"")
-                return sb.toString()
-            }
-
-            val apkSha256 = sha256OfFile(apk)
-            val certSha256 = signingCertSha256(apk)
-            val relPath = repoRoot.toPath().relativize(apk.toPath()).toString()
-
-            val json =
-                buildString {
-                    append("{\n")
-                    append("  \"package\": ${jsonString(pkg)},\n")
-                    append("  \"version_code\": $versionCode,\n")
-                    append("  \"version_name\": ${jsonString(versionName)},\n")
-                    append("  \"apk_relative_path\": ${jsonString(relPath)},\n")
-                    append("  \"apk_sha256\": ${jsonString(apkSha256)},\n")
-                    append("  \"signing_cert_sha256\": ${jsonString(certSha256 ?: "")}\n")
-                    append("}\n")
-                }
-            metadataOut.writeText(json)
-            logger.lifecycle("emitBuildMetadata: wrote ${metadataOut.absolutePath}")
-        }
+        // Declare that APK is optional: older Gradle would use `inputs.files(...).optional()`; with
+        // typed properties `@Optional` + `RegularFileProperty` already expresses this.
     }
 
 tasks.matching { it.name == "assembleDebug" }.configureEach {
