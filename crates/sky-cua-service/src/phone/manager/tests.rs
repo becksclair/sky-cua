@@ -750,7 +750,7 @@ fn direct_appshot_wire_result(
     );
     serde_json::json!({
         "appshot_id": appshot_id,
-        "captured_at_ms": 1,
+        "captured_at_ms": chrono::Utc::now().timestamp_millis(),
         "consistency": "stable",
         "foreground": {"package": package, "activity": "Main"},
         "display": {"id": 0, "width": 100, "height": 200},

@@ -973,11 +973,14 @@ impl PhoneManager {
     }
 
     /// S-003: single helper for wire snake_case conversion.
+    /// Fails loudly if the enum cannot be serialized to its `snake_case` wire string —
+    /// caller enums are already validated at deserialization, so any failure is a
+    /// programming error, not a silent lowercased fallback that would hide a missing variant.
     #[allow(clippy::redundant_closure)]
     fn wire_action<T: serde::Serialize + std::fmt::Debug>(value: &T) -> String {
         serde_json::to_value(value)
             .and_then(|v| serde_json::from_value::<String>(v))
-            .unwrap_or_else(|_| format!("{value:?}").to_ascii_lowercase())
+            .unwrap_or_else(|e| panic!("wire_action failed for {value:?}: {e}"))
     }
 
     /// S-004: centralised Direct dispatch (single timeout, single error mapping).

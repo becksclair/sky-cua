@@ -54,6 +54,13 @@ impl PhoneManager {
         let Some(shot) = self.appshots.get(id) else {
             return Some(AppShotRejectionReason::Stale);
         };
+        // Enforce AppShot freshness window (tunable SKY_CUA_PHONE_APPSHOT_TTL_MS, default 30s, clamped >=1s).
+        // Coordinate snapshots have their own PhoneSnapshotRegistry TTL; AppShots are separate and must not be recycled.
+        let captured_ms = shot.captured_at.timestamp_millis() as u64;
+        let age_ms = now_ms().saturating_sub(captured_ms);
+        if age_ms > self.selection.appshot_ttl_ms {
+            return Some(AppShotRejectionReason::Expired);
+        }
         let Some((device_id, epoch)) = self.direct_identity(session_id) else {
             return Some(AppShotRejectionReason::WrongSession);
         };
