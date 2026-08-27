@@ -21,7 +21,7 @@ use sky_cua_platform::model::{AgentCursorPoint, AgentCursorState, CoordinateSpac
 #[cfg(not(test))]
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(test)]
-const CLIENT_IO_TIMEOUT: Duration = Duration::from_millis(100);
+const CLIENT_IO_TIMEOUT: Duration = Duration::from_millis(500);
 
 // Initial loop cadence before the first display-refresh-matched interval is
 // computed; subsequent ticks use OverlayHostBackend::pointer_tick_interval().
@@ -728,44 +728,122 @@ mod tests {
     }
 
     fn send(path: &Path, message: OverlayHostMessage) -> OverlayHostReply {
-        let mut stream = UnixStream::connect(path).expect("connect overlay host socket");
         let payload = serde_json::to_vec(&message).expect("serialize request");
-        stream.write_all(&payload).expect("write payload");
-        stream.write_all(b"\n").expect("write newline");
-        stream.flush().expect("flush payload");
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader.read_line(&mut line).expect("read reply");
-        serde_json::from_str(line.trim_end()).expect("parse reply")
+        let mut last_err = None;
+        for attempt in 0..8 {
+            match UnixStream::connect(path) {
+                Ok(mut stream) => {
+                    stream
+                        .set_write_timeout(Some(CLIENT_IO_TIMEOUT + Duration::from_millis(200)))
+                        .ok();
+                    stream
+                        .set_read_timeout(Some(CLIENT_IO_TIMEOUT + Duration::from_millis(200)))
+                        .ok();
+                    if stream.write_all(&payload).is_err()
+                        || stream.write_all(b"\n").is_err()
+                        || stream.flush().is_err()
+                    {
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) => {
+                            last_err = Some("empty reply".to_string());
+                        }
+                        Ok(_) => {
+                            if let Ok(reply) =
+                                serde_json::from_str::<OverlayHostReply>(line.trim_end())
+                            {
+                                return reply;
+                            }
+                            last_err = Some(format!("bad json: {line}"));
+                        }
+                        Err(e) => {
+                            last_err = Some(format!("read reply: {e}"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    last_err = Some(format!("connect: {e}"));
+                }
+            }
+            if attempt < 7 {
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+        panic!(
+            "connect/read overlay host socket failed after retries: {}",
+            last_err.unwrap_or_default()
+        );
     }
 
     fn send_tcp(addr: &str, message: OverlayHostMessage) -> OverlayHostReply {
-        let mut stream = TcpStream::connect(addr).expect("connect overlay host TCP listener");
         let payload = serde_json::to_vec(&message).expect("serialize request");
-        stream.write_all(&payload).expect("write payload");
-        stream.write_all(b"\n").expect("write newline");
-        stream.flush().expect("flush payload");
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader.read_line(&mut line).expect("read reply");
-        serde_json::from_str(line.trim_end()).expect("parse reply")
+        let mut last_err = None;
+        for attempt in 0..8 {
+            match TcpStream::connect(addr) {
+                Ok(mut stream) => {
+                    stream
+                        .set_write_timeout(Some(CLIENT_IO_TIMEOUT + Duration::from_millis(200)))
+                        .ok();
+                    stream
+                        .set_read_timeout(Some(CLIENT_IO_TIMEOUT + Duration::from_millis(200)))
+                        .ok();
+                    if stream.write_all(&payload).is_err()
+                        || stream.write_all(b"\n").is_err()
+                        || stream.flush().is_err()
+                    {
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) => {
+                            last_err = Some("empty reply".to_string());
+                        }
+                        Ok(_) => {
+                            if let Ok(reply) =
+                                serde_json::from_str::<OverlayHostReply>(line.trim_end())
+                            {
+                                return reply;
+                            }
+                            last_err = Some(format!("bad json: {line}"));
+                        }
+                        Err(e) => {
+                            last_err = Some(format!("read reply: {e}"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    last_err = Some(format!("connect: {e}"));
+                }
+            }
+            if attempt < 7 {
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+        panic!(
+            "connect/read overlay host TCP failed after retries: {}",
+            last_err.unwrap_or_default()
+        );
     }
 
     fn wait_for_socket(path: &Path) {
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(2) {
-            if path.exists() && UnixStream::connect(path).is_ok() {
+            if path.exists() {
+                // Give the event loop a moment to enter accept(); the file can
+                // appear before the listener is ready (previous ConnectionRefused
+                // flake). No probe connect here — each probe would create an
+                // empty connection the server must drain (would block the serial
+                // accept loop and overload parallel nextest).
+                thread::sleep(Duration::from_millis(20));
                 return;
             }
             thread::sleep(Duration::from_millis(10));
-        }
-        if path.exists() {
-            // Socket file exists but not yet accepting — give the server a final
-            // moment before panicking (file-exists-only wait races accept loop).
-            thread::sleep(Duration::from_millis(50));
-            if UnixStream::connect(path).is_ok() {
-                return;
-            }
         }
         panic!("socket did not appear: {}", path.display());
     }
@@ -773,7 +851,17 @@ mod tests {
     fn wait_for_tcp(addr: &str) {
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(2) {
+            // Single probe at the end — the TcpListener::bind in the test
+            // reserves the port before the server binds, so early probes create
+            // empty connections that block the serial accept loop for
+            // CLIENT_IO_TIMEOUT each (100ms × 200 probes = 20s). Just wait.
+            thread::sleep(Duration::from_millis(20));
             if TcpStream::connect(addr).is_ok() {
+                return;
+            }
+            if started.elapsed() >= Duration::from_millis(100) {
+                // After a short grace, the server should be listening; stop
+                // probing and let `send` retry on ConnectionRefused instead.
                 return;
             }
             thread::sleep(Duration::from_millis(10));
