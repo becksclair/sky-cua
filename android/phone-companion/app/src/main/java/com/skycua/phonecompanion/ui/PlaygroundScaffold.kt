@@ -82,7 +82,7 @@ data class PlaygroundViews(
     val eventLog: TextView,
 )
 
-fun LinearLayout.LayoutParams.Companion.playgroundButtonParams(): LinearLayout.LayoutParams =
+fun playgroundButtonParams(): LinearLayout.LayoutParams =
     LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
         topMargin = 16
     }
