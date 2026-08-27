@@ -67,8 +67,8 @@ class InteractionPlaygroundActivity : Activity() {
         )
         val scroll = views.scroll
         val container = views.container
-        summary = views.summary.apply { text = summaryText() }
         eventLog = views.eventLog
+        summary = views.summary.apply { text = summaryText() }
 
         // ---- Card 1: Click / Long / Context / PressAndHold -----------------
         container.addView(sectionHeader("1. Click — CLICK / LONG_CLICK / CONTEXT_CLICK / PRESS_AND_HOLD"))
@@ -535,8 +535,8 @@ class InteractionPlaygroundActivity : Activity() {
         if (copyCount > 0 || cutCount > 0 || pasteCount > 0) passed++
         if (dismissCount > 0) passed++
         if (selectCount > 0) passed++
-        // global/key counted via event log keyword
-        val globalLogged = eventLog?.text?.contains("GLOBAL") == true
+        // global/key counted via event log keyword (guard uninitialized)
+        val globalLogged = if (::eventLog.isInitialized) eventLog.text.contains("GLOBAL") else false
         if (globalLogged) passed++
         // pad to show lanes
         return "PASS $passed/$total  click:$clickCount long:$longClickCount ctx:$contextClickCount " +
