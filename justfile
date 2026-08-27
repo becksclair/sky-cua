@@ -1,3 +1,7 @@
+release: verify
+  python3 install.py release --patch
+  python3 install.py install
+
 # Fast headless verification: Rust + Python. Kotlin runs when a JDK is available.
 verify: verify-rust verify-python verify-kotlin
 
