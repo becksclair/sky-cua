@@ -246,7 +246,43 @@ impl PhoneManager {
     pub(crate) async fn handle(&mut self, request: PhoneRequest) -> PhoneResponse {
         self.drain_direct_events();
         self.reconcile_direct_sessions();
+        // NodeAction carries its AppShot id at the top level (`request.appshot_id`)
+        // plus the flattened `session.appshot_id`; the generic `mutation_selector`
+        // check would shadow the top-level one and always return `Missing`, so
+        // handle it separately and honour the `view_id` fallback.
+        if let PhoneRequest::NodeAction(req) = &request {
+            if let Some(session_id) = self.resolve_session_id(&req.session)
+                && self.direct_identity(&session_id).is_some()
+                && let Some(reason) = self.node_action_appshot_rejection_reason(req, &session_id)
+            {
+                let fresh = self
+                    .observe(PhoneObserveRequest {
+                        session: req.session.clone(),
+                        ..PhoneObserveRequest::default()
+                    })
+                    .await;
+                if let Some(appshot) = fresh.appshot.clone() {
+                    self.appshots
+                        .insert(appshot.appshot_id.clone(), (*appshot).clone());
+                    return PhoneResponse::AppShotRequired(Box::new(
+                        sky_cua_platform::model::AppShotRequired {
+                            code: "AppShotRequired".into(),
+                            reason,
+                            message: "capture a fresh phone AppShot and retry; no device mutation was performed".into(),
+                            fresh_appshot: appshot,
+                        },
+                    ));
+                }
+                return PhoneResponse::FeatureError(sky_cua_platform::model::PhoneFeatureError {
+                    code: "AppShotCaptureFailed".into(),
+                    message:
+                        "a fresh phone AppShot could not be captured; no device mutation was performed"
+                            .into(),
+                });
+            }
+        }
         if let Some(selector) = mutation_selector(&request)
+            && !matches!(request, PhoneRequest::NodeAction(_))
             && let Some(session_id) = self.resolve_session_id(selector)
             && self.direct_identity(&session_id).is_some()
             && let Some(reason) = self.appshot_rejection_reason(selector, &session_id)

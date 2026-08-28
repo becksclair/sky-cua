@@ -118,6 +118,89 @@ impl PhoneManager {
             .is_none()
     }
 
+    /// NodeAction-specific AppShot fence. The request carries two `appshot_id`
+    /// fields at the same JSON level (flattened `session.appshot_id` and the
+    /// top-level `request.appshot_id` for the node's AppShot). The MCP client
+    /// populates the top-level one, so the generic `mutation_selector` check on
+    /// `session.appshot_id` would shadow it and always return `Missing`.
+    /// This helper checks the top-level `request.appshot_id` and honours the
+    /// `view_id` fallback (appshot not required when a stable resource id is
+    /// supplied).
+    pub(crate) fn node_action_appshot_rejection_reason(
+        &self,
+        request: &sky_cua_platform::model::PhoneNodeActionRequest,
+        session_id: &str,
+    ) -> Option<sky_cua_platform::model::AppShotRejectionReason> {
+        use sky_cua_platform::model::{AppShotCapture, AppShotRejectionReason};
+
+        // view_id fallback: playground's stable `com.skycua.phonecompanion:id/...`
+        // does not need an AppShot; the companion will `findNodeByViewId` directly.
+        let Some(id) = request
+            .appshot_id
+            .as_deref()
+            .or(request.session.appshot_id.as_deref())
+        else {
+            if request.view_id.is_some() {
+                return None;
+            }
+            return Some(AppShotRejectionReason::Missing);
+        };
+        let Some(shot) = self.appshots.get(id) else {
+            return Some(AppShotRejectionReason::Stale);
+        };
+        let captured_ms = shot.captured_at.timestamp_millis() as u64;
+        let age_ms = now_ms().saturating_sub(captured_ms);
+        if age_ms > self.selection.appshot_ttl_ms {
+            return Some(AppShotRejectionReason::Expired);
+        }
+        let Some((device_id, epoch)) = self.direct_identity(session_id) else {
+            return Some(AppShotRejectionReason::WrongSession);
+        };
+        // Reuse the same target/epoch/session checks as the generic fence.
+        let selector = &request.session;
+        if selector.alias.is_some() && (selector.device_id.is_some() || selector.serial.is_some()) {
+            return Some(AppShotRejectionReason::WrongTarget);
+        }
+        if selector
+            .device_id
+            .as_deref()
+            .is_some_and(|value| value != device_id)
+        {
+            return Some(AppShotRejectionReason::WrongTarget);
+        }
+        if selector
+            .serial
+            .as_deref()
+            .is_some_and(|value| value != self.serial_of(session_id))
+        {
+            return Some(AppShotRejectionReason::WrongTarget);
+        }
+        if let Some(alias) = selector.alias.as_deref() {
+            let Some(target) = self.selection.aliases.get(alias) else {
+                return Some(AppShotRejectionReason::WrongTarget);
+            };
+            if target != &device_id && target != &self.serial_of(session_id) {
+                return Some(AppShotRejectionReason::WrongTarget);
+            }
+        }
+        match &shot.capture {
+            AppShotCapture::Phone {
+                device_id: shot_device,
+                ..
+            } if shot_device != &device_id => Some(AppShotRejectionReason::WrongTarget),
+            AppShotCapture::Phone { link_epoch, .. } if *link_epoch != epoch => {
+                Some(AppShotRejectionReason::WrongEpoch)
+            }
+            AppShotCapture::Phone { .. }
+                if shot.action_snapshot.session_id.as_deref() != Some(session_id) =>
+            {
+                Some(AppShotRejectionReason::WrongSession)
+            }
+            AppShotCapture::Phone { .. } => None,
+            _ => Some(AppShotRejectionReason::WrongSurface),
+        }
+    }
+
     pub(crate) async fn attach_destination_appshot(
         &mut self,
         selector: &PhoneSessionSelector,
