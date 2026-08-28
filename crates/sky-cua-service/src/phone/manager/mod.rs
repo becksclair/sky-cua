@@ -250,6 +250,7 @@ impl PhoneManager {
         // plus the flattened `session.appshot_id`; the generic `mutation_selector`
         // check would shadow the top-level one and always return `Missing`, so
         // handle it separately and honour the `view_id` fallback.
+        #[allow(clippy::collapsible_if)]
         if let PhoneRequest::NodeAction(req) = &request {
             if let Some(session_id) = self.resolve_session_id(&req.session)
                 && self.direct_identity(&session_id).is_some()
