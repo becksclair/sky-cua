@@ -37,6 +37,17 @@ rotations (on Windows panic capture ends at the first runtime rotation). An oper
 logs to plain stderr. These files are the primary forensic record for
 daemon-side incidents — agent transcripts are the only other trace.
 
+Every log generation is hard-bounded even when rotation fails (for example,
+`EMFILE` prevents opening the fresh log): a file never takes more than 32 MiB,
+including stderr-fallback bytes when fd 2 points at that file, and a stderr
+target the writer does not own gets 8 MiB. Events past a bound are dropped and
+reported as a `{"type":"sky_cua_log_events_dropped","count":N}` line in the
+next fresh log; a failed rotation is retried at most once per second. On
+startup the daemon raises its soft `RLIMIT_NOFILE` to the hard limit, and on
+Linux it logs an `elevated open file descriptor count` warning with a
+per-kind breakdown (`socket=…`, `pipe=…`) once a minute while 512 or more
+descriptors are open.
+
 For local operator triage without an MCP host, `sky-cua-client` also exposes a
 JSON-first CLI surface over the same service requests:
 

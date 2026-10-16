@@ -1083,20 +1083,27 @@ impl DirectListener {
         self.listener.local_addr()
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
         self.listener.accept().await
     }
 
+    #[cfg(test)]
     pub(crate) async fn accept_websocket(
         &self,
     ) -> io::Result<(WebSocketStream<TcpStream>, SocketAddr)> {
         let (stream, peer) = self.listener.accept().await?;
-        let websocket = accept_async(stream)
-            .await
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        Ok((websocket, peer))
+        Ok((websocket_handshake(stream).await?, peer))
     }
+}
+
+/// Bound on the WebSocket upgrade so a silent peer cannot hold its socket.
+const WEBSOCKET_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+async fn websocket_handshake(stream: TcpStream) -> io::Result<WebSocketStream<TcpStream>> {
+    tokio::time::timeout(WEBSOCKET_HANDSHAKE_TIMEOUT, accept_async(stream))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "WebSocket handshake timed out"))?
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 /// Service-owned lifecycle seam. The daemon can retain this value for the
@@ -1213,11 +1220,12 @@ async fn run_accept_loop(
         tokio::select! {
             _ = shutdown.changed() => if *shutdown.borrow() { children.shutdown().await; break },
             Some(_) = children.join_next() => {},
-            accepted = listener.accept_websocket() => {
-                let (socket, peer) = match accepted {
+            accepted = listener.accept() => {
+                let (stream, peer) = match accepted {
                     Ok(connection) => connection,
                     Err(error) => {
-                        tracing::warn!(%error, "CompanionDirect WebSocket accept failed");
+                        tracing::warn!(%error, "CompanionDirect TCP accept failed");
+                        tokio::time::sleep(crate::ipc_server::ACCEPT_ERROR_BACKOFF).await;
                         continue;
                     }
                 };
@@ -1225,6 +1233,13 @@ async fn run_accept_loop(
                 let registry = registry.clone();
                 let enrollments = enrollments.clone();
                 children.spawn(async move {
+                    let socket = match websocket_handshake(stream).await {
+                        Ok(socket) => socket,
+                        Err(error) => {
+                            tracing::warn!(%peer, %error, "CompanionDirect WebSocket handshake failed");
+                            return;
+                        }
+                    };
                     if let Err(error) = accept_socket(socket, peer, store, &registry, &enrollments).await {
                         tracing::warn!(%peer, %error, "CompanionDirect connection rejected");
                     }

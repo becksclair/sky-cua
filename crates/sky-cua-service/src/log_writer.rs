@@ -19,6 +19,14 @@
 //! rename, reopen) run. The writer never panics and never blocks startup: a
 //! failed open, rotation, or write degrades to writing the event to stderr (or,
 //! for a poisoned lock, recovers the guard) rather than propagating.
+//!
+//! Hard bound: rotation can fail exactly when output is most runaway (an
+//! `EMFILE` accept loop cannot open the fresh log). No log file ever takes
+//! more than [`DAEMON_LOG_HARD_CAP_BYTES`], counting stderr-fallback bytes when
+//! fd 2 points at that same file; a stderr target the writer does not own gets
+//! [`STDERR_FALLBACK_BUDGET_BYTES`]. Events past a bound are dropped and
+//! counted, and the count is reported in the next fresh log. A failed rotation
+//! is retried at most once per [`ROTATE_RETRY_INTERVAL`] rather than per event.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -28,6 +36,20 @@ use std::time::{Duration, Instant};
 
 use sky_cua_platform::log_rotation::{DAEMON_LOG_ROTATE_BYTES, guarded_rotate_oversized};
 use tracing_subscriber::fmt::MakeWriter;
+
+/// Absolute per-generation ceiling for a log file, reached only when rotation
+/// keeps failing.
+const HARD_CAP_ROTATIONS: u64 = 4;
+const DAEMON_LOG_HARD_CAP_BYTES: u64 = HARD_CAP_ROTATIONS * DAEMON_LOG_ROTATE_BYTES;
+
+/// Ceiling for the stderr fallback between successful opens. In production fd 2
+/// is a log file too (the client's spawn log or the last adopted handle), so
+/// the fallback must be bounded like any other generation.
+const STDERR_FALLBACK_BUDGET_BYTES: u64 = DAEMON_LOG_ROTATE_BYTES;
+
+/// Minimum spacing between rotation attempts once one has failed, so a
+/// persistent failure costs a lock/stat/open per interval, not per event.
+const ROTATE_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Check the log inode every N writes (or wallclock seconds) so the daemon
 /// reopens its append handle after an external rename rather than silently
@@ -53,6 +75,17 @@ struct Inner {
     /// Cached running byte count of `file`, kept so the hot path never stats.
     bytes: u64,
     cap: u64,
+    hard_cap: u64,
+    /// Bytes known to be on fd 2's target since the last adopted handle.
+    stderr_bytes: u64,
+    stderr_budget: u64,
+    /// fd 2 was dup2'd onto the last adopted handle, so stderr-fallback bytes
+    /// land in that file and share its hard cap.
+    stderr_shares_file: bool,
+    /// Earliest time the next rotation may be attempted after a failed one.
+    rotate_retry_at: Option<Instant>,
+    /// Events dropped at a hard bound since the last adopted handle.
+    dropped_events: u64,
     /// Write count since the last inode staleness check.
     #[cfg(unix)]
     inode_write_count: u64,
@@ -75,15 +108,27 @@ impl RotatingLog {
     /// Never fails: if the file cannot be opened the writer degrades to stderr,
     /// so tracing setup and daemon startup are never blocked by a logging error.
     pub(crate) fn new(path: PathBuf) -> Self {
-        Self::with_cap_and_redirect(path, DAEMON_LOG_ROTATE_BYTES, true)
+        Self::with_limits(
+            path,
+            DAEMON_LOG_ROTATE_BYTES,
+            DAEMON_LOG_HARD_CAP_BYTES,
+            STDERR_FALLBACK_BUDGET_BYTES,
+            true,
+        )
     }
 
     #[cfg(test)]
     fn with_cap(path: PathBuf, cap: u64) -> Self {
-        Self::with_cap_and_redirect(path, cap, false)
+        Self::with_limits(path, cap, cap * HARD_CAP_ROTATIONS, cap, false)
     }
 
-    fn with_cap_and_redirect(path: PathBuf, cap: u64, _redirect_stderr: bool) -> Self {
+    fn with_limits(
+        path: PathBuf,
+        cap: u64,
+        hard_cap: u64,
+        stderr_budget: u64,
+        _redirect_stderr: bool,
+    ) -> Self {
         let old_path = old_path_for(&path);
         let mut inner = Inner {
             path,
@@ -91,6 +136,12 @@ impl RotatingLog {
             file: None,
             bytes: 0,
             cap,
+            hard_cap,
+            stderr_bytes: 0,
+            stderr_budget,
+            stderr_shares_file: false,
+            rotate_retry_at: None,
+            dropped_events: 0,
             #[cfg(unix)]
             inode_write_count: 0,
             #[cfg(unix)]
@@ -107,26 +158,12 @@ impl RotatingLog {
 
 impl Inner {
     /// Open the log for append, rotating first if it is already over the cap.
-    /// On any failure `file` is left `None` (writes fall back to stderr).
+    /// On failure `file` stays `None` (writes fall back to stderr).
     fn open_rotating(&mut self) {
-        match OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-        {
-            Ok(file) => {
-                let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-                self.adopt(file, len);
-                if len > self.cap {
-                    // Reuse the runtime rotation path for the initial oversized
-                    // case so the open-time and steady-state guards are identical.
-                    self.rotate();
-                }
-            }
-            Err(_) => {
-                self.file = None;
-                self.bytes = 0;
-            }
+        // Reuse the runtime rotation path for the initial oversized case so the
+        // open-time and steady-state guards are identical.
+        if self.try_reopen() && self.bytes > self.cap {
+            let _ = self.rotate();
         }
     }
 
@@ -136,55 +173,36 @@ impl Inner {
     /// rotation cannot clobber a freshly rotated generation.
     ///
     /// Best-effort: any failure leaves the current handle in place (we keep
-    /// appending to the oversized file rather than losing output).
-    fn rotate(&mut self) {
+    /// appending to the oversized file rather than losing output). Returns
+    /// whether a fresh, under-cap log is now adopted.
+    fn rotate(&mut self) -> bool {
         let Some(file) = self.file.as_ref() else {
-            // No handle to rotate; try to (re)establish one.
-            self.reopen_after_rotate();
-            return;
+            return false;
         };
-
         // A contended lock means another rotator is mid-flight — leave our handle
         // alone and let whichever file wins keep receiving appends.
         if !guarded_rotate_oversized(file, &self.path, &self.old_path, self.cap) {
-            return;
+            return false;
         }
-        // Dropping/replacing the handle below releases the advisory lock with it.
-        self.reopen_after_rotate();
+        // On success the old handle and its advisory lock are dropped. On
+        // failure (e.g. EMFILE) keep appending to the rotated inode, bounded by
+        // the hard cap, rather than degrading to stderr, which is the same inode
+        // in production but uncapped. Every later event retries the reopen.
+        if !self.try_reopen()
+            && let Some(file) = self.file.as_ref()
+        {
+            let _ = file.unlock();
+        }
+        // A failed rename reopens the same oversized inode; that is not a
+        // successful rotation.
+        self.bytes <= self.cap
     }
 
-    /// Reopen a fresh append handle at `path`, resetting the cached byte count.
-    /// On failure degrade to stderr (`file = None`).
-    fn reopen_after_rotate(&mut self) {
-        match OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-        {
-            Ok(file) => {
-                let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-                self.adopt(file, len);
-            }
-            Err(_) => {
-                self.file = None;
-                self.bytes = 0;
-            }
-        }
-    }
-
-    /// Reopen the log fd when the inode has been replaced externally. Unlike
-    /// the rotation reopen, on failure we keep the old fd so writes continue
-    /// landing somewhere (even if the path has moved) rather than falling back
-    /// to stderr. Returns whether a fresh handle was obtained.
-    #[cfg(unix)]
-    fn reopen_if_stale(&mut self) -> bool {
-        match OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-        {
-            Ok(file) => {
-                let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    /// Open a fresh append handle at `path` and adopt it. On failure the
+    /// current state (handle or degraded `None`) is left untouched.
+    fn try_reopen(&mut self) -> bool {
+        match open_append(&self.path) {
+            Ok((file, len)) => {
                 self.adopt(file, len);
                 true
             }
@@ -215,32 +233,27 @@ impl Inner {
             {
                 return;
             }
-
-            use std::os::unix::fs::MetadataExt;
-            let file_meta = match file.metadata() {
-                Ok(m) => m,
-                Err(_) => return,
-            };
-            let path_meta = match std::fs::metadata(&self.path) {
-                Ok(m) => m,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    self.emit_stale_diagnostic();
-                    self.reopen_if_stale();
-                    return;
-                }
-                Err(_) => return,
-            };
-
-            if file_meta.dev() != path_meta.dev() || file_meta.ino() != path_meta.ino() {
-                self.emit_stale_diagnostic();
-                self.reopen_if_stale();
-            }
-
+            // Reset before any early exit so a persistently missing path stays
+            // rate-limited instead of re-checking on every event.
             self.inode_write_count = 0;
             self.inode_last_check = now;
+
+            use std::os::unix::fs::MetadataExt;
+            let Ok(file_meta) = file.metadata() else {
+                return;
+            };
+            let stale = match std::fs::metadata(&self.path) {
+                Ok(path_meta) => {
+                    file_meta.dev() != path_meta.dev() || file_meta.ino() != path_meta.ino()
+                }
+                Err(error) => error.kind() == io::ErrorKind::NotFound,
+            };
+            // Emit only after a successful reopen: fd 2 then points at the fresh
+            // log, so the diagnostic cannot accumulate in a capped generation.
+            if stale && self.try_reopen() {
+                self.emit_stale_diagnostic();
+            }
         }
-        #[cfg(not(unix))]
-        {}
     }
 
     #[cfg(unix)]
@@ -268,6 +281,55 @@ impl Inner {
         }
         self.bytes = len;
         self.file = Some(file);
+        self.stderr_bytes = 0;
+        // An under-cap handle is a fresh generation, so a pending retry is moot.
+        // An oversized reopen (failed rename, or a reopen after write errors)
+        // keeps the throttle so repeated reopens cannot defeat it.
+        if len <= self.cap {
+            self.rotate_retry_at = None;
+        }
+        #[cfg(unix)]
+        {
+            self.stderr_shares_file = self.redirect_stderr;
+        }
+        self.write_dropped_notice();
+    }
+
+    /// Report events dropped at a hard bound, if the notice fits under the
+    /// hard cap; otherwise keep counting until a generation with room.
+    fn write_dropped_notice(&mut self) {
+        if self.dropped_events == 0 {
+            return;
+        }
+        let notice = format!(
+            "{{\"type\":\"sky_cua_log_events_dropped\",\"count\":{}}}\n",
+            self.dropped_events
+        );
+        let len = notice.len() as u64;
+        if self.bytes.saturating_add(len) > self.hard_cap {
+            return;
+        }
+        if let Some(file) = self.file.as_mut()
+            && file.write_all(notice.as_bytes()).is_ok()
+        {
+            self.bytes = self.bytes.saturating_add(len);
+            self.dropped_events = 0;
+        }
+    }
+
+    /// Send `buf` to the stderr fallback unless its budget is spent.
+    fn write_stderr_fallback(&mut self, buf: &[u8]) {
+        let limit = if self.stderr_shares_file {
+            self.hard_cap
+        } else {
+            self.stderr_budget
+        };
+        if self.stderr_bytes >= limit {
+            self.dropped_events = self.dropped_events.saturating_add(1);
+            return;
+        }
+        self.stderr_bytes = self.stderr_bytes.saturating_add(buf.len() as u64);
+        let _ = io::stderr().write_all(buf);
     }
 
     /// Append `buf` to the log, rotating first if the cached count is over the
@@ -278,15 +340,25 @@ impl Inner {
             // Degraded (open or write previously failed): retry the open on
             // every event so a transient failure (ENOSPC, EIO, missing dir)
             // does not silence file logging for the daemon's lifetime.
-            self.reopen_after_rotate();
+            self.try_reopen();
         }
-        if self.bytes > self.cap {
-            self.rotate();
+        if self.bytes > self.cap
+            && self
+                .rotate_retry_at
+                .is_none_or(|retry_at| Instant::now() >= retry_at)
+        {
+            self.rotate_retry_at = (!self.rotate()).then(|| Instant::now() + ROTATE_RETRY_INTERVAL);
         }
         self.check_stale_inode();
         let Some(file) = self.file.as_mut() else {
             return false;
         };
+        if self.bytes >= self.hard_cap {
+            // Dropping is a deliberate outcome, not a failure: report it as
+            // handled so the caller does not spill into the stderr fallback.
+            self.dropped_events = self.dropped_events.saturating_add(1);
+            return true;
+        }
         match file.write_all(buf) {
             Ok(()) => {
                 self.bytes = self.bytes.saturating_add(buf.len() as u64);
@@ -298,13 +370,23 @@ impl Inner {
             }
             Err(_) => {
                 // The handle went bad (e.g. the underlying inode was removed);
-                // drop it and let the next event try to reopen.
+                // drop it and let the next event try to reopen. When fd 2 is
+                // the same file, the fallback inherits its byte count.
+                if self.stderr_shares_file {
+                    self.stderr_bytes = self.bytes;
+                }
                 self.file = None;
                 self.bytes = 0;
                 false
             }
         }
     }
+}
+
+fn open_append(path: &Path) -> io::Result<(File, u64)> {
+    let file = OpenOptions::new().create(true).append(true).open(path)?;
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    Ok((file, len))
 }
 
 fn old_path_for(path: &Path) -> PathBuf {
@@ -326,10 +408,9 @@ impl Write for RotatingHandle {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if !inner.write_event(buf) {
-            // Degrade to stderr so nothing is silently dropped when the file is
-            // unavailable. Ignore a stderr error too — logging must never fail
-            // the daemon's hot path.
-            let _ = io::stderr().write_all(buf);
+            // Degrade to stderr when the file is unavailable, within its budget.
+            // A stderr error is ignored — logging must never fail the hot path.
+            inner.write_stderr_fallback(buf);
         }
         Ok(buf.len())
     }
@@ -357,236 +438,4 @@ impl<'a> MakeWriter<'a> for RotatingLog {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "sky-cua-service-log-writer-{tag}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn write(log: &RotatingLog, bytes: &[u8]) {
-        let mut handle = log.make_writer();
-        handle.write_all(bytes).unwrap();
-    }
-
-    #[test]
-    fn appends_to_existing_log_without_rotation() {
-        let dir = temp_dir("append");
-        let path = dir.join("daemon-service.log");
-        std::fs::write(&path, b"first\n").unwrap();
-
-        let log = RotatingLog::with_cap(path.clone(), 1024);
-        write(&log, b"second\n");
-
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first\nsecond\n");
-        assert!(!old_path_for(&path).exists());
-    }
-
-    #[test]
-    fn rotates_once_the_cap_is_exceeded_and_starts_fresh() {
-        let dir = temp_dir("rotate");
-        let path = dir.join("daemon-service.log");
-        let cap = 64;
-
-        let log = RotatingLog::with_cap(path.clone(), cap);
-        // Cross the cap; the next event triggers rotation.
-        write(&log, &vec![b'x'; (cap + 1) as usize]);
-        write(&log, b"post-rotation\n");
-
-        let rotated = std::fs::read(old_path_for(&path)).unwrap();
-        assert_eq!(rotated.len(), (cap + 1) as usize);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "post-rotation\n");
-    }
-
-    #[test]
-    fn oversized_existing_log_rotates_at_open() {
-        let dir = temp_dir("open-rotate");
-        let path = dir.join("daemon-service.log");
-        let cap = 32;
-        let seed = vec![b'y'; (cap + 1) as usize];
-        std::fs::write(&path, &seed).unwrap();
-
-        let log = RotatingLog::with_cap(path.clone(), cap);
-        write(&log, b"fresh\n");
-
-        let rotated = std::fs::read(old_path_for(&path)).unwrap();
-        assert_eq!(rotated.len(), seed.len());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fresh\n");
-    }
-
-    #[test]
-    fn rotation_replaces_a_previous_old_generation() {
-        let dir = temp_dir("regen");
-        let path = dir.join("daemon-service.log");
-        let cap = 16;
-        std::fs::write(old_path_for(&path), b"ancient\n").unwrap();
-
-        let log = RotatingLog::with_cap(path.clone(), cap);
-        write(&log, &vec![b'z'; (cap + 1) as usize]);
-        write(&log, b"new\n");
-
-        // The oversized current generation replaced the ancient .old.
-        let rotated = std::fs::read(old_path_for(&path)).unwrap();
-        assert_eq!(rotated.len(), (cap + 1) as usize);
-    }
-
-    #[test]
-    fn degraded_writer_recovers_when_the_path_becomes_writable() {
-        // A transient open/write failure must not silence file logging for the
-        // daemon's lifetime: each degraded event retries the open.
-        let dir = temp_dir("recover");
-        let path = dir.join("missing-parent").join("daemon-service.log");
-
-        let log = RotatingLog::with_cap(path.clone(), 1024);
-        write(&log, b"lost-to-stderr\n");
-        assert!(!path.exists());
-
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        write(&log, b"recovered\n");
-
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "recovered\n");
-    }
-
-    #[test]
-    fn unwritable_path_degrades_without_panicking() {
-        // A path whose parent does not exist cannot be opened; the writer must
-        // degrade to stderr rather than panic or block.
-        let dir = temp_dir("degrade");
-        let path = dir.join("missing-parent").join("daemon-service.log");
-
-        let log = RotatingLog::with_cap(path.clone(), 64);
-        // Must not panic.
-        write(&log, b"event\n");
-
-        assert!(!path.exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rotating_log_reopens_after_external_rename() {
-        let dir = temp_dir("rename-reopen");
-        let path = dir.join("daemon-service.log");
-        let renamed = dir.join("daemon-service.log.renamed");
-
-        let log = RotatingLog::with_cap(path.clone(), 65536);
-
-        // Write 1024 times. Each write checks `inode_write_count < 1024` before
-        // incrementing, so the check never fires during the loop — at the end
-        // `inode_write_count` is 1024 but the threshold never triggered. Push
-        // the counter to 1023 and age the wall-clock so the next write fires
-        // the wall-clock check.
-        for _ in 0..1024 {
-            write(&log, b"x\n");
-        }
-        {
-            let mut guard = log.inner.lock().unwrap();
-            guard.inode_write_count = 1023;
-            guard.inode_last_check = Instant::now() - Duration::from_secs(11);
-        }
-
-        // Verify the inode check correctly detects the stale handle
-        // and reopens.
-        std::fs::rename(&path, &renamed).unwrap();
-
-        // This write triggers the inode check, detects the stale inode,
-        // and reopens a fresh handle at the original path.
-        write(&log, b"post-rename\n");
-
-        let old_data = std::fs::read_to_string(&renamed).unwrap();
-        assert_eq!(old_data.lines().filter(|l| *l == "x").count(), 1024);
-
-        let new_data = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(new_data, "post-rename\n");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rotating_log_reopens_at_low_event_rate() {
-        let dir = temp_dir("low-rate-reopen");
-        let path = dir.join("daemon-service.log");
-        let renamed = dir.join("daemon-service.log.renamed");
-
-        let log = RotatingLog::with_cap(path.clone(), 65536);
-        write(&log, b"first\n");
-
-        // Push the last-check timestamp far enough back that the wall-clock
-        // branch triggers on the next write regardless of the write count.
-        {
-            let mut guard = log.inner.lock().unwrap();
-            guard.inode_last_check = Instant::now() - Duration::from_secs(11);
-        }
-
-        std::fs::rename(&path, &renamed).unwrap();
-        write(&log, b"post-rename\n");
-
-        let old_data = std::fs::read_to_string(&renamed).unwrap();
-        assert_eq!(old_data, "first\n");
-
-        let new_data = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(new_data, "post-rename\n");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rotating_log_revalidates_before_first_post_quiet_write() {
-        let dir = temp_dir("pre-quiet");
-        let path = dir.join("daemon-service.log");
-        let renamed = dir.join("daemon-service.log.renamed");
-
-        let log = RotatingLog::with_cap(path.clone(), 65536);
-        write(&log, b"before\n");
-
-        // Age last-check so the wall-clock branch fires on the next write.
-        {
-            let mut guard = log.inner.lock().unwrap();
-            guard.inode_last_check = Instant::now() - Duration::from_secs(11);
-        }
-
-        std::fs::rename(&path, &renamed).unwrap();
-        write(&log, b"after\n");
-
-        // The "after" write should have landed in a fresh file at the original
-        // path, proving the check ran before the append.
-        let after = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(after, "after\n");
-        assert!(
-            std::fs::read_to_string(&renamed)
-                .unwrap()
-                .contains("before")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rotating_log_handles_path_temporarily_missing() {
-        let dir = temp_dir("missing-path");
-        let path = dir.join("daemon-service.log");
-
-        let log = RotatingLog::with_cap(path.clone(), 65536);
-        write(&log, b"existing\n");
-        assert!(path.exists());
-
-        // Remove the file entirely (no rename — the path disappears).
-        std::fs::remove_file(&path).unwrap();
-
-        // Force an inode check on the next write.
-        {
-            let mut guard = log.inner.lock().unwrap();
-            guard.inode_write_count = 1023;
-            guard.inode_last_check = Instant::now() - Duration::from_secs(11);
-        }
-
-        // The check sees NotFound → reopens a fresh file at the path.
-        write(&log, b"recreated\n");
-
-        assert!(path.exists());
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(content, "recreated\n");
-    }
-}
+mod tests;

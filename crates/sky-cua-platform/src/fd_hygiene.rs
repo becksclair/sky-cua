@@ -32,3 +32,83 @@ pub fn close_inherited_fds() {
         let _ = libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32);
     }
 }
+
+#[cfg(unix)]
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Soft `RLIMIT_NOFILE` this process inherited, recorded by
+/// [`raise_nofile_soft_limit`]; `u64::MAX` means the limit was never raised.
+#[cfg(unix)]
+static INHERITED_NOFILE_SOFT: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// Current `RLIMIT_NOFILE`, or `None` if `getrlimit` failed (errno is set).
+/// Async-signal-safe.
+#[cfg(unix)]
+fn nofile_limit() -> Option<libc::rlimit> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit only writes the provided struct.
+    (unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } == 0).then_some(limit)
+}
+
+/// Raise the soft `RLIMIT_NOFILE` to the hard limit, remembering the inherited
+/// value for [`restore_inherited_nofile_limit`]. Returns `(previous, raised)`
+/// when the limit changed, `None` when it was already at the hard limit.
+#[cfg(unix)]
+pub fn raise_nofile_soft_limit() -> std::io::Result<Option<(u64, u64)>> {
+    let mut limit = nofile_limit().ok_or_else(std::io::Error::last_os_error)?;
+    if limit.rlim_cur >= limit.rlim_max {
+        return Ok(None);
+    }
+    let previous = limit.rlim_cur;
+    limit.rlim_cur = limit.rlim_max;
+    // SAFETY: setrlimit only reads the provided struct.
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    INHERITED_NOFILE_SOFT.store(previous, Ordering::Relaxed);
+    Ok(Some((previous, limit.rlim_cur)))
+}
+
+/// Restore the inherited soft `RLIMIT_NOFILE` in a child about to `exec`, so
+/// launched programs see the conventional limit (code using `select(2)` or
+/// sizing tables by the fd limit misbehaves at the raised value).
+///
+/// Async-signal-safe: an atomic load plus raw syscalls, so it may run in
+/// `pre_exec`. No-op when the limit was never raised.
+#[cfg(unix)]
+pub fn restore_inherited_nofile_limit() {
+    let inherited = INHERITED_NOFILE_SOFT.load(Ordering::Relaxed);
+    if inherited == u64::MAX {
+        return;
+    }
+    if let Some(mut limit) = nofile_limit() {
+        limit.rlim_cur = inherited;
+        // SAFETY: setrlimit only reads the provided struct.
+        let _ = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) };
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    fn soft_nofile() -> u64 {
+        nofile_limit().unwrap().rlim_cur
+    }
+
+    #[test]
+    fn raise_then_restore_round_trips_the_inherited_soft_limit() {
+        let before = soft_nofile();
+        let raised = raise_nofile_soft_limit().unwrap();
+        if let Some((previous, now)) = raised {
+            assert_eq!(previous, before);
+            assert_eq!(soft_nofile(), now);
+            assert!(now > before);
+        }
+        restore_inherited_nofile_limit();
+        assert_eq!(soft_nofile(), before);
+    }
+}

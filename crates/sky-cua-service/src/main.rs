@@ -11,6 +11,8 @@ mod codex_browser_compat;
 mod daemon;
 mod diagnostics;
 mod element_resolver;
+#[cfg(unix)]
+mod fd_budget;
 mod ipc_server;
 mod log_writer;
 mod overlay;
@@ -43,7 +45,11 @@ async fn async_main() -> Result<()> {
     let arg = args.next().unwrap_or_else(|| "daemon".to_string());
     let rest = args.collect::<Vec<_>>();
     match arg.as_str() {
-        "daemon" => ipc_server::run_service().await,
+        "daemon" => {
+            #[cfg(unix)]
+            fd_budget::raise_nofile_soft_limit();
+            ipc_server::run_service().await
+        }
         "doctor" => run_doctor().await,
         "setup-accessibility" => run_setup_accessibility().await,
         "setup-window-targeting" => run_setup_window_targeting().await,

@@ -69,6 +69,9 @@ impl DesktopBackend for LinuxDesktopBackend {
                 if libc::setsid() == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
+                // The daemon raised its own fd limit; launched apps get the
+                // conventional inherited one back.
+                sky_cua_platform::fd_hygiene::restore_inherited_nofile_limit();
                 Ok(())
             });
         }
