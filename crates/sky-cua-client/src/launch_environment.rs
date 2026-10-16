@@ -125,15 +125,19 @@ fn probe_desktop_env_vars(remote_or_detached: bool) -> Vec<(String, String)> {
     }
 
     let mut found = Vec::new();
+    // A host-pinned value whose socket vanished (e.g. KWin moved from
+    // wayland-0 to wayland-1 after re-login) must be repaired like a missing
+    // one; the daemon heals it anyway, so trusting it makes health never match.
     let should_repair = |key: &str| {
         env_missing_or_empty(key)
             || (remote_or_detached && GRAPHICAL_SESSION_ENV_KEYS.contains(&key))
+            || env_value_is_dead(key)
     };
 
     if let Some(session_env) =
         graphical_session_environment().or_else(graphical_process_environment)
     {
-        let replacing_display = remote_or_detached
+        let replacing_display = (remote_or_detached || env_value_is_dead("DISPLAY"))
             && session_env
                 .get("DISPLAY")
                 .is_some_and(|value| !value.trim().is_empty());
@@ -142,9 +146,9 @@ fn probe_desktop_env_vars(remote_or_detached: bool) -> Vec<(String, String)> {
                 continue;
             }
             if (should_repair(key) || (*key == "XAUTHORITY" && replacing_display))
-                && let Some(value) = session_env
-                    .get(*key)
-                    .filter(|value| !value.trim().is_empty())
+                && let Some(value) = session_env.get(*key).filter(|value| {
+                    !value.trim().is_empty() && !graphical_value_is_dead(key, value)
+                })
             {
                 push_repaired_var(&mut found, *key, value.clone());
             }
@@ -296,6 +300,41 @@ fn remote_or_detached_launch() -> bool {
         || (env_missing_or_empty("DISPLAY") && env_missing_or_empty("WAYLAND_DISPLAY"))
 }
 
+fn env_value_is_dead(key: &str) -> bool {
+    std::env::var(key).is_ok_and(|value| graphical_value_is_dead(key, &value))
+}
+
+fn graphical_value_is_dead(key: &str, value: &str) -> bool {
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    graphical_value_is_dead_in(
+        key,
+        value,
+        runtime_dir.as_deref(),
+        Path::new("/tmp/.X11-unix"),
+    )
+}
+
+fn graphical_value_is_dead_in(
+    key: &str,
+    value: &str,
+    runtime_dir: Option<&Path>,
+    x11_socket_root: &Path,
+) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    match key {
+        "WAYLAND_DISPLAY" => runtime_dir.is_some_and(|runtime| !runtime.join(value).exists()),
+        "DISPLAY" => local_x11_display_number(value)
+            .is_some_and(|display| !x11_socket_root.join(format!("X{display}")).exists()),
+        "XAUTHORITY" => !Path::new(value).exists(),
+        _ => false,
+    }
+}
+
 fn env_missing_or_empty(key: &str) -> bool {
     std::env::var_os(key).is_none_or(|value| value.is_empty())
 }
@@ -365,14 +404,22 @@ fn graphical_process_environment_is_live(
     let bus_ok = environment
         .get("DBUS_SESSION_BUS_ADDRESS")
         .is_some_and(|value| value.starts_with("unix:"));
-    let x11_ok = environment
-        .get("DISPLAY")
-        .and_then(|value| local_x11_display_number(value))
-        .is_some_and(|display| x11_socket_root.join(format!("X{display}")).exists());
+    let x11_ok = environment.get("DISPLAY").is_some_and(|value| {
+        local_x11_display_number(value).is_some()
+            && !graphical_value_is_dead_in("DISPLAY", value, None, x11_socket_root)
+    });
     let wayland_ok = environment
         .get("WAYLAND_DISPLAY")
         .zip(environment.get("XDG_RUNTIME_DIR"))
-        .is_some_and(|(display, runtime)| Path::new(runtime).join(display).exists());
+        .is_some_and(|(display, runtime)| {
+            !display.trim().is_empty()
+                && !graphical_value_is_dead_in(
+                    "WAYLAND_DISPLAY",
+                    display,
+                    Some(Path::new(runtime)),
+                    x11_socket_root,
+                )
+        });
     runtime_ok && bus_ok && (x11_ok || wayland_ok)
 }
 
@@ -715,7 +762,7 @@ fn ensure_health_satisfies_desktop_env(
             .filter_map(|key| {
                 std::env::var(key)
                     .ok()
-                    .filter(|value| !value.is_empty())
+                    .filter(|value| !value.is_empty() && !graphical_value_is_dead(key, value))
                     .map(|value| (key, value))
             })
             .collect::<Vec<_>>()
@@ -812,6 +859,50 @@ mod tests {
     use super::*;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn pinned_graphical_values_with_vanished_sockets_are_dead() {
+        let root = std::env::temp_dir().join(format!(
+            "sky-cua-dead-graphical-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos()
+        ));
+        let runtime = root.join("runtime");
+        let x11 = root.join("x11");
+        fs::create_dir_all(&runtime).expect("runtime dir");
+        fs::create_dir_all(&x11).expect("x11 dir");
+        fs::write(runtime.join("wayland-1"), b"").expect("live wayland socket");
+        fs::write(x11.join("X1"), b"").expect("live x11 socket");
+
+        let dead = |key, value| graphical_value_is_dead_in(key, value, Some(&runtime), &x11);
+        assert!(dead("WAYLAND_DISPLAY", "wayland-0"));
+        assert!(!dead("WAYLAND_DISPLAY", "wayland-1"));
+        assert!(dead("DISPLAY", ":0"));
+        assert!(!dead("DISPLAY", ":1.0"));
+        assert!(!dead("DISPLAY", "localhost:10.0"));
+        assert!(!dead("XDG_CURRENT_DESKTOP", "KDE"));
+        let live_xauth = runtime.join("xauth_live");
+        fs::write(&live_xauth, b"").expect("live xauth file");
+        assert!(!dead(
+            "XAUTHORITY",
+            live_xauth.to_str().expect("utf-8 path")
+        ));
+        assert!(dead(
+            "XAUTHORITY",
+            runtime.join("xauth_gone").to_str().expect("utf-8 path")
+        ));
+        assert!(!graphical_value_is_dead_in(
+            "WAYLAND_DISPLAY",
+            "wayland-0",
+            None,
+            &x11
+        ));
+
+        fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn discovers_detached_xpra_graphical_process_environment() {
@@ -1300,6 +1391,53 @@ mod tests {
         restore_env("XDG_RUNTIME_DIR", old_runtime_dir);
         let error = result.expect_err("stale service env should be rejected");
         assert!(error.to_string().contains("XDG_RUNTIME_DIR"));
+    }
+
+    #[test]
+    fn startup_health_accepts_daemon_that_healed_dead_pinned_wayland_display() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let runtime = std::env::temp_dir().join(format!(
+            "sky-cua-dead-wayland-health-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&runtime).expect("runtime dir");
+        fs::write(runtime.join("wayland-1"), b"").expect("live wayland socket");
+        let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
+        let old_wayland = std::env::var_os("WAYLAND_DISPLAY");
+        unsafe {
+            std::env::set_var("XDG_RUNTIME_DIR", &runtime);
+            std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
+        }
+        let mut desktop_env = GRAPHICAL_SESSION_ENV_KEYS
+            .iter()
+            .filter_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .filter(|value| !value.is_empty())
+                    .map(|value| ((*key).to_string(), value))
+            })
+            .collect::<BTreeMap<_, _>>();
+        desktop_env.insert("WAYLAND_DISPLAY".to_string(), "wayland-1".to_string());
+        let response = ServiceResponse::Health {
+            ok: true,
+            service_socket: "/tmp/sky-cua/service.sock".to_string(),
+            desktop_env,
+            browser_env: BTreeMap::new(),
+            protocol_version: 1,
+            service_version: "0.1.0".to_string(),
+            capabilities: Vec::new(),
+        };
+
+        let result = ensure_health_satisfies_desktop_env(&response, &[], true);
+
+        restore_env("XDG_RUNTIME_DIR", old_runtime_dir);
+        restore_env("WAYLAND_DISPLAY", old_wayland);
+        fs::remove_dir_all(&runtime).ok();
+        result.expect("a dead pinned WAYLAND_DISPLAY must not make the healed daemon stale");
     }
 
     #[test]
