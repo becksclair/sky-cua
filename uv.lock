@@ -181,13 +181,13 @@ sdist = { url = "https://files.pythonhosted.org/packages/da/61/978c5fbca34f10a90
 
 [[package]]
 name = "pygobject-stubs"
-version = "2.17.0"
+version = "2.18.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pygobject" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8c/be/bf49399ad2e788121f595903a56447d4b778d67acbb01ecfc1c6d5cf91f6/pygobject_stubs-2.17.0.tar.gz", hash = "sha256:66884d26974dd7fb99a8bc5972b5bdeb4b7399ecc7ac53913a6cafa6ab21491f", size = 1010510, upload-time = "2026-03-20T17:08:59.656Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c5/6b/5e56cd8c73570b46aead8dd563e3bf12849b6e0691844cf5255275d50b32/pygobject_stubs-2.18.0.tar.gz", hash = "sha256:1581bf005f8829cc5e6619b11774ed6c4f8f6725f3dda28f83ea2087709a76c3", size = 1072353, upload-time = "2026-10-14T16:45:09.667Z" }
 
 [[package]]
 name = "pytest"
