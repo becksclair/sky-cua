@@ -4,7 +4,13 @@ import json
 from pathlib import Path
 
 from _install_shared import project_model_skills
-from build_model_documentation import INVENTORY_NAMES, build
+from build_model_documentation import (
+    INVENTORY_NAMES,
+    LOCKED_NPM_PACKAGES,
+    build,
+    production_pins,
+    toolbox_version_drift,
+)
 
 
 def test_build_is_deterministic_and_routes_resolve(tmp_path: Path) -> None:
@@ -79,10 +85,16 @@ def test_inventory_has_no_checkout_paths_or_stale_locked_versions(tmp_path: Path
     all_bytes = b"\n".join(path.read_bytes() for path in output.rglob("*") if path.is_file())
     assert b"/home/" not in all_bytes
     assert b"24.14.0" in all_bytes
-    assert b"1.57.0" in all_bytes
-    assert b"5.4.624" in all_bytes
-    assert b"7.0.0" in all_bytes
-    assert b"0.34.5" in all_bytes
+    capability = json.loads(
+        (output / "inventories/capability-inventory.json").read_text(encoding="utf-8")
+    )
+    pins = production_pins()
+    for key, package in LOCKED_NPM_PACKAGES.items():
+        assert capability["versions"][key] == pins[package], key
+
+
+def test_toolbox_prose_versions_match_production_pins() -> None:
+    assert toolbox_version_drift(production_pins()) == []
 
 
 def test_api_inventory_binds_complete_canonical_contracts(tmp_path: Path) -> None:

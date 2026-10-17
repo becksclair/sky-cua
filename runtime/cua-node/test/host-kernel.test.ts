@@ -888,6 +888,130 @@ test("module roots persist across reset and local files reload between cells", a
   }
 });
 
+async function writeEsmPackage(
+  modules: string,
+  name: string,
+  files: Record<string, string>,
+): Promise<void> {
+  const root = join(modules, name);
+  await mkdir(root, { recursive: true });
+  await writeFile(
+    join(root, "package.json"),
+    JSON.stringify({ name, version: "1.0.0", type: "module", exports: "./index.mjs" }),
+    "utf8",
+  );
+  for (const [file, source] of Object.entries(files)) {
+    await writeFile(join(root, file), source, "utf8");
+  }
+}
+
+test("ES module graphs link diamonds, cycles, concurrent roots, and retry after failure", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cua-node-esm-graph-"));
+  const modules = join(directory, "node_modules");
+  try {
+    await writeEsmPackage(modules, "shared-dep-fixture", {
+      "index.mjs":
+        "import { inner } from './inner.mjs';\nexport const shared = 'shared:' + inner;\n",
+      "inner.mjs":
+        "import { createRequire } from 'node:module';\nimport { sep } from 'node:path';\nexport const inner = typeof createRequire === 'function' && sep === '/' ? 'inner' : 'missing';\n",
+    });
+    await writeEsmPackage(modules, "concurrent-one-fixture", {
+      "index.mjs": "import { shared } from 'shared-dep-fixture';\nexport const value = 'one/' + shared;\n",
+    });
+    await writeEsmPackage(modules, "concurrent-two-fixture", {
+      "index.mjs": "import { shared } from 'shared-dep-fixture';\nexport const value = 'two/' + shared;\n",
+    });
+    await writeEsmPackage(modules, "flaky-esm-fixture", {
+      "index.mjs":
+        "const attempt = (globalThis.__flakyEsmFixture = (globalThis.__flakyEsmFixture ?? 0) + 1);\nif (attempt === 1) throw new Error('first attempt fails');\nexport { attempt };\n",
+    });
+    await writeFile(
+      join(directory, "local-a.mjs"),
+      "import { b, readA } from './local-b.mjs';\nexport const a = 'A';\nexport const pair = a + b + readA();\n",
+      "utf8",
+    );
+    await writeFile(
+      join(directory, "local-b.mjs"),
+      "import { a } from './local-a.mjs';\nexport const b = 'B';\nexport const readA = () => a;\n",
+      "utf8",
+    );
+    await writeEsmPackage(modules, "diamond-esm-fixture", {
+      "index.mjs":
+        "import { left } from './left.mjs';\nimport { right } from './right.mjs';\nexport const value = left + right;\n",
+      "left.mjs": "import { shared } from './shared.mjs';\nexport const left = shared.id;\n",
+      "right.mjs": "import { shared } from './shared.mjs';\nexport const right = shared.id;\n",
+      "shared.mjs":
+        "import { createRequire } from 'node:module';\nexport const shared = { id: typeof createRequire(import.meta.url) === 'function' ? 'ok' : 'missing' };\n",
+    });
+    await writeEsmPackage(modules, "cycle-esm-fixture", {
+      "index.mjs": "export { a } from './a.mjs';\n",
+      "a.mjs": "import { b } from './b.mjs';\nexport const a = 'a' + b;\n",
+      "b.mjs": "import { a } from './a.mjs';\nexport const b = 'b';\nexport const sawA = () => a;\n",
+    });
+    await withServer(async (server) => {
+      const added = await server.dispatch({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "js_add_node_module_dir", arguments: { path: modules } },
+      });
+      assert.deepEqual(result(added as Response)?.content, [{ type: "text", text: "true" }]);
+      const diamond = result(
+        (await server.dispatch(
+          js(2, "var diamond = await import('diamond-esm-fixture'); nodeRepl.write(diamond.value)"),
+        )) as Response,
+      );
+      assert.equal(diamond?.isError, false);
+      assert.deepEqual(diamond?.content, [{ type: "text", text: "okok" }]);
+      const cycle = result(
+        (await server.dispatch(
+          js(3, "var cycle = await import('cycle-esm-fixture'); nodeRepl.write(cycle.a)", 10_000),
+        )) as Response,
+      );
+      assert.equal(cycle?.isError, false);
+      assert.deepEqual(cycle?.content, [{ type: "text", text: "ab" }]);
+      const concurrent = result(
+        (await server.dispatch(
+          js(
+            4,
+            "var both = await Promise.all([import('concurrent-one-fixture'), import('concurrent-two-fixture')]); nodeRepl.write(both.map((entry) => entry.value).join(','))",
+            10_000,
+          ),
+        )) as Response,
+      );
+      assert.equal(concurrent?.isError, false);
+      assert.deepEqual(concurrent?.content, [
+        { type: "text", text: "one/shared:inner,two/shared:inner" },
+      ]);
+      const firstAttempt = result(
+        (await server.dispatch(js(5, "await import('flaky-esm-fixture')", 10_000))) as Response,
+      );
+      assert.equal(firstAttempt?.isError, true);
+      assert.match(String(firstAttempt?.content?.[0]?.text), /first attempt fails/);
+      const retried = result(
+        (await server.dispatch(
+          js(6, "var flaky = await import('flaky-esm-fixture'); nodeRepl.write(String(flaky.attempt))", 10_000),
+        )) as Response,
+      );
+      assert.equal(retried?.isError, false);
+      assert.deepEqual(retried?.content, [{ type: "text", text: "2" }]);
+      const localCycle = result(
+        (await server.dispatch(
+          js(
+            7,
+            `var localCycle = await import(${JSON.stringify(`file://${join(directory, "local-a.mjs")}`)}); nodeRepl.write(localCycle.pair)`,
+            10_000,
+          ),
+        )) as Response,
+      );
+      assert.equal(localCycle?.isError, false);
+      assert.deepEqual(localCycle?.content, [{ type: "text", text: "ABA" }]);
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("fixed-path package entrypoints receive only the privileged surface", async () => {
   const directory = await mkdtemp(join(tmpdir(), "cua-node-trusted-"));
   const packageDirectory = join(directory, "node_modules", "trusted-fixture");

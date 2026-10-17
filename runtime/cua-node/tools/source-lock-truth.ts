@@ -13,6 +13,7 @@ export interface SourceTruthSnapshot {
   compliancePolicy: JsonRecord;
   complianceProvenance: JsonRecord;
   noticeInventory: JsonRecord;
+  preparedImportsLock: JsonRecord;
   distSha256: string;
   distSizeBytes: number;
   sourceBuildSha256: string;
@@ -20,23 +21,7 @@ export interface SourceTruthSnapshot {
   noticeSha256s: Record<string, string>;
 }
 
-const LOCKED_DEPENDENCIES: Record<string, string> = {
-  "@heliasar/sky-cua":
-    "file:../../../vendor/cua-node-cache/@heliasar-sky-cua-0.1.0.tgz",
-  "@img/sharp-libvips-linux-x64": "1.2.4",
-  "@img/sharp-linux-x64": "0.34.5",
-  "@napi-rs/canvas": "0.1.91",
-  "@napi-rs/canvas-linux-x64-gnu": "0.1.91",
-  acorn: "8.16.0",
-  "acorn-walk": "8.3.5",
-  "pdfjs-dist": "5.4.624",
-  pixelmatch: "7.1.0",
-  playwright: "1.57.0",
-  "playwright-core": "1.57.0",
-  sharp: "0.34.5",
-  "tesseract.js": "7.0.0",
-  "tesseract.js-core": "7.0.0",
-};
+const EXACT_PIN = /^(?:\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?|file:\S+\.tgz)$/;
 
 const NOTICE_HASHES: Record<string, string> = {
   "notices/pdfjs-cmaps.LICENSE":
@@ -117,14 +102,25 @@ export function validateSourceTruth(snapshot: SourceTruthSnapshot): string[] {
     "package-lock root dependencies",
   );
 
-  for (const [name, version] of Object.entries(LOCKED_DEPENDENCIES)) {
-    expectEqual(errors, `production dependency ${name}`, dependencies[name], version);
-    expectEqual(
-      errors,
-      `package-lock dependency ${name}`,
-      lockedRootDependencies[name],
-      version,
-    );
+  for (const name of new Set([
+    ...Object.keys(dependencies),
+    ...Object.keys(lockedRootDependencies),
+  ])) {
+    const pin = dependencies[name];
+    expectEqual(errors, `production dependency ${name}`, pin, lockedRootDependencies[name]);
+    if (typeof pin !== "string" || !EXACT_PIN.test(pin)) {
+      errors.push(`production dependency ${name} is not an exact pin: ${JSON.stringify(pin)}`);
+      continue;
+    }
+    const lockNode = lockPackages[`node_modules/${name}`];
+    if (lockNode !== undefined && !pin.startsWith("file:")) {
+      expectEqual(
+        errors,
+        `package-lock node ${name} version`,
+        record(lockNode, `package-lock ${name}`).version,
+        pin,
+      );
+    }
   }
 
   expectEqual(errors, "runtime-lock release_ready", snapshot.runtimeLock.release_ready, true);
@@ -157,49 +153,41 @@ export function validateSourceTruth(snapshot: SourceTruthSnapshot): string[] {
   expectEqual(errors, "host output SHA-256", hostOutput.sha256, snapshot.distSha256);
   expectEqual(errors, "host output size", hostOutput.size_bytes, snapshot.distSizeBytes);
 
-  for (const expected of [
-    {
-      name: "acorn",
-      version: "8.16.0",
-      integrity:
-        "sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==",
-      sha256: "e0d357db62f8b138d2e575a2cb92f087fa5d7cdb2f95d7512b9868ff3ef81277",
-      sizeBytes: 558_610,
-    },
-    {
-      name: "acorn-walk",
-      version: "8.3.5",
-      integrity:
-        "sha512-HEHNfbars9v4pgpW6SO1KSPkfoS0xVOM/9UzkJltjlsHZmJasxg8aXkuZa7SMf8vKGIBhpUsPluQSqhJFCqebw==",
-      sha256: "cd968876dd2797441c7c6de59eaa867e2d804e490e4e6c6e5d9be3d247ea6b0f",
-      sizeBytes: 53_765,
-    },
-  ]) {
-    const runtimePackage = byField(runtimePackages, "name", expected.name);
-    const license = record(runtimePackage.license, `${expected.name} license`);
-    const packageLock = record(
-      lockPackages[`node_modules/${expected.name}`],
-      `package-lock ${expected.name}`,
-    );
-    expectEqual(errors, `${expected.name} version`, runtimePackage.version, expected.version);
-    expectEqual(errors, `${expected.name} integrity`, runtimePackage.integrity, expected.integrity);
-    expectEqual(errors, `${expected.name} tree SHA-256`, runtimePackage.sha256, expected.sha256);
-    expectEqual(errors, `${expected.name} tree size`, runtimePackage.size_bytes, expected.sizeBytes);
-    expectEqual(errors, `${expected.name} license`, license.expression, "MIT");
-    expectEqual(
-      errors,
-      `${expected.name} notice path`,
-      stringArray(license.notice_files),
-      [`lib/node_modules/${expected.name}/LICENSE`],
-    );
-    expectEqual(errors, `package-lock ${expected.name} version`, packageLock.version, expected.version);
-    expectEqual(errors, `package-lock ${expected.name} license`, packageLock.license, "MIT");
-    expectEqual(
-      errors,
-      `package-lock ${expected.name} integrity`,
-      packageLock.integrity,
-      expected.integrity,
-    );
+  const preparedImports = records(
+    snapshot.preparedImportsLock.packages,
+    "prepared-imports.lock.packages",
+  );
+  expectEqual(errors, "prepared-imports schema_version", snapshot.preparedImportsLock.schema_version, 1);
+  for (const prepared of preparedImports) {
+    const name = String(prepared.name);
+    const assembled = record(prepared.assembled_tree, `${name} assembled_tree`);
+    const destination = `lib/node_modules/${name}`;
+    if (prepared.native_asset === true) {
+      const asset = byField(nativeAssets, "destination", destination);
+      expectEqual(errors, `${name} native version`, asset.version, prepared.version);
+      expectEqual(errors, `${name} native tree SHA-256`, asset.sha256, assembled.sha256);
+      expectEqual(errors, `${name} native tree size`, asset.size_bytes, assembled.size_bytes);
+    } else {
+      const runtimePackage = byField(runtimePackages, "name", name);
+      const license = record(runtimePackage.license, `${name} license`);
+      expectEqual(errors, `${name} version`, runtimePackage.version, prepared.version);
+      expectEqual(errors, `${name} integrity`, runtimePackage.integrity, prepared.integrity);
+      expectEqual(errors, `${name} tree SHA-256`, runtimePackage.sha256, assembled.sha256);
+      expectEqual(errors, `${name} tree size`, runtimePackage.size_bytes, assembled.size_bytes);
+      expectEqual(errors, `${name} license`, license.expression, prepared.license);
+      expectEqual(errors, `${name} notice path`, stringArray(license.notice_files), [
+        `${destination}/LICENSE`,
+      ]);
+    }
+    if (dependencies[name] !== undefined) {
+      expectEqual(errors, `production pin ${name}`, dependencies[name], prepared.version);
+    }
+    const lockNode = lockPackages[`node_modules/${name}`];
+    if (lockNode !== undefined) {
+      const packageLock = record(lockNode, `package-lock ${name}`);
+      expectEqual(errors, `package-lock ${name} license`, packageLock.license, prepared.license);
+      expectEqual(errors, `package-lock ${name} integrity`, packageLock.integrity, prepared.integrity);
+    }
   }
 
   const pixelmatch = byField(runtimePackages, "name", "pixelmatch");
@@ -375,6 +363,7 @@ export async function loadSourceTruthSnapshot(
     compliancePolicy: await readJson(join(complianceRoot, "policy.json")),
     complianceProvenance: await readJson(join(complianceRoot, "provenance.json")),
     noticeInventory: await readJson(join(complianceRoot, "notice-inventory.json")),
+    preparedImportsLock: await readJson(join(runtimeRoot, "prepared-imports.lock.json")),
     distSha256: sha256(distBytes),
     distSizeBytes: (await stat(distPath)).size,
     sourceBuildSha256: sha256(sourceBuildBytes),

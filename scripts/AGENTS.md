@@ -18,6 +18,12 @@ pytest.
   dev deploy as `sky-cua@local`), `standalone_release.py` through root
   `install.py` (`build`, `install`, and guarded checkout-only `release`), and
   `install_kwin_effect.py`.
+- CUA Node assembly: `assemble_cua_node.py` (orchestration and CLI) plus
+  `_cua_node_*.py` helpers. Every assembly module must be listed in
+  `_cua_node_inputs.ASSEMBLER_SOURCES`, which binds it into producer
+  provenance and release cleanliness checks. Overlaid package pins live in
+  `runtime/cua-node/prepared-imports.lock.json`; refresh them only with
+  `refresh_cua_node_pins.py` (see `docs/operations/cua-node-dependency-bumps.md`).
 - Live operator smokes are `live_*_smoke.py` and must fail honestly when app
   state is blocked. JSON schemas for final agent messages:
   `scripts/schemas/*.json`.

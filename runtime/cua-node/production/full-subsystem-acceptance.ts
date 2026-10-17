@@ -15,6 +15,8 @@ const { join, resolve } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { resolveDefaultBrowserExecutable } =
   require("../src/host/runtime-asset-discovery.ts") as typeof import("../src/host/runtime-asset-discovery.ts");
+const { productionPin: pin } =
+  require("./production-pins.ts") as typeof import("./production-pins.ts");
 
 type EvidenceValue = string | number | boolean;
 type AcceptanceCheck = {
@@ -57,18 +59,21 @@ const CHECK_IDS = [
   "playwright",
   "cleanup",
 ] as const;
-const PACKAGE_VERSIONS: ReadonlyArray<readonly [string, string]> = [
-  ["acorn", "8.16.0"],
-  ["acorn-walk", "8.3.5"],
-  ["@napi-rs/canvas", "0.1.91"],
-  ["sharp", "0.34.5"],
-  ["pdfjs-dist", "5.4.624"],
-  ["tesseract.js", "7.0.0"],
-  ["tesseract.js-core", "7.0.0"],
-  ["pixelmatch", "7.1.0"],
-  ["playwright", "1.57.0"],
-  ["playwright-core", "1.57.0"],
-];
+const PACKAGE_NAMES = [
+  "acorn",
+  "acorn-walk",
+  "@napi-rs/canvas",
+  "sharp",
+  "pdfjs-dist",
+  "tesseract.js",
+  "tesseract.js-core",
+  "pixelmatch",
+  "playwright",
+  "playwright-core",
+] as const;
+const PACKAGE_VERSIONS: ReadonlyArray<readonly [string, string]> = PACKAGE_NAMES.map(
+  (name) => [name, pin(name)] as const,
+);
 
 function sha256(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
@@ -347,8 +352,8 @@ async function executeChecks(options: CliOptions): Promise<AcceptanceReport> {
       if (program.sourceType !== "module" || identifiers.join(",") !== "answer")
         throw new Error("Acorn parse/walk evidence did not match the module fixture");
       return {
-        acorn_version: "8.16.0",
-        acorn_walk_version: "8.3.5",
+        acorn_version: pin("acorn"),
+        acorn_walk_version: pin("acorn-walk"),
         source_type: program.sourceType,
         identifiers: identifiers.join(","),
       };
@@ -558,7 +563,7 @@ async function executeChecks(options: CliOptions): Promise<AcceptanceReport> {
         await osdWorker.terminate();
       }
       return {
-        version: "7.0.0",
+        version: pin("tesseract.js"),
         languages: "eng,osd",
         recognized,
         cache: "disabled",
@@ -589,7 +594,7 @@ async function executeChecks(options: CliOptions): Promise<AcceptanceReport> {
       if (differingPixels !== 1)
         throw new Error(`expected one differing pixel; got ${differingPixels}`);
       return {
-        version: "7.1.0",
+        version: pin("pixelmatch"),
         width: 4,
         height: 4,
         differing_pixels: differingPixels,
@@ -635,7 +640,7 @@ async function executeChecks(options: CliOptions): Promise<AcceptanceReport> {
         if (readback !== "PLAYWRIGHT OFFLINE INPUT")
           throw new Error(`Playwright readback mismatch: ${readback ?? "null"}`);
         return {
-          version: "1.57.0",
+          version: pin("playwright"),
           browser: "explicit-system-chromium",
           page_click: true,
           keyboard_type: true,

@@ -41,6 +41,24 @@ test("source lock truth rejects dependency drift", async () => {
   );
 });
 
+test("source lock truth rejects range pins and package-lock node drift", async () => {
+  const snapshot = clone(await loadSourceTruthSnapshot());
+  const dependencies = snapshot.productionPackage.dependencies as Record<string, unknown>;
+  const lockPackages = snapshot.productionPackageLock.packages as Record<
+    string,
+    Record<string, unknown>
+  >;
+  const lockRoot = lockPackages[""]?.dependencies as Record<string, unknown>;
+  dependencies.sharp = "^0.35.5";
+  lockRoot.sharp = "^0.35.5";
+  const acornNode = lockPackages["node_modules/acorn"];
+  assert.ok(acornNode);
+  acornNode.version = "0.0.0-drift";
+  const errors = validateSourceTruth(snapshot);
+  assert.ok(errors.some((error) => error.startsWith("production dependency sharp is not an exact pin:")));
+  assert.ok(errors.some((error) => error.startsWith("package-lock node acorn version drifted:")));
+});
+
 test("source lock truth rejects license and notice drift", async () => {
   const snapshot = clone(await loadSourceTruthSnapshot());
   const assets = snapshot.nativeLock.assets as Array<Record<string, unknown>>;

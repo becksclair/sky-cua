@@ -219,16 +219,16 @@
     {
       "id": "sharp-linux-x64",
       "kind": "native-addon",
-      "version": "0.34.5",
+      "version": "0.35.5",
       "source": {
-        "type": "local-cache",
-        "uri": "opencode-cache/true-mem@latest/node_modules/@img/sharp-linux-x64",
-        "provenance": "exact local x64 package tree",
+        "type": "npm",
+        "uri": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.35.5.tgz",
+        "provenance": "official npm registry package prepared by the frozen runtime/cua-node Bun lockfile",
         "resolved": true
       },
-      "sha256": "dd697b76137cf99ab3aec210f6648f3d1269fbbe247506fd80937752e48078e3",
+      "sha256": "7b5668c947ccc68be544233de3f5cccef3b1b809d981a47c70acb1f11ddba6cf",
       "sha256_scope": "tree-manifest",
-      "size_bytes": 422864,
+      "size_bytes": 427138,
       "license": {
         "expression": "Apache-2.0",
         "notice_files": [
@@ -271,16 +271,16 @@
     {
       "id": "sharp-libvips-linux-x64",
       "kind": "native-library",
-      "version": "1.2.4",
+      "version": "1.3.4",
       "source": {
-        "type": "local-cache",
-        "uri": "opencode-cache/true-mem@latest/node_modules/@img/sharp-libvips-linux-x64",
-        "provenance": "exact local x64 package tree; corresponding source and notices recorded by compliance source offer",
+        "type": "npm",
+        "uri": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.3.4.tgz",
+        "provenance": "official npm registry package prepared by the frozen runtime/cua-node Bun lockfile; corresponding source and notices recorded by compliance source offer",
         "resolved": true
       },
-      "sha256": "433a2bdd05c1f8e9a8cc2272d602d6537d78997ac4724d6fb9a50f56a26868b2",
+      "sha256": "f52781f482a141ab8eddfb5946b70bcfbd932afa9fc821e0a93898d0a0ee85e8",
       "sha256_scope": "tree-manifest",
-      "size_bytes": 16656835,
+      "size_bytes": 18711101,
       "license": {
         "expression": "LGPL-3.0-or-later",
         "notice_files": [

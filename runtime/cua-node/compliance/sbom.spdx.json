@@ -354,8 +354,8 @@
     {
       "SPDXID": "SPDXRef-sharp",
       "name": "sharp",
-      "versionInfo": "0.34.5",
-      "downloadLocation": "https://registry.npmjs.org/sharp/-/sharp-0.34.5.tgz",
+      "versionInfo": "0.35.5",
+      "downloadLocation": "https://registry.npmjs.org/sharp/-/sharp-0.35.5.tgz",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
       "licenseDeclared": "Apache-2.0",
@@ -364,7 +364,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/sharp@0.34.5"
+          "referenceLocator": "pkg:npm/sharp@0.35.5"
         }
       ],
       "attributionTexts": [
@@ -374,33 +374,33 @@
     {
       "SPDXID": "SPDXRef-sharp-libvips-linux-x64",
       "name": "sharp bundled libvips Linux x64",
-      "versionInfo": "1.2.4",
-      "downloadLocation": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.2.4.tgz",
+      "versionInfo": "1.3.4",
+      "downloadLocation": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.3.4.tgz",
       "filesAnalyzed": false,
       "licenseConcluded": "LGPL-3.0-or-later",
       "licenseDeclared": "LGPL-3.0-or-later",
-      "packageComment": "routine-notice-clearance; npm SLSA binds package 1.2.4 to sharp-libvips commit 20b5e899954907a3039d6e3d4c200aaa0ec52c4c. The operational source-offer record pins the Linux build, libvips 8.17.3, all 29 notice components, patches, direct source URLs, and notices.",
+      "packageComment": "routine-notice-clearance; npm SLSA binds package 1.3.4 to sharp-libvips commit ebb95f8add54eee8bed840e3fb587e4cbec857d7. The operational source-offer record pins the Linux build, libvips 8.18.7, all 29 notice components, patches, direct source URLs, and notices.",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@img/sharp-libvips-linux-x64@1.2.4"
+          "referenceLocator": "pkg:npm/@img/sharp-libvips-linux-x64@1.3.4"
         }
       ],
       "attributionTexts": [
         "libvips-component-notices",
         "libvips-license",
-        "notices/sharp-libvips-1.2.4.NOTICE.md",
-        "sharp-libvips-1.2.4-source-offer.json"
+        "notices/sharp-libvips-1.3.4.NOTICE.md",
+        "sharp-libvips-1.3.4-source-offer.json"
       ],
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "9a2a2cf2b53ec123b3ee293bf66c234f8306681a5edfb058815b6bf66b9df8e9"
+          "checksumValue": "4aa73553408c3964071728f4a231a8e86918e39bc49f1fbae75355f7ea933ea9"
         },
         {
           "algorithm": "SHA512",
-          "checksumValue": "b49c6288bb261dcf40c756f3de868e6015114d718844338306a86f7951e89eb1c9f7ffa4f3da9b2e5d1b7099ecf9ee2de2bbda341c5a119b05b527c076ab8faf"
+          "checksumValue": "189fff4925db9f04837acd36ba60779c324b15c433c3c6b5f15f1fca1aabead579d79b4e10c7489a38f18f502869f311cf9e85dcf1e07ed9e3d5010a494d7393"
         }
       ],
       "licenseComments": "Project designation: LGPL-3.0-or-later plus codec component notices"
@@ -408,8 +408,8 @@
     {
       "SPDXID": "SPDXRef-sharp-linux-x64-addon",
       "name": "sharp Linux x64 native addon",
-      "versionInfo": "0.34.5",
-      "downloadLocation": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.34.5.tgz",
+      "versionInfo": "0.35.5",
+      "downloadLocation": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.35.5.tgz",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
       "licenseDeclared": "Apache-2.0",
@@ -418,7 +418,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@img/sharp-linux-x64@0.34.5"
+          "referenceLocator": "pkg:npm/@img/sharp-linux-x64@0.35.5"
         }
       ],
       "attributionTexts": [

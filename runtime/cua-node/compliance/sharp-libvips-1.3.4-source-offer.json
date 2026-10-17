@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "component_id": "sharp-libvips-linux-x64",
+  "status": "operational",
+  "artifact": {
+    "uri": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.3.4.tgz",
+    "version": "1.3.4",
+    "npm_sha1": "a0de3840ae386476eb4045d6d2b056a8062c548b",
+    "npm_sha512": "189fff4925db9f04837acd36ba60779c324b15c433c3c6b5f15f1fca1aabead579d79b4e10c7489a38f18f502869f311cf9e85dcf1e07ed9e3d5010a494d7393",
+    "native_library_sha256": "4aa73553408c3964071728f4a231a8e86918e39bc49f1fbae75355f7ea933ea9",
+    "native_library_scope": "package/lib/libvips-cpp.so.8.18.7",
+    "attestation_uri": "https://registry.npmjs.org/-/npm/v1/attestations/@img%2fsharp-libvips-linux-x64@1.3.4"
+  },
+  "corresponding_source": {
+    "repository": "https://github.com/lovell/sharp-libvips",
+    "revision": "ebb95f8add54eee8bed840e3fb587e4cbec857d7",
+    "tag": "v1.3.4",
+    "tree_uri": "https://github.com/lovell/sharp-libvips/tree/ebb95f8add54eee8bed840e3fb587e4cbec857d7",
+    "build_script_uri": "https://raw.githubusercontent.com/lovell/sharp-libvips/ebb95f8add54eee8bed840e3fb587e4cbec857d7/build/posix.sh",
+    "entrypoint_uri": "https://raw.githubusercontent.com/lovell/sharp-libvips/ebb95f8add54eee8bed840e3fb587e4cbec857d7/build.sh",
+    "versions_uri": "https://raw.githubusercontent.com/lovell/sharp-libvips/ebb95f8add54eee8bed840e3fb587e4cbec857d7/versions.properties",
+    "platform_uri": "https://github.com/lovell/sharp-libvips/tree/ebb95f8add54eee8bed840e3fb587e4cbec857d7/platforms/linux-x64",
+    "slsa_subject_commit": "ebb95f8add54eee8bed840e3fb587e4cbec857d7"
+  },
+  "build": {
+    "target": "linux-x64",
+    "command": "./build.sh linux-x64",
+    "container_definition_uri": "https://raw.githubusercontent.com/lovell/sharp-libvips/ebb95f8add54eee8bed840e3fb587e4cbec857d7/platforms/linux-x64/Dockerfile",
+    "toolchain_uri": "https://raw.githubusercontent.com/lovell/sharp-libvips/ebb95f8add54eee8bed840e3fb587e4cbec857d7/platforms/linux-x64/Toolchain.cmake",
+    "meson_cross_file_uri": "https://raw.githubusercontent.com/lovell/sharp-libvips/ebb95f8add54eee8bed840e3fb587e4cbec857d7/platforms/linux-x64/meson.ini",
+    "composition": "The pinned Linux x64 glibc build compiles its selected dependencies as static libraries, applies the recorded upstream patches from build/posix.sh, links them into the shared libvips-cpp.so.8.18.7, and packages that library plus headers and versions.json. proxy-libintl is recorded because it appears in versions.json and the upstream notice inventory, but its conditional build is not selected for glibc. Highway is built with HWY_ENABLE_CONTRIB=0, so its CC0-1.0 contrib file is not compiled.",
+    "patches": [
+      {"uri": "https://gist.github.com/kleisauke/284d685efa00908da99ea6afbaaf39ae/raw/bdad5489a61c217850631571caf57f5db6ea8b2c/glib-without-gregex.patch", "sha256": "b1f2930a11292e529de137c7eb723850e0cc0969b1a2b0358196389312acd272"},
+      {"uri": "https://github.com/mozilla/mozjpeg/commit/f90668e0e4fb79c81e1f24a0ccc0e2090af761bf.patch", "sha256": "a65f87cadf3a6052e44d6314c906f6e2891352f82646b8a6f0b8fcf2c1891e7c"},
+      {"uri": "https://github.com/GNOME/librsvg/commit/9106011db93d701728ac2c9da50c9ab2c1bb5dc6.patch", "sha256": "8b841d2ec8feb964fa76859075e0e0c41b69136ba143cf0d26469d9bebc19231"},
+      {"uri": "https://patch-diff.githubusercontent.com/raw/google/libultrahdr/pull/383.patch", "sha256": "57658db2a11ae964755e513b01db21bcfa408c350b11b3a6ef9bc8576fb749ba"},
+      {"uri": "https://gist.githubusercontent.com/lovell/313a6901e9db1bf285f2a1f1180499e4/raw/3988223c7dfa4d22745d9392034b0117abef1446/libvips-cpp-soversion.patch", "sha256": "256b7d6f8c973bb53b20cff5171c7117d6b35d3aa4e72d22cb906f4fe1e2c890"}
+    ]
+  },
+  "offer": {
+    "delivery_channel": "Direct versioned upstream source and build URLs in this record",
+    "valid_until": "perpetual-while-distributed",
+    "license": "LGPL-3.0-or-later",
+    "license_uri": "https://www.gnu.org/licenses/lgpl-3.0.txt",
+    "gpl_terms_uri": "https://www.gnu.org/licenses/gpl-3.0.txt",
+    "libvips_license_uri": "https://raw.githubusercontent.com/libvips/libvips/v8.18.7/LICENSE",
+    "build_scripts_license_uri": "https://raw.githubusercontent.com/lovell/sharp-libvips/ebb95f8add54eee8bed840e3fb587e4cbec857d7/LICENSE",
+    "component_notice_path": "notices/sharp-libvips-1.3.4.NOTICE.md"
+  },
+  "components": [
+    {"id":"aom","version":"3.15.1","source_uri":"https://storage.googleapis.com/aom-releases/libaom-3.15.1.tar.gz","license":"BSD-2-Clause AND LicenseRef-AOM-Patent-1.0","notice_uri":"https://aomedia.googlesource.com/aom/+/v3.15.1/LICENSE"},
+    {"id":"libarchive","version":"3.8.9","source_uri":"https://github.com/libarchive/libarchive/releases/download/v3.8.9/libarchive-3.8.9.tar.xz","license":"BSD-2-Clause","notice_uri":"https://raw.githubusercontent.com/libarchive/libarchive/v3.8.9/COPYING"},
+    {"id":"cairo","version":"1.18.6","source_uri":"https://cairographics.org/releases/cairo-1.18.6.tar.xz","license":"MPL-1.1 OR LGPL-2.1-only","notice_uri":"https://gitlab.freedesktop.org/cairo/cairo/-/blob/1.18.6/COPYING"},
+    {"id":"cgif","version":"0.5.4","source_uri":"https://github.com/dloebl/cgif/archive/v0.5.4.tar.gz","license":"MIT","notice_uri":"https://raw.githubusercontent.com/dloebl/cgif/v0.5.4/LICENSE"},
+    {"id":"libexif","version":"0.6.26","source_uri":"https://github.com/libexif/libexif/releases/download/v0.6.26/libexif-0.6.26.tar.xz","license":"LGPL-2.1-or-later","notice_uri":"https://raw.githubusercontent.com/libexif/libexif/v0.6.26/COPYING"},
+    {"id":"expat","version":"2.8.5","source_uri":"https://github.com/libexpat/libexpat/releases/download/R_2_8_5/expat-2.8.5.tar.xz","license":"MIT","notice_uri":"https://raw.githubusercontent.com/libexpat/libexpat/R_2_8_5/COPYING"},
+    {"id":"libffi","version":"3.8.0","source_uri":"https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz","license":"MIT","notice_uri":"https://raw.githubusercontent.com/libffi/libffi/v3.8.0/LICENSE"},
+    {"id":"fontconfig","version":"2.18.3","source_uri":"https://gitlab.freedesktop.org/fontconfig/fontconfig/-/archive/2.18.3/fontconfig-2.18.3.tar.gz","license":"MIT","notice_uri":"https://gitlab.freedesktop.org/fontconfig/fontconfig/-/blob/2.18.3/COPYING"},
+    {"id":"freetype","version":"2.14.3","source_uri":"https://github.com/freetype/freetype/archive/VER-2-14-3.tar.gz","license":"FTL OR GPL-2.0-or-later","notice_uri":"https://raw.githubusercontent.com/freetype/freetype/VER-2-14-3/docs/FTL.TXT"},
+    {"id":"fribidi","version":"1.0.17","source_uri":"https://github.com/fribidi/fribidi/releases/download/v1.0.17/fribidi-1.0.17.tar.xz","license":"LGPL-2.1-or-later","notice_uri":"https://raw.githubusercontent.com/fribidi/fribidi/v1.0.17/COPYING"},
+    {"id":"glib","version":"2.90.0","source_uri":"https://download.gnome.org/sources/glib/2.90/glib-2.90.0.tar.xz","license":"LGPL-2.1-or-later","notice_uri":"https://gitlab.gnome.org/GNOME/glib/-/blob/2.90.0/COPYING"},
+    {"id":"harfbuzz","version":"14.5.0","source_uri":"https://github.com/harfbuzz/harfbuzz/archive/14.5.0.tar.gz","license":"MIT","notice_uri":"https://raw.githubusercontent.com/harfbuzz/harfbuzz/14.5.0/COPYING"},
+    {"id":"libheif","version":"1.23.5","source_uri":"https://github.com/strukturag/libheif/releases/download/v1.23.5/libheif-1.23.5.tar.gz","license":"LGPL-3.0-or-later","notice_uri":"https://raw.githubusercontent.com/strukturag/libheif/v1.23.5/COPYING"},
+    {"id":"highway","version":"1.4.0","source_uri":"https://github.com/google/highway/archive/1.4.0.tar.gz","license":"Apache-2.0 OR BSD-3-Clause","notice_uri":"https://raw.githubusercontent.com/google/highway/1.4.0/LICENSE"},
+    {"id":"libimagequant","version":"2.4.1","source_uri":"https://github.com/lovell/libimagequant/archive/v2.4.1.tar.gz","license":"BSD-2-Clause","notice_uri":"https://raw.githubusercontent.com/lovell/libimagequant/v2.4.1/COPYRIGHT"},
+    {"id":"lcms2","version":"2.19.1","source_uri":"https://github.com/mm2/Little-CMS/releases/download/lcms2.19.1/lcms2-2.19.1.tar.gz","license":"MIT","notice_uri":"https://raw.githubusercontent.com/mm2/Little-CMS/lcms2.19.1/LICENSE"},
+    {"id":"mozjpeg","version":"0826579","source_uri":"https://github.com/mozilla/mozjpeg/archive/0826579.tar.gz","license":"BSD-3-Clause AND IJG AND Zlib","notice_uri":"https://raw.githubusercontent.com/mozilla/mozjpeg/0826579/LICENSE.md"},
+    {"id":"pango","version":"1.58.2","source_uri":"https://download.gnome.org/sources/pango/1.58/pango-1.58.2.tar.xz","license":"LGPL-2.1-or-later","notice_uri":"https://gitlab.gnome.org/GNOME/pango/-/blob/1.58.2/COPYING"},
+    {"id":"pixman","version":"0.46.4","source_uri":"https://cairographics.org/releases/pixman-0.46.4.tar.gz","license":"MIT","notice_uri":"https://gitlab.freedesktop.org/pixman/pixman/-/blob/pixman-0.46.4/COPYING"},
+    {"id":"libpng","version":"1.6.58","source_uri":"https://github.com/pnggroup/libpng/archive/v1.6.58.tar.gz","license":"Libpng-2.0","notice_uri":"https://raw.githubusercontent.com/pnggroup/libpng/v1.6.58/LICENSE"},
+    {"id":"proxy-libintl","version":"0.5","source_uri":"https://github.com/frida/proxy-libintl/archive/0.5.tar.gz","license":"LGPL-2.1-or-later","notice_uri":"https://raw.githubusercontent.com/frida/proxy-libintl/0.5/COPYING"},
+    {"id":"librsvg","version":"2.63.2","source_uri":"https://download.gnome.org/sources/librsvg/2.63/librsvg-2.63.2.tar.xz","license":"LGPL-2.1-or-later","notice_uri":"https://gitlab.gnome.org/GNOME/librsvg/-/blob/2.63.2/COPYING.LIB"},
+    {"id":"libtiff","version":"4.7.2","source_uri":"https://gitlab.com/libtiff/libtiff/-/archive/v4.7.2/libtiff-v4.7.2.tar.gz","license":"libtiff","notice_uri":"https://gitlab.com/libtiff/libtiff/-/blob/v4.7.2/LICENSE.md"},
+    {"id":"libultrahdr","version":"2.0.2","source_uri":"https://github.com/google/libultrahdr/archive/v2.0.2.tar.gz","license":"MIT AND Apache-2.0","notice_uri":"https://raw.githubusercontent.com/google/libultrahdr/v2.0.2/LICENSE"},
+    {"id":"libvips","version":"8.18.7","source_uri":"https://github.com/libvips/libvips/releases/download/v8.18.7/vips-8.18.7.tar.xz","license":"LGPL-2.1-or-later","notice_uri":"https://raw.githubusercontent.com/libvips/libvips/v8.18.7/LICENSE"},
+    {"id":"libwebp","version":"1.6.0","source_uri":"https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz","license":"BSD-3-Clause","notice_uri":"https://chromium.googlesource.com/webm/libwebp/+/v1.6.0/COPYING"},
+    {"id":"libxml2","version":"2.15.4","source_uri":"https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz","license":"MIT","notice_uri":"https://gitlab.gnome.org/GNOME/libxml2/-/blob/v2.15.4/Copyright"},
+    {"id":"zlib-ng","version":"2.3.3","source_uri":"https://github.com/zlib-ng/zlib-ng/archive/2.3.3.tar.gz","license":"Zlib","notice_uri":"https://raw.githubusercontent.com/zlib-ng/zlib-ng/2.3.3/LICENSE.md"},
+    {"id":"libnsgif","version":"vendored-in-libvips-8.18.7","source_uri":"https://github.com/libvips/libvips/tree/v8.18.7/libvips/foreign/libnsgif","license":"MIT","notice_uri":"https://raw.githubusercontent.com/libvips/libvips/v8.18.7/libvips/foreign/libnsgif/COPYING"}
+  ]
+}

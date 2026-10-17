@@ -14,12 +14,14 @@
 			"provenance": "canonical first-party host/kernel bundle built from sky-cua runtime/cua-node/src/cli.ts",
 			"resolved": true
 		},
-		"sha256": "e618d67937e53dadd47b88269a096a2f68a04eded811e283062fdb92649c4493",
+		"sha256": "82214a34b6f125f67b5b1d04b983ba452c4b9f093de1a15680bfcbee0a3ea368",
 		"sha256_scope": "artifact",
-		"size_bytes": 620253,
+		"size_bytes": 635489,
 		"license": {
 			"expression": "Apache-2.0",
-			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"notice_files": [
+				"licenses/THIRD_PARTY_NOTICES.md"
+			],
 			"redistribution_status": "approved"
 		},
 		"platform": {
@@ -46,7 +48,9 @@
 		"redistribution": {
 			"status": "approved",
 			"allowed": true,
-			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"notice_files": [
+				"licenses/THIRD_PARTY_NOTICES.md"
+			],
 			"source_offer_required": false,
 			"approval": "resolved production provenance"
 		}
@@ -65,7 +69,9 @@
 		"size_bytes": 122466960,
 		"license": {
 			"expression": "Apache-2.0",
-			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"notice_files": [
+				"licenses/THIRD_PARTY_NOTICES.md"
+			],
 			"redistribution_status": "approved"
 		},
 		"platform": {
@@ -92,7 +98,9 @@
 		"redistribution": {
 			"status": "approved",
 			"allowed": true,
-			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"notice_files": [
+				"licenses/THIRD_PARTY_NOTICES.md"
+			],
 			"source_offer_required": false,
 			"approval": "resolved production provenance"
 		}
@@ -111,7 +119,9 @@
 		"size_bytes": 9769763,
 		"license": {
 			"expression": "Apache-2.0",
-			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"notice_files": [
+				"licenses/THIRD_PARTY_NOTICES.md"
+			],
 			"redistribution_status": "approved"
 		},
 		"platform": {
@@ -138,7 +148,9 @@
 		"redistribution": {
 			"status": "approved",
 			"allowed": true,
-			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"notice_files": [
+				"licenses/THIRD_PARTY_NOTICES.md"
+			],
 			"source_offer_required": false,
 			"approval": "resolved production provenance"
 		}
@@ -157,7 +169,9 @@
 		"size_bytes": 1040115,
 		"license": {
 			"expression": "Apache-2.0",
-			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"notice_files": [
+				"licenses/THIRD_PARTY_NOTICES.md"
+			],
 			"redistribution_status": "approved"
 		},
 		"platform": {
@@ -184,7 +198,9 @@
 		"redistribution": {
 			"status": "approved",
 			"allowed": true,
-			"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+			"notice_files": [
+				"licenses/THIRD_PARTY_NOTICES.md"
+			],
 			"source_offer_required": false,
 			"approval": "resolved production provenance"
 		}
@@ -204,7 +220,9 @@
 			"size_bytes": 3888386,
 			"license": {
 				"expression": "Apache-2.0",
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"redistribution_status": "approved"
 			},
 			"platform": {
@@ -231,7 +249,9 @@
 			"redistribution": {
 				"status": "approved",
 				"allowed": true,
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"source_offer_required": false,
 				"approval": "resolved production provenance"
 			},
@@ -252,7 +272,9 @@
 			"size_bytes": 8290562,
 			"license": {
 				"expression": "Apache-2.0",
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"redistribution_status": "approved"
 			},
 			"platform": {
@@ -279,7 +301,9 @@
 			"redistribution": {
 				"status": "approved",
 				"allowed": true,
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"source_offer_required": false,
 				"approval": "resolved production provenance"
 			},
@@ -300,7 +324,9 @@
 			"size_bytes": 37633076,
 			"license": {
 				"expression": "Apache-2.0",
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"redistribution_status": "approved"
 			},
 			"platform": {
@@ -327,7 +353,9 @@
 			"redistribution": {
 				"status": "approved",
 				"allowed": true,
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"source_offer_required": false,
 				"approval": "resolved production provenance"
 			},
@@ -348,7 +376,9 @@
 			"size_bytes": 1412077,
 			"license": {
 				"expression": "Apache-2.0",
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"redistribution_status": "approved"
 			},
 			"platform": {
@@ -375,7 +405,9 @@
 			"redistribution": {
 				"status": "approved",
 				"allowed": true,
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"source_offer_required": false,
 				"approval": "resolved production provenance"
 			},
@@ -396,7 +428,9 @@
 			"size_bytes": 45262431,
 			"license": {
 				"expression": "Apache-2.0",
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"redistribution_status": "approved"
 			},
 			"platform": {
@@ -423,7 +457,9 @@
 			"redistribution": {
 				"status": "approved",
 				"allowed": true,
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"source_offer_required": false,
 				"approval": "resolved production provenance"
 			},
@@ -432,19 +468,21 @@
 		},
 		{
 			"name": "sharp",
-			"version": "0.34.5",
+			"version": "0.35.5",
 			"source": {
-				"type": "local-cache",
-				"uri": "opencode-cache/true-mem@latest/node_modules/sharp",
-				"provenance": "exact local x64 package tree",
+				"type": "npm",
+				"uri": "https://registry.npmjs.org/sharp/-/sharp-0.35.5.tgz",
+				"provenance": "official npm registry package prepared by the frozen runtime/cua-node Bun lockfile",
 				"resolved": true
 			},
-			"sha256": "b8516cba2ee6093b7ce40e67a1b385d2033486fc0e06e03cbf38c6ce45944915",
+			"sha256": "4610510166dc6f5687d396e799d90946c260aa4bcc84d80e28602818363f4e0f",
 			"sha256_scope": "tree-manifest",
-			"size_bytes": 533571,
+			"size_bytes": 961256,
 			"license": {
 				"expression": "Apache-2.0",
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"lib/node_modules/sharp/LICENSE"
+				],
 				"redistribution_status": "approved"
 			},
 			"platform": {
@@ -471,12 +509,66 @@
 			"redistribution": {
 				"status": "approved",
 				"allowed": true,
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"lib/node_modules/sharp/LICENSE"
+				],
 				"source_offer_required": false,
 				"approval": "resolved production provenance"
 			},
 			"destination": "lib/node_modules/sharp",
-			"integrity": "sha512-Ou9I5Ft9WNcCbXrU9cMgPBcCK8LiwLqcbywW3t4oDV37n1pzpuNLsYiAV8eODnjbtQlSDwZ2cUEeQz4E54Hltg=="
+			"integrity": "sha512-Ywn4OnzGukp7CDMrp08RQ50YKmuwG47brZgIVPTvBaaAfQlRlygrRqSrxdCiL9M+LlzLBiJ68IR1QqvzHyjC7g=="
+		},
+		{
+			"name": "semver",
+			"version": "7.8.5",
+			"source": {
+				"type": "npm",
+				"uri": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
+				"provenance": "official npm registry package prepared by the frozen runtime/cua-node Bun lockfile",
+				"resolved": true
+			},
+			"sha256": "f3e9328845d476a18c5b2ef0ac98356079883a3d94329d9feea9454397ce1a9e",
+			"sha256_scope": "tree-manifest",
+			"size_bytes": 101065,
+			"license": {
+				"expression": "ISC",
+				"notice_files": [
+					"lib/node_modules/semver/LICENSE"
+				],
+				"redistribution_status": "approved"
+			},
+			"platform": {
+				"os": "linux",
+				"arch": "x64",
+				"libc": "glibc",
+				"glibc_max_required": "2.28"
+			},
+			"native_dependency_audit": {
+				"status": "not-applicable",
+				"abi": {
+					"format": "none",
+					"class": null,
+					"machine": null
+				},
+				"files": [],
+				"needed": [],
+				"rpath": [],
+				"runpath": [],
+				"glibc_max_required": null,
+				"ldd": "not-applicable",
+				"notes": []
+			},
+			"redistribution": {
+				"status": "approved",
+				"allowed": true,
+				"notice_files": [
+					"lib/node_modules/semver/LICENSE"
+				],
+				"source_offer_required": false,
+				"approval": "resolved production provenance"
+			},
+			"destination": "lib/node_modules/semver",
+			"integrity": "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA=="
 		},
 		{
 			"name": "@napi-rs/canvas",
@@ -546,7 +638,9 @@
 			"size_bytes": 558610,
 			"license": {
 				"expression": "MIT",
-				"notice_files": ["lib/node_modules/acorn/LICENSE"],
+				"notice_files": [
+					"lib/node_modules/acorn/LICENSE"
+				],
 				"redistribution_status": "approved"
 			},
 			"platform": {
@@ -573,7 +667,9 @@
 			"redistribution": {
 				"status": "approved",
 				"allowed": true,
-				"notice_files": ["lib/node_modules/acorn/LICENSE"],
+				"notice_files": [
+					"lib/node_modules/acorn/LICENSE"
+				],
 				"source_offer_required": false,
 				"approval": "resolved production provenance"
 			},
@@ -594,7 +690,9 @@
 			"size_bytes": 53765,
 			"license": {
 				"expression": "MIT",
-				"notice_files": ["lib/node_modules/acorn-walk/LICENSE"],
+				"notice_files": [
+					"lib/node_modules/acorn-walk/LICENSE"
+				],
 				"redistribution_status": "approved"
 			},
 			"platform": {
@@ -621,7 +719,9 @@
 			"redistribution": {
 				"status": "approved",
 				"allowed": true,
-				"notice_files": ["lib/node_modules/acorn-walk/LICENSE"],
+				"notice_files": [
+					"lib/node_modules/acorn-walk/LICENSE"
+				],
 				"source_offer_required": false,
 				"approval": "resolved production provenance"
 			},
@@ -642,7 +742,9 @@
 			"size_bytes": 19428,
 			"license": {
 				"expression": "ISC",
-				"notice_files": ["lib/node_modules/pixelmatch/LICENSE"],
+				"notice_files": [
+					"lib/node_modules/pixelmatch/LICENSE"
+				],
 				"redistribution_status": "approved"
 			},
 			"platform": {
@@ -669,7 +771,9 @@
 			"redistribution": {
 				"status": "approved",
 				"allowed": true,
-				"notice_files": ["lib/node_modules/pixelmatch/LICENSE"],
+				"notice_files": [
+					"lib/node_modules/pixelmatch/LICENSE"
+				],
 				"source_offer_required": false,
 				"approval": "resolved production provenance"
 			},
@@ -690,7 +794,9 @@
 			"size_bytes": 102290,
 			"license": {
 				"expression": "LicenseRef-Heliasar-Proprietary",
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"redistribution_status": "approved"
 			},
 			"platform": {
@@ -717,7 +823,9 @@
 			"redistribution": {
 				"status": "approved",
 				"allowed": true,
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"source_offer_required": false,
 				"approval": "resolved production provenance"
 			},
@@ -740,7 +848,9 @@
 			"size_bytes": 9448,
 			"license": {
 				"expression": "Apache-2.0",
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"redistribution_status": "approved"
 			},
 			"platform": {
@@ -767,7 +877,9 @@
 			"redistribution": {
 				"status": "approved",
 				"allowed": true,
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"source_offer_required": false,
 				"approval": "resolved production provenance"
 			},
@@ -779,15 +891,17 @@
 			"source": {
 				"type": "first-party-build",
 				"uri": "runtime/cua-node/dist/cli.js",
-				"provenance": "canonical sky-cua bundle sha256 e618d67937e53dadd47b88269a096a2f68a04eded811e283062fdb92649c4493",
+				"provenance": "canonical sky-cua bundle sha256 82214a34b6f125f67b5b1d04b983ba452c4b9f093de1a15680bfcbee0a3ea368",
 				"resolved": true
 			},
-			"sha256": "e618d67937e53dadd47b88269a096a2f68a04eded811e283062fdb92649c4493",
+			"sha256": "82214a34b6f125f67b5b1d04b983ba452c4b9f093de1a15680bfcbee0a3ea368",
 			"sha256_scope": "artifact",
-			"size_bytes": 620253,
+			"size_bytes": 635489,
 			"license": {
 				"expression": "Apache-2.0",
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"redistribution_status": "approved"
 			},
 			"platform": {
@@ -814,7 +928,9 @@
 			"redistribution": {
 				"status": "approved",
 				"allowed": true,
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"source_offer_required": false,
 				"approval": "resolved production provenance"
 			},
@@ -834,7 +950,9 @@
 			"size_bytes": 86,
 			"license": {
 				"expression": "Apache-2.0",
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"redistribution_status": "approved"
 			},
 			"platform": {
@@ -861,7 +979,9 @@
 			"redistribution": {
 				"status": "approved",
 				"allowed": true,
-				"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+				"notice_files": [
+					"licenses/THIRD_PARTY_NOTICES.md"
+				],
 				"source_offer_required": false,
 				"approval": "resolved production provenance"
 			},
@@ -888,7 +1008,9 @@
 	"redistribution": {
 		"status": "approved",
 		"allowed": true,
-		"notice_files": ["licenses/THIRD_PARTY_NOTICES.md"],
+		"notice_files": [
+			"licenses/THIRD_PARTY_NOTICES.md"
+		],
 		"source_offer_required": false,
 		"approval": "resolved production provenance"
 	}

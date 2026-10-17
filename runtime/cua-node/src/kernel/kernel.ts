@@ -44,6 +44,7 @@ const runtimeMetadata = parseRuntimeMetadata(process.env.NODE_REPL_RUNTIME_METAD
 const addedModuleDirs = [];
 const addedModuleDirSet = new Set();
 const cachedModules = new Map();
+let moduleLinkQueue = Promise.resolve();
 const commonJsModules = new Map();
 const commonJsCache = Object.create(null);
 const commonJsModuleChildren = new WeakMap();

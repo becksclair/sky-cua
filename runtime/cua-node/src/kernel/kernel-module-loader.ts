@@ -214,7 +214,42 @@ export const KERNEL_MODULE_LOADING_SOURCE = String.raw`function moduleMeta(meta,
   };
 }
 
+// V8 links a whole graph from its root, so a module still linking under one root
+// must never be handed to another root; link phases are serialized, evaluation is not.
+function withModuleLinkLock(link) {
+  const run = moduleLinkQueue.then(link);
+  moduleLinkQueue = run.then(() => undefined, () => undefined);
+  return run;
+}
+
 async function loadModule(specifier, referrer, context, parentTrusted, parentPackage) {
+  const graph = { created: [], uncached: new Map() };
+  try {
+    const module = await withModuleLinkLock(async () => {
+      const root = await instantiateModule(specifier, referrer, context, parentTrusted, parentPackage, graph);
+      if (root.status === 'unlinked') {
+        await root.link((childSpecifier, referencingModule) => instantiateModule(
+          childSpecifier,
+          referencingModule.identifier,
+          referencingModule.context,
+          referencingModule.__trusted === true,
+          referencingModule.__package === true,
+          graph,
+        ));
+      }
+      return root;
+    });
+    await module.evaluate();
+    return module;
+  } catch (error) {
+    for (const [cacheKey, created] of graph.created) {
+      if (created.status !== 'evaluated' && cachedModules.get(cacheKey) === created) cachedModules.delete(cacheKey);
+    }
+    throw error;
+  }
+}
+
+async function instantiateModule(specifier, referrer, context, parentTrusted, parentPackage, graph) {
   const resolved = resolveSpecifier(specifier, referrer, parentTrusted, parentPackage);
   if (resolved.builtin) {
     const processFacade = resolved.trustedProcess || parentTrusted
@@ -226,6 +261,7 @@ async function loadModule(specifier, referrer, context, parentTrusted, parentPac
   }
   const cacheKey = pathToFileURL(resolved.file).href;
   if (cachedModules.has(cacheKey)) return cachedModules.get(cacheKey);
+  if (graph.uncached.has(cacheKey)) return graph.uncached.get(cacheKey);
   const sourceBytes = Buffer.from(readFileSync(resolved.file));
   const policyResult = trustedModulePolicy.evaluate(
     resolved.file,
@@ -255,15 +291,13 @@ async function loadModule(specifier, referrer, context, parentTrusted, parentPac
   });
   module.__trusted = policyResult.trusted === true;
   module.__package = packageModule;
-  if (shouldCache) cachedModules.set(cacheKey, module);
-  try {
-    await module.link((childSpecifier, referencingModule) => loadModule(childSpecifier, referencingModule.identifier, moduleContext, policyResult.trusted === true, module.__package === true));
-    await module.evaluate();
-    return module;
-  } catch (error) {
-    if (shouldCache) cachedModules.delete(cacheKey);
-    throw error;
+  if (shouldCache) {
+    cachedModules.set(cacheKey, module);
+    graph.created.push([cacheKey, module]);
+  } else {
+    graph.uncached.set(cacheKey, module);
   }
+  return module;
 }
 
 async function loadJsonModule(file, context, cacheKey, shouldCache) {

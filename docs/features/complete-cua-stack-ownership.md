@@ -67,7 +67,7 @@ identity with ordinary package imports in each runtime generation.
 
 - `install.py`
 - `scripts/standalone_release.py`
-- `scripts/assemble_cua_node.py`
+- `scripts/assemble_cua_node.py` and its `scripts/_cua_node_*.py` helpers
 - `scripts/build_plugin.py`
 - `runtime/cua-node/`
 - `packages/browser-use/`

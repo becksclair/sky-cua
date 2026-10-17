@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { productionPin as pin } from "./production-pins.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -234,8 +235,8 @@ export function runSubsystemHarness(
         blocker: `runtime-root:${id}`,
       });
   } else {
-    const playwright = packageVersion(runtimeRoot, "playwright", "1.57.0");
-    const playwrightCore = packageVersion(runtimeRoot, "playwright-core", "1.57.0");
+    const playwright = packageVersion(runtimeRoot, "playwright", pin("playwright"));
+    const playwrightCore = packageVersion(runtimeRoot, "playwright-core", pin("playwright-core"));
     const browser = runSystemBrowserProof(
       options.browserPath ??
         process.env.CUA_NODE_BROWSER_PATH ??
@@ -266,7 +267,7 @@ export function runSubsystemHarness(
           },
     );
 
-    const pdf = packageVersion(runtimeRoot, "pdfjs-dist", "5.4.624");
+    const pdf = packageVersion(runtimeRoot, "pdfjs-dist", pin("pdfjs-dist"));
     const pdfData = pathResult(
       "pdfjs",
       join(runtimeRoot, "share/pdfjs"),
@@ -289,8 +290,8 @@ export function runSubsystemHarness(
       blocker: pdf.blocker ?? pdfData.blocker,
     });
 
-    const tesseract = packageVersion(runtimeRoot, "tesseract.js", "7.0.0");
-    const tesseractCore = packageVersion(runtimeRoot, "tesseract.js-core", "7.0.0");
+    const tesseract = packageVersion(runtimeRoot, "tesseract.js", pin("tesseract.js"));
+    const tesseractCore = packageVersion(runtimeRoot, "tesseract.js-core", pin("tesseract.js-core"));
     const tessdata = pathResult(
       "tesseract",
       join(runtimeRoot, "share/tessdata/eng.traineddata"),
@@ -314,18 +315,16 @@ export function runSubsystemHarness(
       blocker: tesseract.blocker ?? tesseractCore.blocker ?? tessdata.blocker,
     });
 
-    const sharp = packageVersion(runtimeRoot, "sharp", "0.34.5");
-    const sharpNative = pathResult(
-      "sharp",
-      join(runtimeRoot, "lib/node_modules/@img/sharp-linux-x64"),
-      "Sharp Linux native package is present",
-      "sharp-linux-x64-0.34.5",
+    const sharp = packageVersion(runtimeRoot, "sharp", pin("sharp"));
+    const sharpNative = packageVersion(
+      runtimeRoot,
+      "@img/sharp-linux-x64",
+      pin("@img/sharp-linux-x64"),
     );
-    const libvips = pathResult(
-      "sharp",
-      join(runtimeRoot, "lib/node_modules/@img/sharp-libvips-linux-x64"),
-      "libvips Linux package is present",
-      "sharp-libvips-linux-x64-1.2.4",
+    const libvips = packageVersion(
+      runtimeRoot,
+      "@img/sharp-libvips-linux-x64",
+      pin("@img/sharp-libvips-linux-x64"),
     );
     results.push({
       id: "sharp",
@@ -340,11 +339,11 @@ export function runSubsystemHarness(
       blocker: sharp.blocker ?? sharpNative.blocker ?? libvips.blocker,
     });
 
-    const canvas = packageVersion(runtimeRoot, "@napi-rs/canvas", "0.1.91");
+    const canvas = packageVersion(runtimeRoot, "@napi-rs/canvas", pin("@napi-rs/canvas"));
     const canvasNative = packageVersion(
       runtimeRoot,
       "@napi-rs/canvas-linux-x64-gnu",
-      "0.1.91",
+      pin("@napi-rs/canvas-linux-x64-gnu"),
     );
     results.push({
       id: "canvas",
@@ -374,12 +373,12 @@ export function runSubsystemHarness(
     );
     const pixelmatch =
       options.pixelmatchPath === undefined
-        ? packageVersion(runtimeRoot, "pixelmatch", "7.1.0")
+        ? packageVersion(runtimeRoot, "pixelmatch", pin("pixelmatch"))
         : pathResult(
             "pixel-diff",
             options.pixelmatchPath,
             "pixelmatch implementation is present",
-            "visual-diff-pixelmatch-7.1.0",
+            `visual-diff-pixelmatch-${pin("pixelmatch")}`,
           );
     results.push(pixelmatch);
   }

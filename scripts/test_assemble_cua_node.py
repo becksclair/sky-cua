@@ -10,26 +10,62 @@ from pathlib import Path
 
 import pytest
 
-from assemble_cua_node import (
+from _cua_node_compliance import _generate_compliance
+from _cua_node_inputs import (
+    ASSEMBLER_SOURCES,
+    PREPARED_PACKAGE_IMPORTS,
+    SEED_SHARP_LIBVIPS_RECORDS,
+    SHARP_LIBVIPS_RECORDS,
     TARGET,
-    AssemblyError,
     PreparedPackageImport,
-    _compose,
+)
+from _cua_node_locks import _prepared_package_lock_record, _prepared_runtime_lock_records
+from _cua_node_packages import (
     _extract_package,
-    _files,
-    _generate_compliance,
     _import_prepared_packages,
-    _import_seed,
+    _install_libvips_compliance_records,
+    _remove_wrong_platform_content,
+)
+from _cua_node_seed import _import_seed, _resolve_seed
+from _cua_node_tree import (
+    AssemblyError,
+    _files,
     _normalize_checkout_text_paths,
-    _prepared_package_lock_record,
+    _tree_hash,
+)
+from assemble_cua_node import (
+    _compose,
     _producer_commit,
     _recover_publication,
-    _remove_wrong_platform_content,
-    _resolve_seed,
-    _tree_hash,
     assemble,
     main,
 )
+
+
+def test_assembler_sources_cover_every_assembly_module() -> None:
+    scripts = Path(__file__).resolve().parent
+    modules = {
+        f"scripts/{path.name}"
+        for path in [scripts / "assemble_cua_node.py", *scripts.glob("_cua_node_*.py")]
+    }
+    assert set(ASSEMBLER_SOURCES) == modules
+    assert len(ASSEMBLER_SOURCES) == len(modules)
+
+
+def test_prepared_imports_agree_with_bun_and_production_pins() -> None:
+    runtime = Path(__file__).resolve().parents[1] / "runtime" / "cua-node"
+    bun_pins = json.loads((runtime / "package.json").read_text(encoding="utf-8"))["dependencies"]
+    production_pins = json.loads(
+        (runtime / "production" / "package.json").read_text(encoding="utf-8")
+    )["dependencies"]
+    shared = set(bun_pins) & set(production_pins)
+    assert {"sharp", "@img/sharp-linux-x64", "@img/sharp-libvips-linux-x64", "acorn"} <= shared
+    for name in shared:
+        assert bun_pins[name] == production_pins[name], name
+    for package in PREPARED_PACKAGE_IMPORTS:
+        assert bun_pins.get(package.name) == package.version, package.name
+    for relative in SHARP_LIBVIPS_RECORDS:
+        assert (runtime / "compliance" / relative).is_file(), relative
 
 
 def test_normalizes_checkout_paths_in_text_but_preserves_native_debug_bytes(
@@ -162,8 +198,8 @@ def test_import_prepared_packages_copies_exact_allowlisted_tree(
     repository = tmp_path / "repo"
     package = _write_prepared_package(repository)
     locked = _lock_prepared_package(package)
-    monkeypatch.setattr("assemble_cua_node.REPO_ROOT", repository)
-    monkeypatch.setattr("assemble_cua_node.PREPARED_PACKAGE_IMPORTS", (locked,))
+    monkeypatch.setattr("_cua_node_packages.REPO_ROOT", repository)
+    monkeypatch.setattr("_cua_node_packages.PREPARED_PACKAGE_IMPORTS", (locked,))
     staging = tmp_path / "staging"
 
     _import_prepared_packages(staging)
@@ -176,9 +212,9 @@ def test_import_prepared_packages_copies_exact_allowlisted_tree(
 def test_import_prepared_packages_reports_frozen_install_for_missing_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("assemble_cua_node.REPO_ROOT", tmp_path / "repo")
+    monkeypatch.setattr("_cua_node_packages.REPO_ROOT", tmp_path / "repo")
     monkeypatch.setattr(
-        "assemble_cua_node.PREPARED_PACKAGE_IMPORTS",
+        "_cua_node_packages.PREPARED_PACKAGE_IMPORTS",
         (PreparedPackageImport("missing", "1.0.0", "MIT", "0" * 64, 0),),
     )
 
@@ -205,8 +241,8 @@ def test_import_prepared_packages_rejects_wrong_identity_or_version(
     (package / "package.json").write_text(
         json.dumps({"name": name, "version": version, "license": "MIT"}), encoding="utf-8"
     )
-    monkeypatch.setattr("assemble_cua_node.REPO_ROOT", repository)
-    monkeypatch.setattr("assemble_cua_node.PREPARED_PACKAGE_IMPORTS", (locked,))
+    monkeypatch.setattr("_cua_node_packages.REPO_ROOT", repository)
+    monkeypatch.setattr("_cua_node_packages.PREPARED_PACKAGE_IMPORTS", (locked,))
 
     with pytest.raises(AssemblyError, match="prepared package identity mismatch"):
         _import_prepared_packages(tmp_path / "staging")
@@ -219,8 +255,8 @@ def test_import_prepared_packages_rejects_altered_tree(
     package = _write_prepared_package(repository)
     locked = _lock_prepared_package(package)
     (package / "index.js").write_text("altered\n", encoding="utf-8")
-    monkeypatch.setattr("assemble_cua_node.REPO_ROOT", repository)
-    monkeypatch.setattr("assemble_cua_node.PREPARED_PACKAGE_IMPORTS", (locked,))
+    monkeypatch.setattr("_cua_node_packages.REPO_ROOT", repository)
+    monkeypatch.setattr("_cua_node_packages.PREPARED_PACKAGE_IMPORTS", (locked,))
 
     with pytest.raises(AssemblyError, match="prepared package tree mismatch"):
         _import_prepared_packages(tmp_path / "staging")
@@ -233,8 +269,8 @@ def test_import_prepared_packages_rejects_symlinks(
     package = _write_prepared_package(repository)
     locked = _lock_prepared_package(package)
     (package / "link").symlink_to(package / "index.js")
-    monkeypatch.setattr("assemble_cua_node.REPO_ROOT", repository)
-    monkeypatch.setattr("assemble_cua_node.PREPARED_PACKAGE_IMPORTS", (locked,))
+    monkeypatch.setattr("_cua_node_packages.REPO_ROOT", repository)
+    monkeypatch.setattr("_cua_node_packages.PREPARED_PACKAGE_IMPORTS", (locked,))
 
     with pytest.raises(AssemblyError, match="tree contains symlink"):
         _import_prepared_packages(tmp_path / "staging")
@@ -267,6 +303,64 @@ def test_prepared_package_lock_record_uses_official_npm_registry_source(tmp_path
     assert record["license"]["notice_files"] == ["lib/node_modules/acorn-walk/LICENSE"]
 
 
+def test_native_asset_imports_are_excluded_from_runtime_lock_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    modules = tmp_path / "lib" / "node_modules"
+    for name in ("plain-package", "@img/native-package"):
+        (modules / name).mkdir(parents=True)
+        (modules / name / "package.json").write_text(
+            json.dumps({"name": name, "version": "1.0.0", "license": "MIT"}), encoding="utf-8"
+        )
+    monkeypatch.setattr(
+        "_cua_node_locks.PREPARED_PACKAGE_IMPORTS",
+        (
+            PreparedPackageImport("plain-package", "1.0.0", "MIT", "0" * 64, 0, "sha512-plain"),
+            PreparedPackageImport(
+                "@img/native-package", "1.0.0", "MIT", "0" * 64, 0, "sha512-native", True
+            ),
+        ),
+    )
+
+    records = _prepared_runtime_lock_records(tmp_path)
+
+    assert [record["name"] for record in records] == ["plain-package"]
+    assert records[0]["destination"] == "lib/node_modules/plain-package"
+
+
+def test_libvips_compliance_records_replace_stale_seed_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repo"
+    compliance = repository / "runtime" / "cua-node" / "compliance"
+    for relative in SHARP_LIBVIPS_RECORDS:
+        (compliance / relative).parent.mkdir(parents=True, exist_ok=True)
+        (compliance / relative).write_text(f"current {relative}\n", encoding="utf-8")
+    staging = tmp_path / "staging"
+    for relative in SEED_SHARP_LIBVIPS_RECORDS:
+        (staging / "licenses" / relative).parent.mkdir(parents=True, exist_ok=True)
+        (staging / "licenses" / relative).write_text("stale\n", encoding="utf-8")
+    monkeypatch.setattr("_cua_node_packages.REPO_ROOT", repository)
+
+    _install_libvips_compliance_records(staging)
+
+    for relative in SEED_SHARP_LIBVIPS_RECORDS:
+        assert not (staging / "licenses" / relative).exists()
+    for relative in SHARP_LIBVIPS_RECORDS:
+        assert (staging / "licenses" / relative).read_text(encoding="utf-8") == (
+            f"current {relative}\n"
+        )
+
+
+def test_libvips_compliance_records_require_repository_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("_cua_node_packages.REPO_ROOT", tmp_path / "repo")
+
+    with pytest.raises(AssemblyError, match="sharp-libvips compliance record is missing"):
+        _install_libvips_compliance_records(tmp_path / "staging")
+
+
 def test_resolve_seed_rejects_missing_cache(tmp_path: Path) -> None:
     with pytest.raises(AssemblyError, match="no sky-cua cua_node seed cache"):
         _resolve_seed(tmp_path / "missing-cache", None)
@@ -282,9 +376,9 @@ def test_resolve_seed_rejects_tampered_cached_bytes(
     )
     (source / "payload").write_bytes(b"verified")
     digest, size_bytes, file_count = _tree_hash(source)
-    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_SHA256", digest)
-    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_SIZE_BYTES", size_bytes)
-    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_FILE_COUNT", file_count)
+    monkeypatch.setattr("_cua_node_seed.MIGRATION_SEED_SHA256", digest)
+    monkeypatch.setattr("_cua_node_seed.MIGRATION_SEED_SIZE_BYTES", size_bytes)
+    monkeypatch.setattr("_cua_node_seed.MIGRATION_SEED_FILE_COUNT", file_count)
     cache = tmp_path / "cache"
 
     imported = _import_seed(cache, source)
@@ -319,9 +413,9 @@ def test_cache_only_seed_requires_independent_locked_identity(
 ) -> None:
     source = tmp_path / "seed"
     digest, size_bytes, file_count = _write_test_seed(source)
-    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_SHA256", digest)
-    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_SIZE_BYTES", size_bytes)
-    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_FILE_COUNT", file_count)
+    monkeypatch.setattr("_cua_node_seed.MIGRATION_SEED_SHA256", digest)
+    monkeypatch.setattr("_cua_node_seed.MIGRATION_SEED_SIZE_BYTES", size_bytes)
+    monkeypatch.setattr("_cua_node_seed.MIGRATION_SEED_FILE_COUNT", file_count)
     cache = tmp_path / "cache"
     imported = _import_seed(cache, source)
     pointer_path = cache / "current-seed.json"
@@ -359,9 +453,9 @@ def test_forged_cache_is_rejected_before_composition_or_native_audit(
 ) -> None:
     source = tmp_path / "seed"
     digest, size_bytes, file_count = _write_test_seed(source)
-    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_SHA256", digest)
-    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_SIZE_BYTES", size_bytes)
-    monkeypatch.setattr("assemble_cua_node.MIGRATION_SEED_FILE_COUNT", file_count)
+    monkeypatch.setattr("_cua_node_seed.MIGRATION_SEED_SHA256", digest)
+    monkeypatch.setattr("_cua_node_seed.MIGRATION_SEED_SIZE_BYTES", size_bytes)
+    monkeypatch.setattr("_cua_node_seed.MIGRATION_SEED_FILE_COUNT", file_count)
     cache = tmp_path / "cache"
     imported = _import_seed(cache, source)
     (imported / "payload").write_bytes(b"tampered")
@@ -382,7 +476,7 @@ def test_forged_cache_is_rejected_before_composition_or_native_audit(
     monkeypatch.setattr("assemble_cua_node._recover_publication", lambda *_a: None)
     monkeypatch.setattr("assemble_cua_node._rebuild_first_party_outputs", lambda: {"outputs": {}})
     monkeypatch.setattr("assemble_cua_node._compose", compose)
-    monkeypatch.setattr("assemble_cua_node._native_audit", native_audit)
+    monkeypatch.setattr("_cua_node_locks._native_audit", native_audit)
 
     with pytest.raises(AssemblyError, match="cached seed inventory or content hash mismatch"):
         assemble(
@@ -878,6 +972,7 @@ def test_compose_writes_first_party_build_attestation(
         "assemble_cua_node._install_first_party_packages", lambda _root: ("3" * 64, "4" * 64)
     )
     monkeypatch.setattr("assemble_cua_node._import_prepared_packages", lambda _root: None)
+    monkeypatch.setattr("assemble_cua_node._install_libvips_compliance_records", lambda _root: None)
     monkeypatch.setattr("assemble_cua_node._remove_wrong_platform_content", lambda _root: None)
     monkeypatch.setattr("assemble_cua_node._generate_compliance", lambda *_a, **_kw: None)
     source_inventory = [{"path": "runtime/source.ts", "sha256": "5" * 64, "size_bytes": 7}]

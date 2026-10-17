@@ -343,9 +343,9 @@
 		{
 			"id": "sharp",
 			"name": "sharp",
-			"version": "0.34.5",
+			"version": "0.35.5",
 			"kind": "npm-package",
-			"purl": "pkg:npm/sharp@0.34.5",
+			"purl": "pkg:npm/sharp@0.35.5",
 			"disposition": "routine-notice-clearance",
 			"release_effect": "notice-clearance-required",
 			"license": {
@@ -353,7 +353,7 @@
 				"designation": "Apache-2.0"
 			},
 			"source": {
-				"uri": "https://registry.npmjs.org/sharp/-/sharp-0.34.5.tgz",
+				"uri": "https://registry.npmjs.org/sharp/-/sharp-0.35.5.tgz",
 				"kind": "npm",
 				"provenance_status": "planned-authoritative-source"
 			},
@@ -364,9 +364,9 @@
 		{
 			"id": "sharp-linux-x64-addon",
 			"name": "sharp Linux x64 native addon",
-			"version": "0.34.5",
+			"version": "0.35.5",
 			"kind": "native-addon",
-			"purl": "pkg:npm/@img/sharp-linux-x64@0.34.5",
+			"purl": "pkg:npm/@img/sharp-linux-x64@0.35.5",
 			"disposition": "routine-notice-clearance",
 			"release_effect": "notice-clearance-required",
 			"license": {
@@ -374,7 +374,7 @@
 				"designation": "Apache-2.0"
 			},
 			"source": {
-				"uri": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.34.5.tgz",
+				"uri": "https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.35.5.tgz",
 				"kind": "npm",
 				"provenance_status": "planned-authoritative-source"
 			},
@@ -385,9 +385,9 @@
 		{
 			"id": "sharp-libvips-linux-x64",
 			"name": "sharp bundled libvips Linux x64",
-			"version": "1.2.4",
+			"version": "1.3.4",
 			"kind": "native-library",
-			"purl": "pkg:npm/@img/sharp-libvips-linux-x64@1.2.4",
+			"purl": "pkg:npm/@img/sharp-libvips-linux-x64@1.3.4",
 			"disposition": "routine-notice-clearance",
 			"release_effect": "notice-clearance-required",
 			"license": {
@@ -395,13 +395,13 @@
 				"designation": "LGPL-3.0-or-later plus codec component notices"
 			},
 			"source": {
-				"uri": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.2.4.tgz",
+				"uri": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.3.4.tgz",
 				"kind": "npm",
 				"provenance_status": "artifact-provenance-resolved"
 			},
 			"notice_ids": ["libvips-license", "libvips-component-notices"],
 			"blocking_gate_ids": [],
-			"notes": "npm SLSA binds package 1.2.4 to sharp-libvips commit 20b5e899954907a3039d6e3d4c200aaa0ec52c4c. The operational source-offer record pins the Linux build, libvips 8.17.3, all 29 notice components, patches, direct source URLs, and notices."
+			"notes": "npm SLSA binds package 1.3.4 to sharp-libvips commit ebb95f8add54eee8bed840e3fb587e4cbec857d7. The operational source-offer record pins the Linux build, libvips 8.18.7, all 29 notice components, patches, direct source URLs, and notices."
 		},
 		{
 			"id": "canvas",

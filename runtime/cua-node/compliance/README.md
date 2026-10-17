@@ -23,10 +23,11 @@ still needs to be proven.
 - `canvas-linux-x64-gnu` 0.1.91 is cleared as routine notice work by the locked,
   self-built Linux x64 glibc artifact and its exact composition evidence.
 
-The policy is currently `clear` with no open release gate. sharp-libvips 1.2.4
-is cleared by npm SLSA provenance plus an operational corresponding-source
-record that pins commit `20b5e899954907a3039d6e3d4c200aaa0ec52c4c`, the Linux
-build scripts, libvips 8.17.3, patches, 29 source components, and notices.
+The policy is currently `clear` with no open release gate. The pinned
+sharp-libvips package is cleared by npm SLSA provenance plus an operational
+corresponding-source record that pins its upstream commit, the Linux build
+scripts, the bundled libvips release, hash-pinned patches, every source
+component, and notices.
 Tessdata `eng` and `osd` provenance is also resolved. Canvas is self-built from
 the exact source and original Skia archives with a preserved Cargo.lock,
 84-package Rust inventory, an LLD link map, full notices, bundled Node 24 raw
@@ -56,8 +57,9 @@ project designation in `licenseComments` and extracted licensing information.
 - [`notice-inventory.json`](./notice-inventory.json) records planned and
   collected notices. The collected sharp, Canvas, PDF data, and pixelmatch
   records live under [`notices/`](./notices/).
-- [`sharp-libvips-1.2.4-source-offer.json`](./sharp-libvips-1.2.4-source-offer.json)
-  is the operational corresponding-source/build/component record.
+- `sharp-libvips-<version>-source-offer.json` is the operational
+  corresponding-source/build/component record for the pinned
+  `@img/sharp-libvips-linux-x64` version.
 - [`canvas-0.1.91-evidence.json`](./canvas-0.1.91-evidence.json) inventories the
   source, Cargo/Yarn inputs, Skia archives/components, binary evidence, notices,
   and clearance result. The adjacent build record, source offer, Cargo.lock,

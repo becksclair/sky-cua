@@ -11,45 +11,47 @@ import {
   type CompliancePolicy,
   type Disposition,
 } from "./generate.ts";
+import { productionPin as pin } from "../production/production-pins.ts";
 
 const complianceRoot = import.meta.dir;
+const libvipsSourceOffer = `sharp-libvips-${pin("@img/sharp-libvips-linux-x64")}-source-offer.json`;
 
 const expectedComponents = new Map<
   string,
   { version: string; disposition: Disposition }
 >([
-  ["acorn", { version: "8.16.0", disposition: "routine-notice-clearance" }],
-  ["acorn-walk", { version: "8.3.5", disposition: "routine-notice-clearance" }],
+  ["acorn", { version: pin("acorn"), disposition: "routine-notice-clearance" }],
+  ["acorn-walk", { version: pin("acorn-walk"), disposition: "routine-notice-clearance" }],
   ["node-runtime", { version: "24.14.0", disposition: "routine-notice-clearance" }],
   ["npm", { version: "11.9.0", disposition: "routine-notice-clearance" }],
   ["corepack", { version: "0.34.6", disposition: "routine-notice-clearance" }],
-  ["playwright", { version: "1.57.0", disposition: "routine-notice-clearance" }],
-  ["playwright-core", { version: "1.57.0", disposition: "routine-notice-clearance" }],
-  ["pdfjs-dist", { version: "5.4.624", disposition: "routine-notice-clearance" }],
-  ["pdfjs-cmaps", { version: "5.4.624", disposition: "routine-notice-clearance" }],
+  ["playwright", { version: pin("playwright"), disposition: "routine-notice-clearance" }],
+  ["playwright-core", { version: pin("playwright-core"), disposition: "routine-notice-clearance" }],
+  ["pdfjs-dist", { version: pin("pdfjs-dist"), disposition: "routine-notice-clearance" }],
+  ["pdfjs-cmaps", { version: pin("pdfjs-dist"), disposition: "routine-notice-clearance" }],
   [
     "pdfjs-standard-fonts",
-    { version: "5.4.624", disposition: "routine-notice-clearance" },
+    { version: pin("pdfjs-dist"), disposition: "routine-notice-clearance" },
   ],
-  ["tesseract-js", { version: "7.0.0", disposition: "routine-notice-clearance" }],
-  ["tesseract-js-core", { version: "7.0.0", disposition: "routine-notice-clearance" }],
+  ["tesseract-js", { version: pin("tesseract.js"), disposition: "routine-notice-clearance" }],
+  ["tesseract-js-core", { version: pin("tesseract.js-core"), disposition: "routine-notice-clearance" }],
   ["tessdata-eng", { version: "eng", disposition: "routine-notice-clearance" }],
   ["tessdata-osd", { version: "osd", disposition: "routine-notice-clearance" }],
-  ["sharp", { version: "0.34.5", disposition: "routine-notice-clearance" }],
+  ["sharp", { version: pin("sharp"), disposition: "routine-notice-clearance" }],
   [
     "sharp-linux-x64-addon",
-    { version: "0.34.5", disposition: "routine-notice-clearance" },
+    { version: pin("@img/sharp-linux-x64"), disposition: "routine-notice-clearance" },
   ],
   [
     "sharp-libvips-linux-x64",
-    { version: "1.2.4", disposition: "routine-notice-clearance" },
+    { version: pin("@img/sharp-libvips-linux-x64"), disposition: "routine-notice-clearance" },
   ],
-  ["canvas", { version: "0.1.91", disposition: "routine-notice-clearance" }],
+  ["canvas", { version: pin("@napi-rs/canvas"), disposition: "routine-notice-clearance" }],
   [
     "canvas-linux-x64-gnu",
-    { version: "0.1.91", disposition: "routine-notice-clearance" },
+    { version: pin("@napi-rs/canvas-linux-x64-gnu"), disposition: "routine-notice-clearance" },
   ],
-  ["pixelmatch", { version: "7.1.0", disposition: "routine-notice-clearance" }],
+  ["pixelmatch", { version: pin("pixelmatch"), disposition: "routine-notice-clearance" }],
   ["sky-cua", { version: "0.1.0", disposition: "routine-notice-clearance" }],
 ]);
 
@@ -207,15 +209,15 @@ test("resolved Node, sharp-libvips, and Canvas artifact evidence is exact", () =
   assert.equal(sharpLibvips.resolved, true);
   assert.equal(
     sharpLibvips.artifact_sha256,
-    "9a2a2cf2b53ec123b3ee293bf66c234f8306681a5edfb058815b6bf66b9df8e9",
+    "4aa73553408c3964071728f4a231a8e86918e39bc49f1fbae75355f7ea933ea9",
   );
   assert.equal(
     sharpLibvips.artifact_sha512,
-    "b49c6288bb261dcf40c756f3de868e6015114d718844338306a86f7951e89eb1c9f7ffa4f3da9b2e5d1b7099ecf9ee2de2bbda341c5a119b05b527c076ab8faf",
+    "189fff4925db9f04837acd36ba60779c324b15c433c3c6b5f15f1fca1aabead579d79b4e10c7489a38f18f502869f311cf9e85dcf1e07ed9e3d5010a494d7393",
   );
   assert.equal(
     sharpLibvips.slsa_source_commit,
-    "20b5e899954907a3039d6e3d4c200aaa0ec52c4c",
+    "ebb95f8add54eee8bed840e3fb587e4cbec857d7",
   );
 
   const canvas = provenanceByComponent.get("canvas-linux-x64-gnu");
@@ -361,12 +363,13 @@ test("PDF data, Canvas package, and pixelmatch licenses match shipped bytes", as
 test("sharp source offer and cleared Canvas self-build record are complete", async () => {
   const sourceOffer = JSON.parse(
     await readFile(
-      join(complianceRoot, "sharp-libvips-1.2.4-source-offer.json"),
+      join(complianceRoot, libvipsSourceOffer),
       "utf8",
     ),
   ) as {
     status: string;
     corresponding_source: { revision: string };
+    build: { patches: Array<{ uri: string; sha256: string }> };
     components: Array<{
       id: string;
       version: string;
@@ -377,7 +380,17 @@ test("sharp source offer and cleared Canvas self-build record are complete", asy
   assert.equal(sourceOffer.status, "operational");
   assert.equal(
     sourceOffer.corresponding_source.revision,
-    "20b5e899954907a3039d6e3d4c200aaa0ec52c4c",
+    "ebb95f8add54eee8bed840e3fb587e4cbec857d7",
+  );
+  assert.ok(sourceOffer.build.patches.length > 0);
+  assert.equal(
+    new Set(sourceOffer.build.patches.map((patch) => patch.uri)).size,
+    sourceOffer.build.patches.length,
+  );
+  assert.ok(
+    sourceOffer.build.patches.every(
+      (patch) => patch.uri.startsWith("https://") && /^[0-9a-f]{64}$/.test(patch.sha256),
+    ),
   );
   assert.equal(sourceOffer.components.length, 29);
   assert.equal(
@@ -397,7 +410,7 @@ test("sharp source offer and cleared Canvas self-build record are complete", asy
   );
   assert.equal(
     sourceOffer.components.find((component) => component.id === "libvips")?.version,
-    "8.17.3",
+    "8.18.7",
   );
 
   const canvasEvidence = JSON.parse(
@@ -542,7 +555,7 @@ test("sharp source offer and cleared Canvas self-build record are complete", asy
     sharpCdx.properties.find(
       (property) => property.name === "compliance:source-offer-uri",
     )?.value,
-    "sharp-libvips-1.2.4-source-offer.json",
+    libvipsSourceOffer,
   );
   assert.equal(
     canvasCdx.properties.find(

@@ -16,7 +16,7 @@
     "record_uri": "<repository-relative build record>",
     "toolchain": "<compiler/linker/libc>",
     "configure_flags": ["<exact flag>"],
-    "patches": ["<patch URI and sha256>"],
+    "patches": [{"uri": "<patch URI>", "sha256": "<sha256>"}],
     "composition": "<mapping from source inputs to shipped bytes>",
     "reproduction": "<command or documented limitation>"
   },

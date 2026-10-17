@@ -18,10 +18,14 @@
 		"benchmark": "bun production/benchmark.ts"
 	},
 	"dependencies": {
+		"@img/sharp-libvips-linux-x64": "1.3.4",
+		"@img/sharp-linux-x64": "0.35.5",
 		"acorn": "8.16.0",
 		"acorn-walk": "8.3.5",
-		"ajv": "8.17.1",
-		"smol-toml": "1.6.1"
+		"ajv": "8.18.0",
+		"semver": "7.8.5",
+		"sharp": "0.35.5",
+		"smol-toml": "1.9.1"
 	},
 	"devDependencies": {
 		"bun-types": "1.3.13",

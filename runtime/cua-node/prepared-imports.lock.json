@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "packages": [
+    {
+      "name": "acorn",
+      "version": "8.16.0",
+      "license": "MIT",
+      "integrity": "sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==",
+      "native_asset": false,
+      "source_tree": {
+        "sha256": "4acbc403f8e4d593b943dd81163a23ec6e4d4c451e706c6922cc097d85db3241",
+        "size_bytes": 558610
+      },
+      "assembled_tree": {
+        "sha256": "e0d357db62f8b138d2e575a2cb92f087fa5d7cdb2f95d7512b9868ff3ef81277",
+        "size_bytes": 558610
+      }
+    },
+    {
+      "name": "acorn-walk",
+      "version": "8.3.5",
+      "license": "MIT",
+      "integrity": "sha512-HEHNfbars9v4pgpW6SO1KSPkfoS0xVOM/9UzkJltjlsHZmJasxg8aXkuZa7SMf8vKGIBhpUsPluQSqhJFCqebw==",
+      "native_asset": false,
+      "source_tree": {
+        "sha256": "4b0f0f351e71172da86000269c356022c17b1583f7a7ee0f679a65ceb0c95be0",
+        "size_bytes": 53765
+      },
+      "assembled_tree": {
+        "sha256": "cd968876dd2797441c7c6de59eaa867e2d804e490e4e6c6e5d9be3d247ea6b0f",
+        "size_bytes": 53765
+      }
+    },
+    {
+      "name": "sharp",
+      "version": "0.35.5",
+      "license": "Apache-2.0",
+      "integrity": "sha512-Ywn4OnzGukp7CDMrp08RQ50YKmuwG47brZgIVPTvBaaAfQlRlygrRqSrxdCiL9M+LlzLBiJ68IR1QqvzHyjC7g==",
+      "native_asset": false,
+      "source_tree": {
+        "sha256": "910109a01b85797cd7d8068b45a1e2e19892c0c719bbb88bb2e207a3e376c4ae",
+        "size_bytes": 962168
+      },
+      "assembled_tree": {
+        "sha256": "4610510166dc6f5687d396e799d90946c260aa4bcc84d80e28602818363f4e0f",
+        "size_bytes": 961256
+      }
+    },
+    {
+      "name": "@img/sharp-linux-x64",
+      "version": "0.35.5",
+      "license": "Apache-2.0",
+      "integrity": "sha512-SxFtLTeJInhAA9Q836kux2vZNeOBQEx658qvbboZScr0wIARym3IcGmW7KpVD5sbVg0Ojy+udFQdayYIZyoNog==",
+      "native_asset": true,
+      "source_tree": {
+        "sha256": "733241ed666c457ee7d036113b29a0301c41cd70c9a7f5ce21d8da980ed72829",
+        "size_bytes": 427138
+      },
+      "assembled_tree": {
+        "sha256": "7b5668c947ccc68be544233de3f5cccef3b1b809d981a47c70acb1f11ddba6cf",
+        "size_bytes": 427138
+      }
+    },
+    {
+      "name": "@img/sharp-libvips-linux-x64",
+      "version": "1.3.4",
+      "license": "LGPL-3.0-or-later",
+      "integrity": "sha512-GJ//SSXbnwSDes02umB3nDJLFcQzw8a18V8fyhqr6tV515tOEMdImjjxj1AoafMRz56F3PHgftnj1QEKSU1zkw==",
+      "native_asset": true,
+      "source_tree": {
+        "sha256": "32fa7f6f7ad4bacab3150d0b93b4c01bf7404bdde71d5eb9740653c6ec7065a0",
+        "size_bytes": 18711101
+      },
+      "assembled_tree": {
+        "sha256": "f52781f482a141ab8eddfb5946b70bcfbd932afa9fc821e0a93898d0a0ee85e8",
+        "size_bytes": 18711101
+      }
+    },
+    {
+      "name": "semver",
+      "version": "7.8.5",
+      "license": "ISC",
+      "integrity": "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==",
+      "native_asset": false,
+      "source_tree": {
+        "sha256": "d98fa6307d5d5814cf60116dc95ceac479ad41d044c48c92041b642998ee6e91",
+        "size_bytes": 101065
+      },
+      "assembled_tree": {
+        "sha256": "f3e9328845d476a18c5b2ef0ac98356079883a3d94329d9feea9454397ce1a9e",
+        "size_bytes": 101065
+      }
+    }
+  ]
+}

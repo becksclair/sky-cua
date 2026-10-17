@@ -98,7 +98,10 @@ clean, delete, or force-push state.
   fixed-root install, consumer projection, and release CLI dispatch.
 - `scripts/_standalone_release_command.py` — guarded version and Git release
   transaction.
-- `scripts/assemble_cua_node.py` — durable CUA Node component assembly.
+- `scripts/assemble_cua_node.py` — durable CUA Node component assembly
+  orchestration and CLI; its `scripts/_cua_node_*.py` helpers hold locked
+  inputs, tree hashing, the seed cache, package staging, compliance
+  generation, and lock generation, and all are bound by producer provenance.
 - `scripts/build_plugin.py` — durable core plugin staging.
 - `scripts/test_standalone_release.py` — payload and install convergence tests.
 - `scripts/test_standalone_release_command.py` — focused release-command tests.
@@ -136,4 +139,5 @@ manifest targets, skills, and detected consumer configuration.
 - [`docs/features/complete-cua-stack-ownership.md`](complete-cua-stack-ownership.md)
 - [`docs/features/one-shot-installer.md`](one-shot-installer.md)
 - [`docs/operations/plugin-release.md`](../operations/plugin-release.md)
+- [`docs/operations/cua-node-dependency-bumps.md`](../operations/cua-node-dependency-bumps.md)
 - [`docs/runtime/mcp-boundary.md`](../runtime/mcp-boundary.md)

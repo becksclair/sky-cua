@@ -14,18 +14,61 @@ from _plugin_bundle import REPO_ROOT, remove_path
 
 SOURCE = REPO_ROOT / "resources/model-documentation"
 INVENTORY_NAMES = ("api", "capability", "example", "routing")
-LOCKED_VERSIONS = {
-    "node": "24.14.0",
-    "playwright": "1.57.0",
-    "pdfjs": "5.4.624",
-    "tesseract_js": "7.0.0",
-    "sharp": "0.34.5",
-    "sharp_linux_x64": "0.34.5",
-    "sharp_libvips_linux_x64": "1.2.4",
-    "canvas_linux_x64_gnu": "0.1.91",
-    "pixelmatch": "7.1.0",
-    "codecs": ["bmp", "jpeg", "png", "webp", "zlib"],
+PRODUCTION_PACKAGE = REPO_ROOT / "runtime/cua-node/production/package.json"
+LOCKED_NPM_PACKAGES = {
+    "playwright": "playwright",
+    "pdfjs": "pdfjs-dist",
+    "tesseract_js": "tesseract.js",
+    "sharp": "sharp",
+    "sharp_linux_x64": "@img/sharp-linux-x64",
+    "sharp_libvips_linux_x64": "@img/sharp-libvips-linux-x64",
+    "canvas_linux_x64_gnu": "@napi-rs/canvas-linux-x64-gnu",
+    "pixelmatch": "pixelmatch",
 }
+
+
+def production_pins() -> dict[str, str]:
+    package = json.loads(PRODUCTION_PACKAGE.read_text(encoding="utf-8"))
+    return package["dependencies"]
+
+
+TOOLBOX = SOURCE / "references/toolbox.md"
+TOOLBOX_VERSION_PATTERNS = {
+    r"Acorn (\S+) and": "acorn",
+    r"Acorn Walk (\S+) for": "acorn-walk",
+    r"Sharp (\S+) with": "sharp",
+    r"libvips (\S+) for": "@img/sharp-libvips-linux-x64",
+    r"`@napi-rs/canvas` (\S+) for": "@napi-rs/canvas",
+    r"pixelmatch (\S+) for": "pixelmatch",
+    r"PDF\.js (\S+) with": "pdfjs-dist",
+    r"Tesseract\.js (\S+) with": "tesseract.js",
+    r"Playwright (\S+) using": "playwright",
+}
+
+
+def toolbox_version_drift(pins: dict[str, str]) -> list[str]:
+    """Hand-written toolbox prose versions that disagree with the production pins."""
+    prose = TOOLBOX.read_text(encoding="utf-8")
+    drift: list[str] = []
+    for pattern, package in TOOLBOX_VERSION_PATTERNS.items():
+        match = re.search(pattern, prose)
+        stated = match.group(1) if match is not None else None
+        if stated != pins[package]:
+            drift.append(
+                f"{TOOLBOX.relative_to(REPO_ROOT)} states {package} {stated}, pinned {pins[package]}"
+            )
+    return drift
+
+
+def locked_versions() -> dict[str, object]:
+    pins = production_pins()
+    return {
+        "node": "24.14.0",
+        **{key: pins[name] for key, name in LOCKED_NPM_PACKAGES.items()},
+        "codecs": ["bmp", "jpeg", "png", "webp", "zlib"],
+    }
+
+
 UNSUPPORTED = (
     "@heliasar/sky-cua/advanced",
     "linux-arm64-node-repl",
@@ -192,7 +235,7 @@ def build(output: Path, *, phone_declaration_root: Path | None = None) -> None:
     capability_inventory = {
         "schema_version": 1,
         "target": "linux-x64-glibc",
-        "versions": LOCKED_VERSIONS,
+        "versions": locked_versions(),
         "supported": [
             "browser-persistent-js",
             "computer-use-persistent-js",

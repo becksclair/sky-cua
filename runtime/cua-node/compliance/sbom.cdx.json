@@ -598,9 +598,9 @@
       "type": "library",
       "bomRef": "pkg:generic/cua-node-component/sharp",
       "name": "sharp",
-      "version": "0.34.5",
+      "version": "0.35.5",
       "scope": "required",
-      "purl": "pkg:npm/sharp@0.34.5",
+      "purl": "pkg:npm/sharp@0.35.5",
       "licenses": [
         {
           "license": {
@@ -635,9 +635,9 @@
       "type": "library",
       "bomRef": "pkg:generic/cua-node-component/sharp-libvips-linux-x64",
       "name": "sharp bundled libvips Linux x64",
-      "version": "1.2.4",
+      "version": "1.3.4",
       "scope": "required",
-      "purl": "pkg:npm/@img/sharp-libvips-linux-x64@1.2.4",
+      "purl": "pkg:npm/@img/sharp-libvips-linux-x64@1.3.4",
       "licenses": [
         {
           "license": {
@@ -648,11 +648,11 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "9a2a2cf2b53ec123b3ee293bf66c234f8306681a5edfb058815b6bf66b9df8e9"
+          "content": "4aa73553408c3964071728f4a231a8e86918e39bc49f1fbae75355f7ea933ea9"
         },
         {
           "alg": "SHA-512",
-          "content": "b49c6288bb261dcf40c756f3de868e6015114d718844338306a86f7951e89eb1c9f7ffa4f3da9b2e5d1b7099ecf9ee2de2bbda341c5a119b05b527c076ab8faf"
+          "content": "189fff4925db9f04837acd36ba60779c324b15c433c3c6b5f15f1fca1aabead579d79b4e10c7489a38f18f502869f311cf9e85dcf1e07ed9e3d5010a494d7393"
         }
       ],
       "properties": [
@@ -678,15 +678,15 @@
         },
         {
           "name": "compliance:slsa-source-commit",
-          "value": "20b5e899954907a3039d6e3d4c200aaa0ec52c4c"
+          "value": "ebb95f8add54eee8bed840e3fb587e4cbec857d7"
         },
         {
           "name": "compliance:evidence-record-uri",
-          "value": "notices/sharp-libvips-1.2.4.NOTICE.md"
+          "value": "notices/sharp-libvips-1.3.4.NOTICE.md"
         },
         {
           "name": "compliance:source-offer-uri",
-          "value": "sharp-libvips-1.2.4-source-offer.json"
+          "value": "sharp-libvips-1.3.4-source-offer.json"
         }
       ]
     },
@@ -694,9 +694,9 @@
       "type": "library",
       "bomRef": "pkg:generic/cua-node-component/sharp-linux-x64-addon",
       "name": "sharp Linux x64 native addon",
-      "version": "0.34.5",
+      "version": "0.35.5",
       "scope": "required",
-      "purl": "pkg:npm/@img/sharp-linux-x64@0.34.5",
+      "purl": "pkg:npm/@img/sharp-linux-x64@0.35.5",
       "licenses": [
         {
           "license": {

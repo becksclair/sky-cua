@@ -1,0 +1,64 @@
+version: 2
+
+# runtime/cua-node/production is intentionally absent: it resolves a vendored
+# tarball that is not committed, and its pins must move together with the
+# runtime/cua-node compliance records and locks.
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      cargo-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      python-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+
+  - package-ecosystem: bun
+    directories:
+      - /runtime/cua-node
+      - /packages/browser-use
+      - /packages/sky-cua-js
+    schedule:
+      interval: weekly
+    # Hash- and compliance-pinned runtime packages move together; finish these
+    # PRs with scripts/refresh_cua_node_pins.py. First matching group wins.
+    groups:
+      cua-node-pinned-security:
+        applies-to: security-updates
+        patterns: ["sharp", "@img/sharp-*", "semver", "acorn", "acorn-walk"]
+      cua-node-pinned:
+        applies-to: version-updates
+        patterns: ["sharp", "@img/sharp-*", "semver", "acorn", "acorn-walk"]
+      bun-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      bun-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+
+  - package-ecosystem: gradle
+    directory: /android/phone-companion
+    schedule:
+      interval: weekly
+    groups:
+      gradle-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      gradle-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
