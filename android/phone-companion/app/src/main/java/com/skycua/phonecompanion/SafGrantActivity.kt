@@ -52,8 +52,10 @@ class SafGrantActivity : AppCompatActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_TREE && resultCode == RESULT_OK) {
             data?.data?.let { uri ->
-                val flags = data.flags and
-                    (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                val read = data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0
+                val write = data.flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION != 0
+                val flags = (if (read) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
+                    (if (write) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
                 contentResolver.takePersistableUriPermission(uri, flags)
             }
         }

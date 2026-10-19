@@ -8,8 +8,11 @@ import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.hardware.camera2.CameraManager
 import android.util.Size
+import androidx.annotation.OptIn
 import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
+import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
@@ -86,6 +89,9 @@ object CameraRuntime {
         }
     }
 
+    @OptIn(markerClass = [ExperimentalCamera2Interop::class])
+    private fun camera2Id(info: CameraInfo): String = Camera2CameraInfo.from(info).cameraId
+
     fun attach(activity: CaptureActivity, previewView: PreviewView, requestId: String) {
         val launch = launches.remove(requestId) ?: run { activity.finish(); return }
         val providerFuture = ProcessCameraProvider.getInstance(activity)
@@ -94,7 +100,7 @@ object CameraRuntime {
                 val provider = providerFuture.get()
                 provider.unbindAll()
                 val selector = CameraSelector.Builder().addCameraFilter { infos ->
-                    infos.filter { Camera2CameraInfo.from(it).cameraId == launch.cameraId }
+                    infos.filter { camera2Id(it) == launch.cameraId }
                 }.build()
                 val preview = Preview.Builder().build().also { it.surfaceProvider = previewView.surfaceProvider }
                 when (launch.operation) {
