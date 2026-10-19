@@ -15,7 +15,7 @@ still needs to be proven.
 ## Settled dispositions
 
 - `routine-notice-clearance`: Node 24.14.0, npm 11.9.0, Corepack 0.34.6,
-  Acorn 8.16.0, Acorn Walk 8.3.5, Playwright 1.57.0 and core, PDF.js
+  Acorn 8.19.0, Acorn Walk 8.3.5, Playwright 1.57.0 and core, PDF.js
   5.4.624 plus CMaps/fonts, Tesseract.js and core 7.0.0, pixelmatch 7.1.0,
   sharp and its Linux addon, canvas's npm package, and first-party
   `@heliasar/sky-cua`.

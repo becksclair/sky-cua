@@ -14,9 +14,9 @@
 			"provenance": "canonical first-party host/kernel bundle built from sky-cua runtime/cua-node/src/cli.ts",
 			"resolved": true
 		},
-		"sha256": "649c07c4a90defffd2752a261d64fb9a4f68bb406938c6500a88868174d064cd",
+		"sha256": "3ba6d4482cc3cea0dac749f6f348574b213d0b4e801c96fc063e3fa705717e82",
 		"sha256_scope": "artifact",
-		"size_bytes": 635506,
+		"size_bytes": 638488,
 		"license": {
 			"expression": "Apache-2.0",
 			"notice_files": [
@@ -626,16 +626,16 @@
 		},
 		{
 			"name": "acorn",
-			"version": "8.16.0",
+			"version": "8.19.0",
 			"source": {
 				"type": "npm",
-				"uri": "https://registry.npmjs.org/acorn/-/acorn-8.16.0.tgz",
+				"uri": "https://registry.npmjs.org/acorn/-/acorn-8.19.0.tgz",
 				"provenance": "official npm registry package prepared by the frozen runtime/cua-node Bun lockfile",
 				"resolved": true
 			},
-			"sha256": "e0d357db62f8b138d2e575a2cb92f087fa5d7cdb2f95d7512b9868ff3ef81277",
+			"sha256": "838d0d6330ffdcf8bd15c3d31af77100f12a69535342256657a5c4fd7aef3118",
 			"sha256_scope": "tree-manifest",
-			"size_bytes": 558610,
+			"size_bytes": 568532,
 			"license": {
 				"expression": "MIT",
 				"notice_files": [
@@ -674,7 +674,7 @@
 				"approval": "resolved production provenance"
 			},
 			"destination": "lib/node_modules/acorn",
-			"integrity": "sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw=="
+			"integrity": "sha512-oJlA3XiRm7Cyk6qFD2Jn8ak9B7jSy0qy00ADO3+8dpT0LSjFihQYv4C02LFCSYJV3Q37xYwwRy5m+IpIiUzqWw=="
 		},
 		{
 			"name": "acorn-walk",
@@ -891,12 +891,12 @@
 			"source": {
 				"type": "first-party-build",
 				"uri": "runtime/cua-node/dist/cli.js",
-				"provenance": "canonical sky-cua bundle sha256 649c07c4a90defffd2752a261d64fb9a4f68bb406938c6500a88868174d064cd",
+				"provenance": "canonical sky-cua bundle sha256 3ba6d4482cc3cea0dac749f6f348574b213d0b4e801c96fc063e3fa705717e82",
 				"resolved": true
 			},
-			"sha256": "649c07c4a90defffd2752a261d64fb9a4f68bb406938c6500a88868174d064cd",
+			"sha256": "3ba6d4482cc3cea0dac749f6f348574b213d0b4e801c96fc063e3fa705717e82",
 			"sha256_scope": "artifact",
-			"size_bytes": 635506,
+			"size_bytes": 638488,
 			"license": {
 				"expression": "Apache-2.0",
 				"notice_files": [

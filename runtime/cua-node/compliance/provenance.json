@@ -7,16 +7,16 @@
 	"records": [
 		{
 			"component_id": "acorn",
-			"source_uri": "https://registry.npmjs.org/acorn/-/acorn-8.16.0.tgz",
+			"source_uri": "https://registry.npmjs.org/acorn/-/acorn-8.19.0.tgz",
 			"source_kind": "npm",
 			"expected_platform": "linux-x64-glibc",
 			"status": "cleared",
 			"resolved": true,
-			"artifact_sha256": "e0d357db62f8b138d2e575a2cb92f087fa5d7cdb2f95d7512b9868ff3ef81277",
+			"artifact_sha256": "838d0d6330ffdcf8bd15c3d31af77100f12a69535342256657a5c4fd7aef3118",
 			"sha256_scope": "prepared-package-tree-manifest",
 			"evidence": [
-				"Exact Acorn 8.16.0 prepared package tree and registry integrity are bound by runtime-lock.json.",
-				"MIT license copied byte-for-byte from lib/node_modules/acorn/LICENSE to notices/acorn-8.16.0.LICENSE."
+				"Exact Acorn 8.19.0 prepared package tree and registry integrity are bound by runtime-lock.json.",
+				"MIT license copied byte-for-byte from lib/node_modules/acorn/LICENSE to notices/acorn-8.19.0.LICENSE."
 			]
 		},
 		{

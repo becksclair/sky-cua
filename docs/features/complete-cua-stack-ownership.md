@@ -32,7 +32,7 @@ ${XDG_DATA_HOME:-~/.local/share}/sky-cua
 `sky_cua` is the direct native MCP server. `node_repl` preserves `js`,
 `js_reset`, and `js_add_node_module_dir` with a persistent Node 24 VM. Installed
 JavaScript exposes the Browser, Computer, and Phone APIs from the same payload.
-Its fixed lazy-loader surface also provides Acorn 8.16.0 and Acorn Walk 8.3.5
+Its fixed lazy-loader surface also provides Acorn 8.19.0 and Acorn Walk 8.3.5
 for structural inspection of generated or minified JavaScript without
 repository-specific module registration.
 

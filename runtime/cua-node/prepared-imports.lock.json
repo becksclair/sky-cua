@@ -3,17 +3,17 @@
   "packages": [
     {
       "name": "acorn",
-      "version": "8.16.0",
+      "version": "8.19.0",
       "license": "MIT",
-      "integrity": "sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==",
+      "integrity": "sha512-oJlA3XiRm7Cyk6qFD2Jn8ak9B7jSy0qy00ADO3+8dpT0LSjFihQYv4C02LFCSYJV3Q37xYwwRy5m+IpIiUzqWw==",
       "native_asset": false,
       "source_tree": {
-        "sha256": "4acbc403f8e4d593b943dd81163a23ec6e4d4c451e706c6922cc097d85db3241",
-        "size_bytes": 558610
+        "sha256": "c0949971a1edb7953817c2fb3025fb3da8bf318023ae7ab70b1e6330f37d427c",
+        "size_bytes": 568532
       },
       "assembled_tree": {
-        "sha256": "e0d357db62f8b138d2e575a2cb92f087fa5d7cdb2f95d7512b9868ff3ef81277",
-        "size_bytes": 558610
+        "sha256": "838d0d6330ffdcf8bd15c3d31af77100f12a69535342256657a5c4fd7aef3118",
+        "size_bytes": 568532
       }
     },
     {

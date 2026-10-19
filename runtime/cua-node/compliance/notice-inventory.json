@@ -10,8 +10,8 @@
 			"component_ids": ["acorn"],
 			"kind": "license",
 			"status": "collected",
-			"planned_path": "notices/acorn-8.16.0.LICENSE",
-			"source_uri": "https://github.com/acornjs/acorn/blob/8.16.0/acorn/LICENSE",
+			"planned_path": "notices/acorn-8.19.0.LICENSE",
+			"source_uri": "https://github.com/acornjs/acorn/blob/8.19.0/acorn/LICENSE",
 			"release_required": true,
 			"gate_ids": []
 		},

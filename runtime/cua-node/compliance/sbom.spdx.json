@@ -34,17 +34,17 @@
     {
       "SPDXID": "SPDXRef-acorn",
       "name": "Acorn",
-      "versionInfo": "8.16.0",
-      "downloadLocation": "https://registry.npmjs.org/acorn/-/acorn-8.16.0.tgz",
+      "versionInfo": "8.19.0",
+      "downloadLocation": "https://registry.npmjs.org/acorn/-/acorn-8.19.0.tgz",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
-      "packageComment": "routine-notice-clearance; The exact Acorn 8.16.0 prepared package tree, registry integrity, and MIT license are pinned by runtime-lock.json.",
+      "packageComment": "routine-notice-clearance; The exact Acorn 8.19.0 prepared package tree, registry integrity, and MIT license are pinned by runtime-lock.json.",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/acorn@8.16.0"
+          "referenceLocator": "pkg:npm/acorn@8.19.0"
         }
       ],
       "attributionTexts": [
@@ -53,7 +53,7 @@
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "e0d357db62f8b138d2e575a2cb92f087fa5d7cdb2f95d7512b9868ff3ef81277"
+          "checksumValue": "838d0d6330ffdcf8bd15c3d31af77100f12a69535342256657a5c4fd7aef3118"
         }
       ]
     },

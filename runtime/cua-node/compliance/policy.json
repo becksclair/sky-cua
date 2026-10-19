@@ -58,20 +58,20 @@
 		{
 			"id": "acorn",
 			"name": "Acorn",
-			"version": "8.16.0",
+			"version": "8.19.0",
 			"kind": "npm-package",
-			"purl": "pkg:npm/acorn@8.16.0",
+			"purl": "pkg:npm/acorn@8.19.0",
 			"disposition": "routine-notice-clearance",
 			"release_effect": "notice-clearance-required",
 			"license": { "spdx_expression": "MIT", "designation": "MIT" },
 			"source": {
-				"uri": "https://registry.npmjs.org/acorn/-/acorn-8.16.0.tgz",
+				"uri": "https://registry.npmjs.org/acorn/-/acorn-8.19.0.tgz",
 				"kind": "npm",
 				"provenance_status": "artifact-provenance-resolved"
 			},
 			"notice_ids": ["acorn-license"],
 			"blocking_gate_ids": [],
-			"notes": "The exact Acorn 8.16.0 prepared package tree, registry integrity, and MIT license are pinned by runtime-lock.json."
+			"notes": "The exact Acorn 8.19.0 prepared package tree, registry integrity, and MIT license are pinned by runtime-lock.json."
 		},
 		{
 			"id": "acorn-walk",

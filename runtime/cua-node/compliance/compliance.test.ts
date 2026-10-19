@@ -265,7 +265,7 @@ test("PDF data, Canvas package, and pixelmatch licenses match shipped bytes", as
       "acorn",
       {
         license: "MIT",
-        sha256: "e0d357db62f8b138d2e575a2cb92f087fa5d7cdb2f95d7512b9868ff3ef81277",
+        sha256: "838d0d6330ffdcf8bd15c3d31af77100f12a69535342256657a5c4fd7aef3118",
       },
     ],
     [
@@ -318,7 +318,7 @@ test("PDF data, Canvas package, and pixelmatch licenses match shipped bytes", as
 
   const exactNotices = new Map([
     [
-      "notices/acorn-8.16.0.LICENSE",
+      "notices/acorn-8.19.0.LICENSE",
       "76a876cf886ff9be2a8b5e2e86514fed06223c8c9f0c1e9ee9606e93841e00b7",
     ],
     [
