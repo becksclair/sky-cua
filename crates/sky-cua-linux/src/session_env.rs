@@ -107,7 +107,13 @@ fn hydrate_desktop_env_from_process_tree(
     blocked_keys: &HashSet<String>,
 ) {
     for process_env in desktop_process_environments() {
-        hydrate_desktop_env_from_map(report, "process-tree", &process_env, blocked_keys);
+        hydrate_desktop_env_from_map(
+            report,
+            "process-tree",
+            &process_env,
+            blocked_keys,
+            Path::new(X11_SOCKET_ROOT),
+        );
 
         if GRAPHICAL_SESSION_ENV_KEYS
             .iter()
@@ -125,7 +131,13 @@ fn hydrate_desktop_env_from_systemd(
     let Some(systemd_env) = systemd_user_environment(report) else {
         return;
     };
-    hydrate_desktop_env_from_map(report, "systemd-user", &systemd_env, blocked_keys);
+    hydrate_desktop_env_from_map(
+        report,
+        "systemd-user",
+        &systemd_env,
+        blocked_keys,
+        Path::new(X11_SOCKET_ROOT),
+    );
 }
 
 fn hydrate_desktop_env_from_active_sessions(
@@ -133,7 +145,13 @@ fn hydrate_desktop_env_from_active_sessions(
     blocked_keys: &HashSet<String>,
 ) {
     for session_env in active_session_environments() {
-        hydrate_desktop_env_from_map(report, "active-session", &session_env, blocked_keys);
+        hydrate_desktop_env_from_map(
+            report,
+            "active-session",
+            &session_env,
+            blocked_keys,
+            Path::new(X11_SOCKET_ROOT),
+        );
         if GRAPHICAL_SESSION_ENV_KEYS
             .iter()
             .all(|key| env_var(key).is_some())
@@ -143,11 +161,14 @@ fn hydrate_desktop_env_from_active_sessions(
     }
 }
 
+const X11_SOCKET_ROOT: &str = "/tmp/.X11-unix";
+
 fn hydrate_desktop_env_from_map(
     report: &mut DoctorSessionEnvReport,
     source: &str,
     values: &HashMap<String, String>,
     blocked_keys: &HashSet<String>,
+    x11_socket_root: &Path,
 ) {
     for key in GRAPHICAL_SESSION_ENV_KEYS {
         let Some(candidate) = values.get(*key).filter(|value| !value.trim().is_empty()) else {
@@ -186,7 +207,7 @@ fn hydrate_desktop_env_from_map(
             // isolated xpra daemon (DISPLAY=:131, X131 live) from being
             // flipped to the host's :1, while still healing a shared daemon
             // whose old X0 socket has been removed and only X1 remains.
-            if is_env_value_live(key, &cur) {
+            if is_env_value_live(key, &cur, x11_socket_root) {
                 continue;
             }
             unsafe { env::set_var(key, candidate) };
@@ -220,12 +241,12 @@ fn is_isolated_sandbox(blocked_keys: &HashSet<String>) -> bool {
         && env_var("GDK_BACKEND").as_deref() == Some("x11")
 }
 
-fn is_env_value_live(key: &str, value: &str) -> bool {
+fn is_env_value_live(key: &str, value: &str, x11_socket_root: &Path) -> bool {
     match key {
         "DISPLAY" => {
-            // :N or unix/:N - live iff /tmp/.X11-unix/XN exists
+            // :N or unix/:N - live iff <x11_socket_root>/XN exists
             if let Some(num) = x11_display_number(value) {
-                return PathBuf::from(format!("/tmp/.X11-unix/X{num}")).exists();
+                return x11_socket_root.join(format!("X{num}")).exists();
             }
             // Fallback: treat non-local or unparseable as live to avoid
             // aggressive overwrites (e.g. localhost:10.0 forwarding).
@@ -711,6 +732,33 @@ mod tests {
         }
     }
 
+    /// Private stand-in for /tmp/.X11-unix so display-liveness tests never race
+    /// each other (nextest runs them in separate processes) or touch host sockets.
+    struct X11SocketRoot(PathBuf);
+
+    impl X11SocketRoot {
+        fn new(name: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let dir = std::env::temp_dir()
+                .join(format!("sky-cua-x11-{name}-{}-{nanos}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("create X11 socket root");
+            Self(dir)
+        }
+
+        fn mark_live(&self, display: u32) {
+            std::fs::File::create(self.0.join(format!("X{display}"))).expect("create X socket");
+        }
+    }
+
+    impl Drop for X11SocketRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn parses_parent_pid_from_proc_status() {
         let status = "Name:\ttest\nPid:\t42\nPPid:\t7\n";
@@ -848,7 +896,14 @@ mod tests {
             ("WAYLAND_DISPLAY".to_string(), "wayland-7".to_string()),
         ]);
 
-        hydrate_desktop_env_from_map(&mut report, "systemd-user", &values, &HashSet::new());
+        let sockets = X11SocketRoot::new("systemd-fill");
+        hydrate_desktop_env_from_map(
+            &mut report,
+            "systemd-user",
+            &values,
+            &HashSet::new(),
+            &sockets.0,
+        );
 
         assert_eq!(std::env::var("DISPLAY").ok().as_deref(), Some(":existing"));
         assert_eq!(
@@ -875,7 +930,14 @@ mod tests {
         ]);
         let blocked_keys = HashSet::from(["DISPLAY".to_string()]);
 
-        hydrate_desktop_env_from_map(&mut report, "process-tree", &values, &blocked_keys);
+        let sockets = X11SocketRoot::new("cleared-keys");
+        hydrate_desktop_env_from_map(
+            &mut report,
+            "process-tree",
+            &values,
+            &blocked_keys,
+            &sockets.0,
+        );
 
         assert_eq!(std::env::var("DISPLAY").ok(), None);
         assert_eq!(
@@ -957,7 +1019,8 @@ mod tests {
         ]);
         let blocked = HashSet::from(["WAYLAND_DISPLAY".to_string()]);
 
-        hydrate_desktop_env_from_map(&mut report, "active-session", &values, &blocked);
+        let sockets = X11SocketRoot::new("isolated");
+        hydrate_desktop_env_from_map(&mut report, "active-session", &values, &blocked, &sockets.0);
 
         assert_eq!(std::env::var("DISPLAY").ok().as_deref(), Some(":90"));
         assert_eq!(std::env::var("WAYLAND_DISPLAY").ok(), None);
@@ -974,16 +1037,9 @@ mod tests {
     #[serial]
     fn hydrate_shared_detached_corrects_display_when_x0_dead() {
         let _restore = EnvRestore::capture(&["DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE"]);
-        // Use high numbers not owned by host (X0/X1 are host sockets owned by root/bex)
-        let x99 = PathBuf::from("/tmp/.X11-unix/X99");
-        let x100 = PathBuf::from("/tmp/.X11-unix/X100");
-        let had_x99 = x99.exists();
-        let had_x100 = x100.exists();
-        if had_x99 {
-            let _ = std::fs::remove_file(&x99);
-        }
         // X99 dead, X100 live
-        let _ = std::fs::File::create(&x100);
+        let sockets = X11SocketRoot::new("x99-dead");
+        sockets.mark_live(100);
         unsafe {
             std::env::set_var("DISPLAY", ":99");
             std::env::set_var("XDG_SESSION_TYPE", "wayland");
@@ -996,7 +1052,7 @@ mod tests {
         ]);
         let blocked = HashSet::from(["DISPLAY".to_string(), "WAYLAND_DISPLAY".to_string()]);
 
-        hydrate_desktop_env_from_map(&mut report, "active-session", &values, &blocked);
+        hydrate_desktop_env_from_map(&mut report, "active-session", &values, &blocked, &sockets.0);
 
         // X99 dead → should correct to :100 even though blocked and present
         assert_eq!(std::env::var("DISPLAY").ok().as_deref(), Some(":100"));
@@ -1006,23 +1062,14 @@ mod tests {
             Some("wayland-1")
         );
         assert!(report.repaired.iter().any(|r| r.key == "DISPLAY"));
-        // Cleanup
-        let _ = std::fs::remove_file(&x100);
-        if had_x99 {
-            let _ = std::fs::File::create(&x99);
-        }
-        if !had_x100 {
-            let _ = std::fs::remove_file(&x100);
-        }
     }
 
     #[test]
     #[serial]
     fn hydrate_shared_detached_keeps_display_when_x0_live() {
         let _restore = EnvRestore::capture(&["DISPLAY"]);
-        let x99 = PathBuf::from("/tmp/.X11-unix/X99");
-        let had_x99 = x99.exists();
-        let _ = std::fs::File::create(&x99);
+        let sockets = X11SocketRoot::new("x99-live");
+        sockets.mark_live(99);
         unsafe {
             std::env::set_var("DISPLAY", ":99");
         }
@@ -1030,13 +1077,10 @@ mod tests {
         let values = HashMap::from([("DISPLAY".to_string(), ":100".to_string())]);
         let blocked = HashSet::from(["DISPLAY".to_string()]);
 
-        hydrate_desktop_env_from_map(&mut report, "active-session", &values, &blocked);
+        hydrate_desktop_env_from_map(&mut report, "active-session", &values, &blocked, &sockets.0);
 
         // X99 live → must not flip to :100 even though candidate differs
         assert_eq!(std::env::var("DISPLAY").ok().as_deref(), Some(":99"));
         assert!(report.repaired.is_empty());
-        if !had_x99 {
-            let _ = std::fs::remove_file(&x99);
-        }
     }
 }
