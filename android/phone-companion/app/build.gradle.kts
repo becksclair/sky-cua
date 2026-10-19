@@ -155,7 +155,7 @@ abstract class EmitBuildMetadataTask : DefaultTask() {
 
 android {
     namespace = "com.skycua.phonecompanion"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.skycua.phonecompanion"
@@ -210,6 +210,8 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
         unitTests.isIncludeAndroidResources = true
+        // Robolectric's API 37 sandbox reaches jdk.internal.access on JDK 17+.
+        unitTests.all { it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED") }
     }
 }
 
