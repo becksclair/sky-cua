@@ -4,7 +4,7 @@ import { unlinkSync, writeFileSync } from "node:fs";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { sky } from "../src/index";
+import { linuxOwnKeys } from "../src/targets/linux";
 import { createPhoneClient, phone, PhoneDisconnectedError, PhoneScreenshot, SkyCuaError, SkyPhoneFileError } from "../src/phone/index";
 import type { PhoneRequest, PhoneServiceRequest } from "../src/phone/protocol";
 
@@ -95,7 +95,7 @@ afterEach(() => {
 
 describe("@heliasar/sky-cua/phone", () => {
   test("keeps the root Computer facade unchanged and the Phone singleton lazy", () => {
-    expect(Object.keys(sky)).toEqual(["activate_window", "appshot_capture", "click", "drag", "get_screenshot", "move", "press_key", "scroll", "type_text"]);
+    expect(linuxOwnKeys()).toEqual(["activate_window", "appshot_capture", "click", "drag", "get_screenshot", "move", "press_key", "scroll", "type_text"]);
     expect(typeof phone.connect).toBe("function");
     expect(Object.keys(phone)).toEqual([
       "request", "status", "list_devices", "pair_wireless", "connect", "bind", "observe",
