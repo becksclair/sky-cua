@@ -337,12 +337,20 @@ def _archive_payload(payload_root: Path, archive_path: Path) -> None:
     os.replace(temporary, archive_path)
 
 
+def _stage_companion() -> None:
+    # Checkout-only build step; the installed payload ships without _companion.
+    from _companion import build_and_stage_companion, print_companion_build_outcome
+
+    print_companion_build_outcome(build_and_stage_companion())
+
+
 def build_payload(
     output_root: Path,
     *,
     create_archive: bool,
     portable_x86_64_v3: bool,
     runner: Callable[[Sequence[str]], None] = _run,
+    stage_companion: Callable[[], None] = _stage_companion,
 ) -> tuple[Path, Path | None]:
     """Own every generated input, assemble one payload, and optionally archive it."""
     output_root = output_root.expanduser().resolve()
@@ -376,6 +384,9 @@ def build_payload(
             "--json",
         )
     )
+    # build_plugin.py bundles whatever companion APK is staged; rebuild it first
+    # when its sources are newer so a release never ships a stale APK.
+    stage_companion()
     build_plugin_command = [
         sys.executable,
         str(REPO_ROOT / "scripts/build_plugin.py"),

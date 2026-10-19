@@ -340,7 +340,11 @@ behavior is unchanged.
 - Bundled skill: `skills/phone-use/`.
 - Optional companion artifacts: `resources/android/phone-companion.apk` and
   `resources/android/phone-companion.json` (conditional; produced by the
-  Android lane).
+  Android lane). Both `deploy_plugin.py` and the standalone payload build
+  (`install.py build`/`install`, so `just release`) rebuild them first when
+  the companion sources are newer than the staged APK, and skip with a note
+  when no JDK 21 + Android SDK is available. Bump `versionCode` whenever the
+  shipped APK changes: installs treat an equal `versionCode` as up to date.
 
 ## Verification
 

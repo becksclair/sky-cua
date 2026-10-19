@@ -231,6 +231,7 @@ def test_build_owns_generated_inputs_and_emits_one_fixed_archive(
         create_archive=True,
         portable_x86_64_v3=True,
         runner=fake_runner,
+        stage_companion=lambda: calls.append(("stage_companion",)),
     )
 
     assert archive == tmp_path / "dist" / ARCHIVE_NAME
@@ -241,9 +242,13 @@ def test_build_owns_generated_inputs_and_emits_one_fixed_archive(
         ("bun", "install", "--frozen-lockfile"),
         ("bun", "install", "--frozen-lockfile"),
     ]
-    assert [Path(command[1]).name for command in calls[3:]] == [
+    assert [
+        command[0] if command == ("stage_companion",) else Path(command[1]).name
+        for command in calls[3:]
+    ] == [
         "build_model_documentation.py",
         "assemble_cua_node.py",
+        "stage_companion",
         "build_plugin.py",
     ]
     assert calls[-1][-1] == "--portable-x86-64-v3"
@@ -330,8 +335,10 @@ def test_local_build_payload_omits_portable_release_mode(
         create_archive=False,
         portable_x86_64_v3=False,
         runner=fake_runner,
+        stage_companion=lambda: calls.append(("stage_companion",)),
     )
 
+    assert calls[-2] == ("stage_companion",)
     assert Path(calls[-1][1]).name == "build_plugin.py"
     assert "--portable-x86-64-v3" not in calls[-1]
 
