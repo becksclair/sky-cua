@@ -85,7 +85,7 @@ pub(super) fn command_error_diagnostic(
 /// Diagnostic for an `adb` command that ran but exited non-zero. Stderr is the
 /// load-bearing field for adb errors, so it is surfaced (bounded) in `details`.
 fn nonzero_exit_diagnostic(command_line: &str, output: &CommandOutput) -> DiagnosticEntry {
-    let code = output.status.map_or(-1, |c| c);
+    let code = output.status.unwrap_or(-1);
     let stderr = output.stderr_string();
     DiagnosticEntry {
         code: "PhoneAdbCommandFailed".to_string(),
@@ -685,7 +685,7 @@ pub(super) async fn foreground_app(
             program: command_line(&adb, &window_argv),
             message: format!(
                 "`dumpsys window` exited with status {} and no fallback focus was found",
-                window_output.status.map_or(-1, |c| c)
+                window_output.status.unwrap_or(-1)
             ),
         });
     }
@@ -694,7 +694,7 @@ pub(super) async fn foreground_app(
             program: command_line(&adb, &activity_argv),
             message: format!(
                 "`dumpsys activity activities` exited with status {} and no focus was found",
-                activity_output.status.map_or(-1, |c| c)
+                activity_output.status.unwrap_or(-1)
             ),
         });
     }

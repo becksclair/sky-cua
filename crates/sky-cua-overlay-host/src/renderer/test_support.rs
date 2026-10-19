@@ -252,8 +252,10 @@ pub(crate) fn read_f32_buffer(
     f32_count: usize,
 ) -> Vec<f32> {
     read_bytes(device, buffer, f32_count * 4)
-        .chunks_exact(4)
-        .map(|chunk| f32::from_ne_bytes(chunk.try_into().expect("four bytes")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| f32::from_ne_bytes(*chunk))
         .collect()
 }
 

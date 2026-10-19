@@ -421,7 +421,7 @@ impl PhoneManager {
                     message: format!(
                         "companion setup intent (am start .SetupActivity) exited with status {}; \
                          the session token may not have been delivered",
-                        output.status.map_or(-1, |c| c)
+                        output.status.unwrap_or(-1)
                     ),
                     details: None,
                 });

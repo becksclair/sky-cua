@@ -64,7 +64,7 @@ async fn require_appshot(
     target: Option<BrowserTargetKind>,
     tab_id: &str,
     identity: &BrowserSessionIdentity,
-) -> Result<(), BrowserResponse> {
+) -> Result<(), Box<BrowserResponse>> {
     let target = target.unwrap_or(BrowserTargetKind::UserChrome);
     let registered = appshot_id.as_deref().and_then(|id| {
         appshot_registry()
@@ -120,14 +120,14 @@ async fn require_appshot(
     .await;
     register_appshot(current.appshot.clone(), target);
     let reason = rejection.unwrap_or(AppShotRejectionReason::Missing);
-    Err(BrowserResponse::AppShotRequired {
+    Err(Box::new(BrowserResponse::AppShotRequired {
         rejection: AppShotRequired {
             code: "AppShotRequired".into(),
             reason,
             message: "Capture a fresh browser AppShot before this mutation.".into(),
             fresh_appshot: Box::new(current.appshot),
         },
-    })
+    }))
 }
 
 impl Executor for IntegrationExecutor {
@@ -397,7 +397,7 @@ pub(crate) async fn execute_high_level(
             )
             .await
             {
-                rejection
+                *rejection
             } else {
                 BrowserResponse::MoveMouse {
                     response: crate::browser::move_mouse_with_identity(
@@ -517,7 +517,7 @@ pub(crate) async fn execute_high_level(
             )
             .await
             {
-                rejection
+                *rejection
             } else {
                 BrowserResponse::Click {
                     response: crate::browser::click_with_identity(target, tab_id, x, y, identity)
@@ -539,7 +539,7 @@ pub(crate) async fn execute_high_level(
             )
             .await
             {
-                rejection
+                *rejection
             } else {
                 BrowserResponse::Click {
                     response: crate::browser::click_element_with_identity(
@@ -566,7 +566,7 @@ pub(crate) async fn execute_high_level(
             )
             .await
             {
-                rejection
+                *rejection
             } else {
                 BrowserResponse::TypeText {
                     response: crate::browser::type_text_with_identity(
@@ -591,7 +591,7 @@ pub(crate) async fn execute_high_level(
             )
             .await
             {
-                rejection
+                *rejection
             } else {
                 BrowserResponse::TypeText {
                     response: crate::browser::type_text_element_with_identity(
@@ -619,7 +619,7 @@ pub(crate) async fn execute_high_level(
             )
             .await
             {
-                rejection
+                *rejection
             } else {
                 BrowserResponse::PressKey {
                     response: crate::browser::press_key_with_identity(
@@ -646,7 +646,7 @@ pub(crate) async fn execute_high_level(
             )
             .await
             {
-                rejection
+                *rejection
             } else {
                 BrowserResponse::Scroll {
                     response: crate::browser::scroll_with_identity(
@@ -670,7 +670,7 @@ pub(crate) async fn execute_high_level(
             )
             .await
             {
-                rejection
+                *rejection
             } else {
                 BrowserResponse::Eval {
                     response: crate::browser::eval_with_policy_and_identity(

@@ -85,7 +85,7 @@ impl PhoneManager {
             .await
         {
             Ok(v) => v,
-            Err(resp) => return resp,
+            Err(resp) => return *resp,
         };
         let result = self.dispatch_tap(&ctx, backend, device_point).await;
         let overlay_gesture = Some(OverlayGestureSpec {
@@ -122,7 +122,7 @@ impl PhoneManager {
             .await
         {
             Ok(v) => v,
-            Err(resp) => return resp,
+            Err(resp) => return *resp,
         };
 
         let result = self
@@ -268,7 +268,7 @@ impl PhoneManager {
             .await
         {
             Ok(v) => v,
-            Err(resp) => return resp,
+            Err(resp) => return *resp,
         };
         let duration = request
             .duration_ms
@@ -312,7 +312,7 @@ impl PhoneManager {
             .await
         {
             Ok(v) => v,
-            Err(resp) => return resp,
+            Err(resp) => return *resp,
         };
         let interval = request
             .interval_ms
@@ -876,28 +876,28 @@ impl PhoneManager {
             Option<PhonePoint>,
             PhoneBackendKind,
         ),
-        PhoneActionResponse,
+        Box<PhoneActionResponse>,
     > {
         let Some(pre_ctx) = self.action_context(session) else {
-            return Err(action_no_session(session, method));
+            return Err(Box::new(action_no_session(session, method)));
         };
         if let Err(diag) =
             self.device_point_for(&pre_ctx, snapshot_id, x, y, use_device_coordinates)
         {
-            return Err(action_failure(&pre_ctx, method, diag));
+            return Err(Box::new(action_failure(&pre_ctx, method, diag)));
         }
         let Some(ctx) = self.fresh_action_context(session).await else {
-            return Err(action_no_session(session, method));
+            return Err(Box::new(action_no_session(session, method)));
         };
         let device_point =
             match self.device_point_for(&ctx, snapshot_id, x, y, use_device_coordinates) {
                 Ok(p) => p,
-                Err(diag) => return Err(action_failure(&ctx, method, diag)),
+                Err(diag) => return Err(Box::new(action_failure(&ctx, method, diag))),
             };
         let screenshot_point = (!use_device_coordinates).then_some(PhonePoint { x, y });
         let backend = match self.coordinate_backend(&ctx.profile) {
             Ok(b) => b,
-            Err(diag) => return Err(action_failure(&ctx, method, diag)),
+            Err(diag) => return Err(Box::new(action_failure(&ctx, method, diag))),
         };
         Ok((ctx, device_point, screenshot_point, backend))
     }
@@ -923,10 +923,10 @@ impl PhoneManager {
             Option<PhonePoint>,
             PhoneBackendKind,
         ),
-        PhoneActionResponse,
+        Box<PhoneActionResponse>,
     > {
         let Some(pre_ctx) = self.action_context(session) else {
-            return Err(action_no_session(session, method));
+            return Err(Box::new(action_no_session(session, method)));
         };
         if let Err(diag) = self.device_point_for(
             &pre_ctx,
@@ -935,15 +935,15 @@ impl PhoneManager {
             start_y,
             use_device_coordinates,
         ) {
-            return Err(action_failure(&pre_ctx, method, diag));
+            return Err(Box::new(action_failure(&pre_ctx, method, diag)));
         }
         if let Err(diag) =
             self.device_point_for(&pre_ctx, snapshot_id, end_x, end_y, use_device_coordinates)
         {
-            return Err(action_failure(&pre_ctx, method, diag));
+            return Err(Box::new(action_failure(&pre_ctx, method, diag)));
         }
         let Some(ctx) = self.fresh_action_context(session).await else {
-            return Err(action_no_session(session, method));
+            return Err(Box::new(action_no_session(session, method)));
         };
         let start = match self.device_point_for(
             &ctx,
@@ -953,12 +953,12 @@ impl PhoneManager {
             use_device_coordinates,
         ) {
             Ok(p) => p,
-            Err(diag) => return Err(action_failure(&ctx, method, diag)),
+            Err(diag) => return Err(Box::new(action_failure(&ctx, method, diag))),
         };
         let end =
             match self.device_point_for(&ctx, snapshot_id, end_x, end_y, use_device_coordinates) {
                 Ok(p) => p,
-                Err(diag) => return Err(action_failure(&ctx, method, diag)),
+                Err(diag) => return Err(Box::new(action_failure(&ctx, method, diag))),
             };
         let start_screenshot = (!use_device_coordinates).then_some(PhonePoint {
             x: start_x,
@@ -967,7 +967,7 @@ impl PhoneManager {
         let end_screenshot = (!use_device_coordinates).then_some(PhonePoint { x: end_x, y: end_y });
         let backend = match self.coordinate_backend(&ctx.profile) {
             Ok(b) => b,
-            Err(diag) => return Err(action_failure(&ctx, method, diag)),
+            Err(diag) => return Err(Box::new(action_failure(&ctx, method, diag))),
         };
         Ok((ctx, start, end, start_screenshot, end_screenshot, backend))
     }

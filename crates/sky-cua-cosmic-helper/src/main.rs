@@ -919,10 +919,9 @@ impl Dispatch<zcosmic_toplevel_handle_v1::ZcosmicToplevelHandleV1, ()> for AppDa
             zcosmic_toplevel_handle_v1::Event::State { state } => {
                 record.focused = false;
                 record.hidden = false;
-                for value in state.chunks_exact(4) {
-                    if let Ok(bytes) = <[u8; 4]>::try_from(value)
-                        && let Ok(parsed) =
-                            zcosmic_toplevel_handle_v1::State::try_from(u32::from_ne_bytes(bytes))
+                for &bytes in state.as_chunks::<4>().0 {
+                    if let Ok(parsed) =
+                        zcosmic_toplevel_handle_v1::State::try_from(u32::from_ne_bytes(bytes))
                     {
                         if parsed == zcosmic_toplevel_handle_v1::State::Activated {
                             record.focused = true;
@@ -982,14 +981,10 @@ impl Dispatch<zcosmic_toplevel_manager_v1::ZcosmicToplevelManagerV1, ()> for App
         match event {
             zcosmic_toplevel_manager_v1::Event::Capabilities { capabilities } => {
                 app_data.capabilities = capabilities
-                    .chunks_exact(4)
-                    .map(|chunk| {
-                        WEnum::from(u32::from_ne_bytes(
-                            chunk
-                                .try_into()
-                                .expect("chunks_exact(4) guarantees 4-byte chunks"),
-                        ))
-                    })
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|chunk| WEnum::from(u32::from_ne_bytes(*chunk)))
                     .collect();
             }
             _ => unreachable!(),
