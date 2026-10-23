@@ -72,7 +72,7 @@ webp = { version = "0.3.1", default-features = false }
 windows = { version = "0.62.2", default-features = false }
 windows-sys = "0.61.2"
 xkbcommon = "0.9.0"
-zbus = { version = "5.14.0", features = ["tokio"] }
+zbus = { version = "6.0.0", features = ["tokio"] }
 url = "2.5.7"
 if-addrs = "0.9"
 wayland-client = { version = "0.31.11", features = ["system"] }
