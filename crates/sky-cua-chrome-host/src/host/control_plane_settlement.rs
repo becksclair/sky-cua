@@ -127,6 +127,7 @@ impl Drop for DeliveryGuard {
         };
         if state.delivery_seq == self.delivery_seq {
             state.settlement_delivery_in_progress = false;
+            state.settlement_delivering_to = None;
         }
     }
 }
@@ -596,6 +597,7 @@ impl HostState {
         let phase_revision = front.phase_revision;
         self.delivery_seq += 1;
         self.settlement_delivery_in_progress = true;
+        self.settlement_delivering_to = Some(client_id);
         Some((
             DeliveryLease {
                 client_id,
@@ -609,11 +611,19 @@ impl HostState {
         ))
     }
 
-    fn finish_delivery(&mut self, lease: DeliveryLease, delivered: bool) {
+    /// Returns whether the leased front was acknowledged while its frame was
+    /// still being written, so the caller should deliver the next front now.
+    fn finish_delivery(&mut self, lease: DeliveryLease, delivered: bool) -> bool {
         assert!(
             self.settlement_delivery_in_progress,
             "settlement delivery completed without an active claim"
         );
+        self.settlement_delivering_to = None;
+        let acked_during_delivery = delivered
+            && self
+                .queued_settlements
+                .front()
+                .is_none_or(|front| front.identity() != lease.identity);
         if delivered {
             // Throttle state and phase timestamps change only when the full
             // frame was delivered AND the front still matches this lease. A
@@ -637,6 +647,7 @@ impl HostState {
             self.settlement_delivered_at = None;
         }
         self.settlement_delivery_in_progress = false;
+        acked_during_delivery
     }
 
     /// Atomically request a client close. Returns whether this caller
@@ -669,7 +680,9 @@ impl HostState {
         };
         if client.role != ClientRole::ControlPlane
             || !client.capabilities.contains(SETTLEMENT_ACK_CAPABILITY)
-            || self.settlement_delivered_to != Some(client_id)
+            // A fast acker can answer before the delivering writer returns.
+            || (self.settlement_delivered_to != Some(client_id)
+                && self.settlement_delivering_to != Some(client_id))
             || message
                 .pointer("/params/acknowledging_daemon_generation")
                 .and_then(Value::as_str)
@@ -791,24 +804,29 @@ pub(super) fn settlement_maintenance_loop(state: SharedState) {
 }
 
 pub(super) fn deliver_queued_settlements(state: &SharedState) {
-    let delivery = {
-        let mut state = state.lock().expect("host state mutex poisoned");
-        state
-            .begin_settlement_delivery()
-            .map(|(lease, writer, message)| (lease, writer, state.host_name.clone(), message))
-    };
-    let Some((lease, writer, host_name, message)) = delivery else {
-        return;
-    };
-    let _guard = DeliveryGuard {
-        state: Arc::clone(state),
-        delivery_seq: lease.delivery_seq,
-    };
-    let delivered = deliver_settlement_frame(state, &lease, &writer, &host_name, &message);
-    state
-        .lock()
-        .expect("host state mutex poisoned")
-        .finish_delivery(lease, delivered);
+    loop {
+        let delivery = {
+            let mut state = state.lock().expect("host state mutex poisoned");
+            state
+                .begin_settlement_delivery()
+                .map(|(lease, writer, message)| (lease, writer, state.host_name.clone(), message))
+        };
+        let Some((lease, writer, host_name, message)) = delivery else {
+            return;
+        };
+        let _guard = DeliveryGuard {
+            state: Arc::clone(state),
+            delivery_seq: lease.delivery_seq,
+        };
+        let delivered = deliver_settlement_frame(state, &lease, &writer, &host_name, &message);
+        let acked_during_delivery = state
+            .lock()
+            .expect("host state mutex poisoned")
+            .finish_delivery(lease, delivered);
+        if !acked_during_delivery {
+            return;
+        }
+    }
 }
 
 fn deliver_settlement_frame(

@@ -780,6 +780,124 @@ async fn settlement_and_settlement_unknown_are_routed_as_events() {
     server.await.unwrap();
 }
 
+fn mutation_request(name: &str) -> BridgeActorRequest {
+    BridgeActorRequest::new(
+        "executeCdp",
+        json!({"method":"Input.dispatchMouseEvent"}),
+        format!("operation-{name}"),
+        OperationClass::Mutation,
+    )
+}
+
+fn completed_settlement(operation: &Value, chrome_id: &str, completion: Value) -> Value {
+    let host_request = &operation["params"]["_sky_cua_host_request"];
+    json!({
+        "jsonrpc":"2.0",
+        "method":"skyCuaHost/settlement",
+        "params":{
+            "status":"completed",
+            "operation_id": host_request["operation_id"],
+            "daemon_generation": host_request["daemon_generation"],
+            "actor_generation": host_request["actor_generation"],
+            "original_request_id": operation["id"],
+            "chrome_request_id": chrome_id,
+            "completion": completion,
+        }
+    })
+}
+
+#[tokio::test]
+async fn directly_replied_mutation_settlement_is_acked_by_actor() {
+    let fixture = SocketFixture::new("direct-settlement");
+    let listener = UnixListener::bind(&fixture.path).unwrap();
+    let server = tokio::spawn(async move {
+        let mut stream = accept_hello(&listener, "host-direct-settlement").await;
+        let operation = read_operation(&mut stream).await;
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc":"2.0", "id":operation["id"], "result":{"ok":true}}),
+        )
+        .await
+        .unwrap();
+        let settlement = completed_settlement(&operation, "chrome-direct", json!({"result":{}}));
+        // The host redelivers a front whose ack it rejected; one that aged
+        // while queued arrives rewritten as settlement_unknown.
+        let mut aged = settlement.clone();
+        aged["params"]["status"] = json!("settlement_unknown");
+        aged["params"]["completion"] = Value::Null;
+        for frame in [&settlement, &settlement, &aged] {
+            write_frame(&mut stream, frame).await.unwrap();
+            let ack = read_operation(&mut stream).await;
+            assert_eq!(ack["method"], "skyCuaHost/settlementAck");
+            assert_eq!(
+                ack["params"]["operation_id"],
+                operation["params"]["_sky_cua_host_request"]["operation_id"]
+            );
+            assert_eq!(ack["params"]["chrome_request_id"], "chrome-direct");
+        }
+    });
+    let actor = ready_actor(&fixture.path, 27).await;
+    let mut events = actor.subscribe();
+    let response = actor.request(mutation_request("direct")).await.unwrap();
+    assert_eq!(response["result"]["ok"], true);
+    server.await.unwrap();
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(
+                event,
+                BridgeActorEvent::Settlement(_) | BridgeActorEvent::SettlementUnknown(_)
+            ),
+            "receipted settlement must not reach the control plane"
+        );
+    }
+    actor.shutdown().await;
+}
+
+#[tokio::test]
+async fn settlement_overtaking_its_reply_resolves_request_and_is_acked() {
+    let fixture = SocketFixture::new("early-settlement");
+    let listener = UnixListener::bind(&fixture.path).unwrap();
+    let server = tokio::spawn(async move {
+        let mut stream = accept_hello(&listener, "host-early-settlement").await;
+        let operation = read_operation(&mut stream).await;
+        write_frame(
+            &mut stream,
+            &completed_settlement(
+                &operation,
+                "chrome-early",
+                json!({"jsonrpc":"2.0", "id":"chrome-early", "result":{"ok":"early"}}),
+            ),
+        )
+        .await
+        .unwrap();
+        let ack = read_operation(&mut stream).await;
+        assert_eq!(ack["method"], "skyCuaHost/settlementAck");
+        assert_eq!(ack["params"]["chrome_request_id"], "chrome-early");
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc":"2.0", "id":operation["id"], "result":{"ok":"early"}}),
+        )
+        .await
+        .unwrap();
+        let next = read_operation(&mut stream).await;
+        write_frame(
+            &mut stream,
+            &json!({"jsonrpc":"2.0", "id":next["id"], "result":"next"}),
+        )
+        .await
+        .unwrap();
+    });
+    let actor = ready_actor(&fixture.path, 28).await;
+    let response = actor.request(mutation_request("early")).await.unwrap();
+    assert_eq!(response["result"]["ok"], "early");
+    assert_eq!(
+        actor.request(request("next")).await.unwrap()["result"],
+        "next"
+    );
+    actor.shutdown().await;
+    server.await.unwrap();
+}
+
 #[tokio::test]
 async fn detached_waiter_does_not_close_or_stop_draining_stream() {
     let fixture = SocketFixture::new("detach");

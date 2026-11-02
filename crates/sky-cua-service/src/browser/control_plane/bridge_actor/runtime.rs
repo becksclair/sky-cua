@@ -32,6 +32,9 @@ pub(super) struct Tombstone {
     pub(super) created_at: Instant,
     pub(super) operation_id: Option<String>,
     pub(super) operation_class: Option<OperationClass>,
+    // A mutating request whose reply reached the actor; the host's retained
+    // settlement for it is a redundant receipt.
+    direct_receipt: bool,
 }
 
 pub(super) struct Runtime {
@@ -55,6 +58,14 @@ impl Runtime {
             tombstone_order: VecDeque::new(),
             heartbeat: None,
         }
+    }
+
+    /// Receipts are not consumed: the host redelivers its front until an ack
+    /// lands, and every redelivery of a receipted settlement is acked again.
+    pub(super) fn has_direct_receipt(&self, request_id: &str) -> bool {
+        self.tombstones
+            .get(request_id)
+            .is_some_and(|tombstone| tombstone.direct_receipt)
     }
 
     pub(super) fn allocate_request_id(&mut self, config: &BridgeActorConfig) -> String {
@@ -91,13 +102,14 @@ impl Runtime {
         }
     }
 
-    pub(super) fn tombstone(&mut self, request_id: String, now: Instant) {
+    pub(super) fn tombstone(&mut self, request_id: String, now: Instant, direct_receipt: bool) {
         self.tombstones.insert(
             request_id.clone(),
             Tombstone {
                 created_at: now,
                 operation_id: None,
                 operation_class: None,
+                direct_receipt,
             },
         );
         self.tombstone_order.push_back(request_id);
@@ -117,6 +129,7 @@ impl Runtime {
                 created_at: now,
                 operation_id: Some(operation_id),
                 operation_class: Some(operation_class),
+                direct_receipt: false,
             },
         );
         self.tombstone_order.push_back(request_id);
@@ -166,6 +179,7 @@ impl Runtime {
                     created_at: now,
                     operation_id: Some(pending.operation_id.clone()),
                     operation_class: Some(pending.operation_class),
+                    direct_receipt: false,
                 },
             );
             let _ = pending.reply.send(result);

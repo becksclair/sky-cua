@@ -182,6 +182,36 @@ pub(super) fn route_notification(events: &broadcast::Sender<BridgeActorEvent>, f
     }
 }
 
+/// The actor request id a host settlement frame settles, in either phase:
+/// aged entries are rewritten as `settlement_unknown` but keep this id.
+pub(super) fn settlement_original_request_id(frame: &Value) -> Option<String> {
+    if frame.get("method").and_then(Value::as_str) != Some(HOST_SETTLEMENT_METHOD) {
+        return None;
+    }
+    frame
+        .pointer("/params/original_request_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+/// Acknowledge a settlement the actor resolved itself; an unbuildable ack
+/// sends the settlement down the ordinary control-plane route instead.
+pub(super) async fn acknowledge_receipted_settlement(
+    stream: &mut UnixStream,
+    frame: Value,
+    events: &broadcast::Sender<BridgeActorEvent>,
+    acknowledging_daemon_generation: &str,
+    write_timeout: Duration,
+) -> Result<(), BridgeActorError> {
+    match settlement_ack_frame(&frame, acknowledging_daemon_generation) {
+        Ok(ack) => write_frame_bounded(stream, &ack, write_timeout).await,
+        Err(_) => {
+            route_notification(events, frame);
+            Ok(())
+        }
+    }
+}
+
 pub(super) fn settlement_ack_frame(
     settlement: &Value,
     acknowledging_daemon_generation: &str,

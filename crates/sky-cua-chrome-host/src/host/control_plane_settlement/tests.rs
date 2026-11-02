@@ -710,6 +710,59 @@ fn ack_pop_during_write_cannot_mark_next_front_delivered() {
 }
 
 #[test]
+fn ack_racing_first_delivery_write_is_accepted_and_advances_queue() {
+    let (peer, writer_stream) = UnixStream::pair().unwrap();
+    let mut host = test_host_state();
+    let first_metadata = test_settlement_metadata("operation-race-1");
+    let second_metadata = test_settlement_metadata("operation-race-2");
+    for (metadata, chrome_id) in [
+        (&first_metadata, "chrome-race-1"),
+        (&second_metadata, "chrome-race-2"),
+    ] {
+        host.queue_settlement(
+            metadata.clone(),
+            settlement_message(
+                "completed",
+                chrome_id,
+                &json!(format!("actor-{chrome_id}")),
+                metadata,
+                Some(json!({"result":{}})),
+            ),
+        )
+        .unwrap();
+    }
+    let client_id = host.add_client(Arc::new(Mutex::new(writer_stream)));
+    host.handle_host_hello(
+        client_id,
+        &control_plane_hello(
+            "hello",
+            "daemon-1",
+            &[CONTROL_PLANE_CAPABILITY, SETTLEMENT_ACK_CAPABILITY],
+        ),
+    );
+
+    let (lease, _, _) = host.begin_settlement_delivery().unwrap();
+    let ack = settlement_ack(&host.queued_settlements[0].message, "daemon-1");
+    assert!(
+        host.acknowledge_settlement(client_id, &ack),
+        "an ack that beats the delivering writer must be accepted"
+    );
+    assert!(host.finish_delivery(lease, true));
+    drop(peer);
+
+    assert_eq!(host.queued_settlements.len(), 1);
+    assert_eq!(
+        host.queued_settlements[0].message["params"]["operation_id"],
+        json!("operation-race-2")
+    );
+    assert!(host.settlement_delivering_to.is_none());
+    assert!(
+        host.begin_settlement_delivery().is_some(),
+        "the next front is deliverable immediately"
+    );
+}
+
+#[test]
 fn delivery_guard_clears_in_progress_on_all_error_paths() {
     let state = Arc::new(Mutex::new(test_host_state()));
     // A newer delivery superseded this one: the stale guard must not clear it.

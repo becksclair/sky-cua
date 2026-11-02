@@ -28,9 +28,10 @@ mod wire;
 
 use runtime::{PendingRequest, QueuedRequest, Runtime};
 use wire::{
-    HEARTBEAT_DEADLINE, HOST_RELEASE_METHOD, HOST_SETTLEMENT_ACK_METHOD, Handshake, is_ping,
-    operation_class_name, perform_handshake, request_size, requires_settlement, route_notification,
-    settlement_ack_frame, unix_epoch_ms, write_frame_bounded, write_pong,
+    HEARTBEAT_DEADLINE, HOST_RELEASE_METHOD, HOST_SETTLEMENT_ACK_METHOD, Handshake,
+    acknowledge_receipted_settlement, is_ping, operation_class_name, perform_handshake,
+    request_size, requires_settlement, route_notification, settlement_ack_frame,
+    settlement_original_request_id, unix_epoch_ms, write_frame_bounded, write_pong,
 };
 
 static DAEMON_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -710,7 +711,7 @@ async fn serve_ready_connection(
             frame = read_frame(stream) => match frame {
                 Ok(Some(frame)) => {
                     record_persistent_actor_health(&config.socket_path, true);
-                    if handle_frame(stream, frame, events, health_sender, health, runtime).await.is_err() {
+                    if handle_frame(stream, frame, events, health_sender, health, runtime, config.write_timeout).await.is_err() {
                         return false;
                     }
                 }
@@ -1022,9 +1023,51 @@ async fn handle_frame(
     health_sender: &watch::Sender<BridgeActorHealth>,
     health: &mut BridgeActorHealth,
     runtime: &mut Runtime,
+    write_timeout: Duration,
 ) -> Result<(), BridgeActorError> {
     if is_ping(&frame) {
         return write_pong(stream, &frame).await;
+    }
+    if let Some(request_id) = settlement_original_request_id(&frame) {
+        if runtime.has_direct_receipt(&request_id) {
+            return acknowledge_receipted_settlement(
+                stream,
+                frame,
+                events,
+                &health.daemon_generation,
+                write_timeout,
+            )
+            .await;
+        }
+        // Only a completed settlement carries a completion; an aged unknown
+        // one for a still-pending request takes the ordinary route.
+        if runtime
+            .pending
+            .get(&request_id)
+            .is_some_and(|pending| requires_settlement(pending.operation_class))
+            && let Some(mut reply) = frame.pointer("/params/completion").cloned()
+            && let Some(object) = reply.as_object_mut()
+        {
+            // The settlement overtook its direct reply; its completion is the
+            // reply, and the reply that follows lands on the tombstone.
+            object.insert("id".to_owned(), Value::String(request_id.clone()));
+            let pending = runtime.pending.remove(&request_id).expect("pending exists");
+            let result = if let Some(error) = reply.get("error") {
+                Err(BridgeActorError::UpstreamError(error.clone()))
+            } else {
+                Ok(reply)
+            };
+            let _ = pending.reply.send(result);
+            runtime.tombstone(request_id, Instant::now(), true);
+            return acknowledge_receipted_settlement(
+                stream,
+                frame,
+                events,
+                &health.daemon_generation,
+                write_timeout,
+            )
+            .await;
+        }
     }
     if frame.get("method").and_then(Value::as_str).is_some() {
         route_notification(events, frame);
@@ -1052,7 +1095,11 @@ async fn handle_frame(
             Ok(frame)
         };
         let _ = pending.reply.send(result);
-        runtime.tombstone(request_id, Instant::now());
+        runtime.tombstone(
+            request_id,
+            Instant::now(),
+            requires_settlement(pending.operation_class),
+        );
     } else if let Some(tombstone) = runtime.tombstones.get(&request_id) {
         let operation_id = tombstone
             .operation_class
