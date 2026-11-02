@@ -234,7 +234,9 @@ class DevToolsWebSocket:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--browser", choices=["auto", "brave", "chromium"], default="auto")
+    parser.add_argument(
+        "--browser", choices=["auto", "brave", "chromium", "chrome"], default="auto"
+    )
     parser.add_argument("--extension-id", default=DEFAULT_EXTENSION_ID)
     parser.add_argument("--extension-dir", type=Path, default=default_extension_dir())
     parser.add_argument(
@@ -1226,6 +1228,12 @@ def run_smoke(args: argparse.Namespace, artifact_dir: Path) -> dict[str, object]
             "--keep-browser-open cannot prove turnEnded because stderr is read on exit"
         )
     browser = browser_command(args.browser)
+    load_via_devtools_pipe = browser.name == "chrome"
+    if load_via_devtools_pipe and args.keep_browser_open:
+        raise ValueError(
+            "--keep-browser-open is unsupported for chrome: the browser exits when the "
+            "DevTools pipe that loaded the extension closes with the smoke"
+        )
     manifest_restore: ManifestRestore | None = None
     manifest_restored = False
     with tempfile.TemporaryDirectory(prefix="sky-cua-chrome-host-smoke-") as temp:
@@ -1250,6 +1258,7 @@ def run_smoke(args: argparse.Namespace, artifact_dir: Path) -> dict[str, object]
                 extension_dir=loaded_extension_dir,
                 socket_dir=socket_dir,
                 sessions_dir=sessions_dir,
+                load_extension_via_devtools_pipe=load_via_devtools_pipe,
             )
             port = wait_for_devtools_port(user_data_dir, proc)
             target = wait_for_extension_target(port, args.extension_id)

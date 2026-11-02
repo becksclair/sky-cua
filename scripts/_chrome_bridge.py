@@ -4,7 +4,9 @@ Factored out of ``live_chrome_host_client_smoke.py`` so both the chrome-host
 smoke and the codex CUA smoke can launch a real browser with the sky-cua Codex
 extension loaded, register the native-messaging host manifest, and wait for the
 native-host UNIX socket to appear. ``google-chrome`` support (the testing VM's
-browser) is added here alongside the existing ``brave``/``chromium`` paths.
+browser) is added here alongside the existing ``brave``/``chromium`` paths;
+branded Chrome loads the extension over the DevTools pipe because it rejects
+the ``--load-extension`` command-line switch.
 
 These helpers are launch/transport plumbing only; the proof/assertion logic
 stays in the individual smokes.
@@ -15,6 +17,7 @@ from __future__ import annotations
 import http.server
 import json
 import os
+import select
 import shutil
 import subprocess
 import threading
@@ -39,6 +42,12 @@ FALLBACK_EXTENSION_DIR = (
 )
 DEFAULT_HOST_PATH = REPO_ROOT / "target/debug/sky-cua-chrome-host"
 HOST_NAME = "com.openai.codexextension"
+DEVTOOLS_PIPE_TIMEOUT_SECONDS = 15.0
+
+# Parent ends (write-to-browser, read-from-browser) of each live browser's
+# DevTools pipe, keyed by pid. Chrome exits when this pipe closes, so the ends
+# stay open until terminate_browser.
+_DEVTOOLS_PIPES: dict[int, tuple[int, int]] = {}
 
 
 class BrowserSelection(NamedTuple):
@@ -226,6 +235,7 @@ def launch_browser(
     socket_dir: Path,
     sessions_dir: Path,
     load_extension: bool = True,
+    load_extension_via_devtools_pipe: bool = False,
     initial_url: str = "about:blank",
     stderr_path: Path | None = None,
 ) -> subprocess.Popen[str]:
@@ -262,13 +272,27 @@ def launch_browser(
         f"--log-file={user_data_dir / 'chrome_debug.log'}",
     ]
     # When load_extension is False the caller installs the extension through the
-    # Chrome UI ("Load unpacked"); the `--load-extension` command-line switch is
-    # disabled by default in Chrome 137+ anyway, so the UI path is the durable one.
-    if load_extension:
+    # Chrome UI ("Load unpacked"). Branded Google Chrome 137+ rejects
+    # --load-extension and --disable-extensions-except outright, so it loads the
+    # extension through the DevTools pipe's Extensions.loadUnpacked instead.
+    pass_fds: tuple[int, ...] = ()
+    parent_fds: tuple[int, int] | None = None
+    if load_extension and load_extension_via_devtools_pipe:
+        args.append("--remote-debugging-pipe")
+        args.append("--enable-unsafe-extension-debugging")
+        to_browser_read, to_browser_write = os.pipe()
+        from_browser_read, from_browser_write = os.pipe()
+        pass_fds = (to_browser_read, from_browser_write)
+        parent_fds = (to_browser_write, from_browser_read)
+    elif load_extension:
         args.append(f"--disable-extensions-except={extension_dir}")
         args.append(f"--load-extension={extension_dir}")
     args.append("--ozone-platform=wayland")
     args.append(initial_url)
+    if pass_fds:
+        # Chrome reads the pipe on fd 3 and writes on fd 4; the shell maps them
+        # without a thread-unsafe preexec_fn and execs into the browser.
+        args = ["/bin/sh", "-c", f'exec "$0" "$@" 3<&{pass_fds[0]} 4>&{pass_fds[1]}', *args]
     # Chrome inherits its stderr to any native-messaging host it spawns, so the
     # sky-cua-chrome-host trace (SKY_CUA_CHROME_HOST_TRACE) lands here. Redirect it
     # to a file when a path is given so the relay trace is a retrievable artifact;
@@ -276,13 +300,62 @@ def launch_browser(
     stderr: int | object = subprocess.PIPE
     if stderr_path is not None:
         stderr = open(stderr_path, "w", encoding="utf-8")  # noqa: SIM115 (child owns the fd)
-    return subprocess.Popen(
+    proc = subprocess.Popen(
         args,
         env=env,
         stdout=subprocess.PIPE,
         stderr=stderr,
         text=True,
+        pass_fds=pass_fds,
     )
+    if parent_fds is None:
+        return proc
+    for fd in pass_fds:
+        os.close(fd)
+    _DEVTOOLS_PIPES[proc.pid] = parent_fds
+    try:
+        load_unpacked_via_devtools_pipe(*parent_fds, extension_dir)
+    except BaseException:
+        terminate_browser(proc, keep_open=False)
+        raise
+    return proc
+
+
+def load_unpacked_via_devtools_pipe(
+    write_fd: int,
+    read_fd: int,
+    extension_dir: Path,
+    *,
+    timeout: float = DEVTOOLS_PIPE_TIMEOUT_SECONDS,
+) -> str:
+    """Load an unpacked extension over Chrome's NUL-framed DevTools pipe."""
+    request = {
+        "id": 1,
+        "method": "Extensions.loadUnpacked",
+        "params": {"path": str(extension_dir)},
+    }
+    os.write(write_fd, json.dumps(request).encode() + b"\0")
+    deadline = time.monotonic() + timeout
+    buffer = b""
+    while True:
+        while b"\0" in buffer:
+            frame, buffer = buffer.split(b"\0", 1)
+            message = json.loads(frame)
+            if message.get("id") != 1:
+                continue
+            if "error" in message:
+                raise RuntimeError(f"Extensions.loadUnpacked failed: {message['error']!r}")
+            return str(message["result"]["id"])
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Extensions.loadUnpacked did not reply on the DevTools pipe")
+        ready, _, _ = select.select([read_fd], [], [], remaining)
+        if not ready:
+            continue
+        chunk = os.read(read_fd, 65536)
+        if not chunk:
+            raise RuntimeError("browser closed its DevTools pipe before Extensions.loadUnpacked")
+        buffer += chunk
 
 
 def terminate_browser(proc: subprocess.Popen[str], keep_open: bool) -> str:
@@ -294,6 +367,8 @@ def terminate_browser(proc: subprocess.Popen[str], keep_open: bool) -> str:
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=5)
+    for fd in _DEVTOOLS_PIPES.pop(proc.pid, ()):
+        os.close(fd)
     return proc.stderr.read() if proc.stderr is not None else ""
 
 
