@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -376,6 +377,112 @@ def test_refresh_accessibility_bus_restarts_user_atspi(
         ["/usr/bin/systemctl", "--user", "restart", "at-spi-dbus-bus.service"],
     ]
     assert "Refreshed user AT-SPI accessibility bus." in capsys.readouterr().out
+
+
+def _patch_input_helper_linux(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(install_mcp_server.sys, "platform", "linux")
+    monkeypatch.setattr(
+        install_mcp_server, "current_platform", lambda: install_mcp_server.LINUX_X64
+    )
+    monkeypatch.setattr(install_mcp_server, "require_root_owned_ancestors", lambda _path: None)
+    monkeypatch.setattr(install_mcp_server, "run_sudo", lambda args: calls.append(list(args)))
+    return calls
+
+
+def test_install_input_helper_service_installs_root_owned_binary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target_dir = tmp_path / "sky-cua"
+    helper = target_dir / "bin" / "sky-cua-input-helper"
+    helper.parent.mkdir(parents=True)
+    helper.write_bytes(b"helper")
+    calls = _patch_input_helper_linux(monkeypatch)
+
+    install_mcp_server.install_input_helper_service(target_dir, socket_group="sky-test")
+
+    unit = (target_dir / "sky-cua-input-helper.service").read_text(encoding="utf-8")
+    assert "ExecStart=/usr/lib/sky-cua/sky-cua-input-helper serve" in unit
+    assert str(target_dir) not in unit
+    env = (target_dir / "input-helper.env").read_text(encoding="utf-8")
+    assert "SKY_CUA_INPUT_HELPER_SOCKET_GROUP=sky-test" in env
+    assert calls == [
+        [
+            "install",
+            "-D",
+            "-o",
+            "root",
+            "-g",
+            "root",
+            "-m",
+            "0755",
+            str(helper),
+            str(install_mcp_server.INPUT_HELPER_SYSTEM_PATH),
+        ],
+        [
+            "install",
+            "-D",
+            "-m",
+            "0644",
+            str(target_dir / "input-helper.env"),
+            "/etc/sky-cua/input-helper.env",
+        ],
+        [
+            "install",
+            "-D",
+            "-m",
+            "0644",
+            str(target_dir / "sky-cua-input-helper.service"),
+            "/etc/systemd/system/sky-cua-input-helper.service",
+        ],
+        ["systemctl", "daemon-reload"],
+        ["systemctl", "enable", "--now", "sky-cua-input-helper.service"],
+        ["systemctl", "restart", "sky-cua-input-helper.service"],
+    ]
+    assert str(install_mcp_server.INPUT_HELPER_SYSTEM_PATH) in capsys.readouterr().out
+
+
+def test_install_input_helper_service_requires_built_binary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_dir = tmp_path / "sky-cua"
+    target_dir.mkdir()
+    calls = _patch_input_helper_linux(monkeypatch)
+
+    with pytest.raises(FileNotFoundError):
+        install_mcp_server.install_input_helper_service(target_dir, socket_group="sky-test")
+
+    assert calls == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="runs as root")
+def test_require_root_owned_ancestors_rejects_user_owned_parent(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError):
+        install_mcp_server.require_root_owned_ancestors(tmp_path / "x" / "helper")
+
+
+def test_require_root_owned_ancestors_rejects_world_writable_root_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world_writable_root_dir = os.stat_result((stat.S_IFDIR | 0o777, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+    monkeypatch.setattr(Path, "stat", lambda _self, **_kwargs: world_writable_root_dir)
+
+    with pytest.raises(RuntimeError):
+        install_mcp_server.require_root_owned_ancestors(tmp_path / "x" / "helper")
+
+
+def test_require_root_owned_ancestors_accepts_root_owned_parents(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_dir = os.stat_result((stat.S_IFDIR | 0o755, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+    monkeypatch.setattr(Path, "stat", lambda _self, **_kwargs: root_dir)
+
+    install_mcp_server.require_root_owned_ancestors(tmp_path / "x" / "helper")
 
 
 def test_refresh_accessibility_bus_skips_without_user_session(

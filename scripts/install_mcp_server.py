@@ -72,6 +72,7 @@ CLAUDE_MCP_ADD_TIMEOUT_SECONDS = 30
 CLAUDE_CODE_DENY_RULES = ("mcp__computer-use", "mcp__computer-use__*")
 CLAUDE_CODE_ALLOW_RULES = ("mcp__sky-cua", "mcp__sky-cua__*")
 AT_SPI_RESTART_TIMEOUT_SECONDS = 5
+INPUT_HELPER_SYSTEM_PATH = Path("/usr/lib/sky-cua/sky-cua-input-helper")
 MCP_BROWSER_EVAL_ENV = "SKY_CUA_BROWSER_EVAL"
 MCP_MODEL_SUPPORTS_IMAGES_ENV = "SKY_CUA_MODEL_SUPPORTS_IMAGES"
 MCP_PRESENCE_ENABLED_ENV = "SKY_CUA_PRESENCE_ENABLED"
@@ -907,6 +908,7 @@ def install_input_helper_service(
         raise FileNotFoundError(
             f"sky-cua-input-helper binary not found at {helper_path}; build/install binaries first"
         )
+    require_root_owned_ancestors(INPUT_HELPER_SYSTEM_PATH)
     group = socket_group or default_input_helper_group()
     env_path = target_dir / "input-helper.env"
     service_path = target_dir / "sky-cua-input-helper.service"
@@ -931,7 +933,7 @@ def install_input_helper_service(
                 "[Service]",
                 "Type=simple",
                 "EnvironmentFile=/etc/sky-cua/input-helper.env",
-                f"ExecStart={helper_path} serve",
+                f"ExecStart={INPUT_HELPER_SYSTEM_PATH} serve",
                 "Restart=on-failure",
                 "RestartSec=1s",
                 "RuntimeDirectory=sky-cua",
@@ -943,6 +945,20 @@ def install_input_helper_service(
             ]
         ),
         encoding="utf-8",
+    )
+    run_sudo(
+        [
+            "install",
+            "-D",
+            "-o",
+            "root",
+            "-g",
+            "root",
+            "-m",
+            "0755",
+            str(helper_path),
+            str(INPUT_HELPER_SYSTEM_PATH),
+        ]
     )
     run_sudo(["install", "-D", "-m", "0644", str(env_path), "/etc/sky-cua/input-helper.env"])
     run_sudo(
@@ -960,7 +976,8 @@ def install_input_helper_service(
     run_sudo(["systemctl", "restart", "sky-cua-input-helper.service"])
     print(
         "Installed and started sky-cua-input-helper.service "
-        f"(socket group: {group}, socket: /run/sky-cua/input-helper.sock)."
+        f"(binary: {INPUT_HELPER_SYSTEM_PATH}, socket group: {group}, "
+        "socket: /run/sky-cua/input-helper.sock)."
     )
 
 
@@ -973,6 +990,20 @@ def default_input_helper_group() -> str:
 
 def run_sudo(args: list[str]) -> None:
     subprocess.run(["sudo", *args], check=True)
+
+
+def require_root_owned_ancestors(path: Path) -> None:
+    """Refuse a system path whose existing ancestors a non-root user could replace."""
+    # Resolve symlinks first so a root-owned link target cannot hide a user-writable real parent.
+    for ancestor in path.resolve().parents:
+        if not ancestor.exists():
+            continue
+        info = ancestor.stat()
+        if info.st_uid != 0 or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise RuntimeError(
+                f"{ancestor} is not root-owned and write-protected; refusing to install "
+                "the root input helper under it"
+            )
 
 
 def refresh_accessibility_bus() -> None:
