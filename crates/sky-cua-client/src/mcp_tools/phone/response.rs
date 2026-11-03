@@ -52,6 +52,7 @@ fn phone_diagnostic_is_error_code(code: &str) -> bool {
             | "PhoneCommandNotImplemented"
             | "PhoneCommandSpawnFailed"
             | "PhoneCommandTimedOut"
+            | "PhoneCommandInvalidArgument"
             | "PhoneUnsupportedPlatform"
             | "PhoneUseDisabled"
             | "PhoneSessionNotFound"
@@ -753,6 +754,7 @@ mod tests {
             "PhoneCommandNotImplemented",
             "PhoneCommandSpawnFailed",
             "PhoneCommandTimedOut",
+            "PhoneCommandInvalidArgument",
             "PhoneUnsupportedPlatform",
             "PhoneUseDisabled",
             "PhoneSessionNotFound",

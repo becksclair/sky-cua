@@ -515,7 +515,9 @@ pub(super) async fn input_text(
 }
 
 /// `adb -s S shell input keyevent <key>` where `key` is a keycode name or
-/// number normalized by [`normalize_keyevent`].
+/// number normalized by [`normalize_keyevent`]. A normalized token that fails
+/// [`is_valid_keyevent_token`] is refused with [`CommandError::InvalidArgument`]
+/// before adb runs.
 pub(super) async fn input_keyevent(
     runner: &dyn CommandRunner,
     configured_adb_path: Option<&str>,
@@ -524,6 +526,15 @@ pub(super) async fn input_keyevent(
 ) -> Result<InputOutcome, CommandError> {
     let adb = resolve_adb_path(configured_adb_path);
     let normalized = normalize_keyevent(key);
+    if !is_valid_keyevent_token(&normalized) {
+        return Err(CommandError::InvalidArgument {
+            program: adb,
+            message: format!(
+                "key {:?} is not a KEYCODE_* name or a decimal keycode",
+                bound(key, 64)
+            ),
+        });
+    }
     let argv = serial_args(serial, &["shell", "input", "keyevent", &normalized]);
     let output = runner.run(&adb, &argv).await?;
     Ok(input_outcome(&adb, &argv, &output))
@@ -563,6 +574,24 @@ pub(super) fn normalize_keyevent(key: &str) -> String {
     } else {
         format!("KEYCODE_{upper}")
     }
+}
+
+/// `adb shell input keyevent` accepts either a decimal keycode or a
+/// `KEYCODE_*` name. Anything else is refused before it can reach the device
+/// shell, which joins and re-parses its arguments.
+pub(super) fn is_valid_keyevent_token(token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    if token.bytes().all(|b| b.is_ascii_digit()) {
+        return true;
+    }
+    token.strip_prefix("KEYCODE_").is_some_and(|rest| {
+        !rest.is_empty()
+            && rest
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+    })
 }
 
 // ===========================================================================

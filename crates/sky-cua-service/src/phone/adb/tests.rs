@@ -405,6 +405,58 @@ fn normalize_keyevent_forms() {
 }
 
 #[test]
+fn keyevent_token_allowlist() {
+    for ok in ["4", "KEYCODE_BACK", "KEYCODE_DPAD_UP", "KEYCODE_F12"] {
+        assert!(is_valid_keyevent_token(ok), "{ok:?}");
+    }
+    for bad in [
+        "",
+        "KEYCODE_",
+        "KEYCODE_BACK; ID",
+        "KEYCODE_$(ID)",
+        "KEYCODE_A|B",
+        "KEYCODE_a",
+        "4;5",
+    ] {
+        assert!(!is_valid_keyevent_token(bad), "{bad:?}");
+    }
+}
+
+#[tokio::test]
+async fn input_keyevent_rejects_shell_metacharacters() {
+    let runner = FakeCommandRunner::new();
+    for input in ["back; id", "$(id)", "back|id", "`id`"] {
+        let result = input_keyevent(&runner, None, "S", input).await;
+        assert!(
+            matches!(result, Err(CommandError::InvalidArgument { .. })),
+            "{input:?}"
+        );
+    }
+    assert!(runner.recorded_calls().is_empty());
+}
+
+#[tokio::test]
+async fn input_keyevent_passes_valid_tokens_unquoted() {
+    let runner = FakeCommandRunner::new();
+    runner.set_stdout(
+        "adb",
+        &["-s", "S", "shell", "input", "keyevent", "KEYCODE_BACK"],
+        "",
+    );
+    let outcome = input_keyevent(&runner, None, "S", "back")
+        .await
+        .expect("input keyevent");
+    assert!(outcome.success);
+    let calls = runner.recorded_calls();
+    assert!(
+        calls
+            .iter()
+            .any(|c| c == "adb -s S shell input keyevent KEYCODE_BACK"),
+        "expected unquoted keyevent command, got {calls:?}"
+    );
+}
+
+#[test]
 fn settings_actions_are_concrete() {
     assert_eq!(
         settings_action(PhoneSettingsScreen::Accessibility),
