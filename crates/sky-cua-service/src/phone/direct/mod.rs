@@ -47,6 +47,22 @@ pub(crate) const DEFAULT_ENROLLMENT_TTL: Duration = Duration::from_secs(5 * 60);
 /// deadline instead of failing fast with `NotConnected`.
 pub(crate) const DIRECT_LINK_IDLE_TIMEOUT: Duration = Duration::from_secs(75);
 
+/// Map one idle-deadline-bounded `socket.send` outcome in `serve_socket` to the
+/// link's terminal error: a socket error is a broken pipe, and a send that
+/// outlives the idle deadline means the peer stopped draining the socket.
+fn send_failure(
+    outcome: Result<Result<(), tokio_tungstenite::tungstenite::Error>, tokio::time::error::Elapsed>,
+) -> Option<io::Error> {
+    match outcome {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(io::Error::new(io::ErrorKind::BrokenPipe, error)),
+        Err(_) => Some(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "direct link idle timeout: send stalled",
+        )),
+    }
+}
+
 /// Errors returned by the internal direct Companion provider.  In particular,
 /// a request which has crossed a disconnect boundary is never retried: the
 /// caller must decide whether the operation is safe to issue again.
@@ -438,22 +454,16 @@ impl DirectRuntimeHandle {
         };
         let message = tokio_tungstenite::tungstenite::Message::Text(encoded.into());
         let send_deadline = tokio::time::Instant::now() + deadline;
-        match tokio::time::timeout_at(send_deadline, link.control.send(message)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(_)) => {
-                link.pending
-                    .lock()
-                    .expect("pending mutex poisoned")
-                    .remove(&request_id);
-                return Err(DirectRuntimeError::Disconnected);
-            }
-            Err(_) => {
-                link.pending
-                    .lock()
-                    .expect("pending mutex poisoned")
-                    .remove(&request_id);
-                return Err(DirectRuntimeError::DeadlineExceeded);
-            }
+        let enqueued = tokio::time::timeout_at(send_deadline, link.control.send(message)).await;
+        if !matches!(enqueued, Ok(Ok(()))) {
+            link.pending
+                .lock()
+                .expect("pending mutex poisoned")
+                .remove(&request_id);
+            return Err(match enqueued {
+                Err(_) => DirectRuntimeError::DeadlineExceeded,
+                _ => DirectRuntimeError::Disconnected,
+            });
         }
         match tokio::time::timeout_at(send_deadline, rx).await {
             Ok(Ok(result)) => result,
@@ -698,38 +708,18 @@ impl DirectRuntimeHandle {
                         break;
                     }
                     Some(frame) = bulk_rx.recv() => {
-                        match tokio::time::timeout_at(idle.deadline(), socket.send(frame.message)).await {
-                            Ok(Ok(())) => {}
-                            Ok(Err(error)) => {
-                                terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
-                                break;
-                            }
-                            Err(_) => {
-                                terminal_error = Some(io::Error::new(
-                                    io::ErrorKind::TimedOut,
-                                    "direct link idle timeout: send stalled",
-                                ));
-                                break;
-                            }
+                        if let Some(error) = send_failure(tokio::time::timeout_at(idle.deadline(), socket.send(frame.message)).await) {
+                            terminal_error = Some(error);
+                            break;
                         }
                         if let Some(sent) = frame.sent { let _ = sent.send(()); }
                         control_burst = 0;
                         inbound_burst = 0;
                     }
                     Some(message) = control_rx.recv() => {
-                        match tokio::time::timeout_at(idle.deadline(), socket.send(message)).await {
-                            Ok(Ok(())) => {}
-                            Ok(Err(error)) => {
-                                terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
-                                break;
-                            }
-                            Err(_) => {
-                                terminal_error = Some(io::Error::new(
-                                    io::ErrorKind::TimedOut,
-                                    "direct link idle timeout: send stalled",
-                                ));
-                                break;
-                            }
+                        if let Some(error) = send_failure(tokio::time::timeout_at(idle.deadline(), socket.send(message)).await) {
+                            terminal_error = Some(error);
+                            break;
                         }
                         control_burst = control_burst.saturating_add(1);
                         inbound_burst = 0;
@@ -754,37 +744,17 @@ impl DirectRuntimeHandle {
                         break;
                     }
                     Some(message) = control_rx.recv() => {
-                        match tokio::time::timeout_at(idle.deadline(), socket.send(message)).await {
-                            Ok(Ok(())) => {}
-                            Ok(Err(error)) => {
-                                terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
-                                break;
-                            }
-                            Err(_) => {
-                                terminal_error = Some(io::Error::new(
-                                    io::ErrorKind::TimedOut,
-                                    "direct link idle timeout: send stalled",
-                                ));
-                                break;
-                            }
+                        if let Some(error) = send_failure(tokio::time::timeout_at(idle.deadline(), socket.send(message)).await) {
+                            terminal_error = Some(error);
+                            break;
                         }
                         control_burst = control_burst.saturating_add(1);
                         inbound_burst = 0;
                     }
                     Some(frame) = bulk_rx.recv() => {
-                        match tokio::time::timeout_at(idle.deadline(), socket.send(frame.message)).await {
-                            Ok(Ok(())) => {}
-                            Ok(Err(error)) => {
-                                terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
-                                break;
-                            }
-                            Err(_) => {
-                                terminal_error = Some(io::Error::new(
-                                    io::ErrorKind::TimedOut,
-                                    "direct link idle timeout: send stalled",
-                                ));
-                                break;
-                            }
+                        if let Some(error) = send_failure(tokio::time::timeout_at(idle.deadline(), socket.send(frame.message)).await) {
+                            terminal_error = Some(error);
+                            break;
                         }
                         if let Some(sent) = frame.sent { let _ = sent.send(()); }
                         control_burst = 0;
