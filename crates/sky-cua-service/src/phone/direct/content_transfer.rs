@@ -255,12 +255,22 @@ impl InboundContentStore {
             d.content.content_id.replace(['/', '\\'], "_")
         );
         let final_path = dir.join(final_name);
-        if self.committed.len() >= MAX_COMMITTED_ARTIFACTS
-            || self.committed_bytes.saturating_add(d.content.size_bytes) > MAX_COMMITTED_BYTES
-        {
+        self.evict_expired();
+        let previous_size = self.committed.get(&d.content.content_id).map(|a| a.size);
+        let slots = self.committed.len() - usize::from(previous_size.is_some());
+        let projected = self
+            .committed_bytes
+            .saturating_sub(previous_size.unwrap_or(0))
+            .saturating_add(d.content.size_bytes);
+        if slots >= MAX_COMMITTED_ARTIFACTS || projected > MAX_COMMITTED_BYTES {
             return Err(io::Error::other("committed artifact bound exceeded"));
         }
         fs::rename(&transfer.temp_path, &final_path)?;
+        if let Some(previous) = self.committed.remove(&d.content.content_id) {
+            self.committed_bytes = self.committed_bytes.saturating_sub(previous.size);
+            // final_path is derived from content_id, so the rename above already
+            // replaced the old file; nothing else to delete.
+        }
         self.committed_bytes = self.committed_bytes.saturating_add(d.content.size_bytes);
         let expires = d
             .content
@@ -360,9 +370,7 @@ impl InboundContentStore {
                 "artifact epoch mismatch",
             ));
         }
-        let artifact = self.committed.remove(content_id).expect("artifact exists");
-        self.committed_bytes = self.committed_bytes.saturating_sub(artifact.size);
-        let _ = fs::remove_file(artifact.path);
+        self.discard_committed(content_id);
         Ok(())
     }
 
@@ -397,18 +405,38 @@ impl InboundContentStore {
         Ok(bytes)
     }
 
+    /// Drop every committed artifact whose expiry has passed, releasing its
+    /// bytes and file. Called before capacity checks so lazily-expired entries
+    /// cannot consume slots.
+    fn evict_expired(&mut self) {
+        let now = self.now();
+        let committed_bytes = &mut self.committed_bytes;
+        self.committed.retain(|_, artifact| {
+            if artifact.expires_at_ms > now {
+                return true;
+            }
+            *committed_bytes = committed_bytes.saturating_sub(artifact.size);
+            let _ = fs::remove_file(&artifact.path);
+            false
+        });
+    }
+
+    /// Remove one committed entry, return its bytes to the budget and delete
+    /// its file.
+    fn discard_committed(&mut self, content_id: &str) {
+        if let Some(artifact) = self.committed.remove(content_id) {
+            self.committed_bytes = self.committed_bytes.saturating_sub(artifact.size);
+            let _ = fs::remove_file(artifact.path);
+        }
+    }
+
     fn remove_if_expired(&mut self, content_id: &str) -> io::Result<()> {
         let expired = self
             .committed
             .get(content_id)
             .is_some_and(|artifact| artifact.expires_at_ms <= self.now());
         if expired {
-            let artifact = self
-                .committed
-                .remove(content_id)
-                .expect("artifact entry exists");
-            self.committed_bytes = self.committed_bytes.saturating_sub(artifact.size);
-            let _ = fs::remove_file(artifact.path);
+            self.discard_committed(content_id);
             return Err(io::Error::new(io::ErrorKind::NotFound, "artifact expired"));
         }
         Ok(())
@@ -674,5 +702,70 @@ mod tests {
         assert!(s.describe_artifact("expiry-content", 3).is_err());
         assert!(!s.committed.contains_key("expiry-content"));
         assert_eq!(s.committed_bytes, 0);
+    }
+
+    fn commit_fixture(s: &mut InboundContentStore, transfer_id: &str, size: u64, sha: &str) {
+        s.commit(
+            ContentTransferCommit {
+                transfer_id: transfer_id.into(),
+                size_bytes: size,
+                sha256: sha.into(),
+                link_epoch: 3,
+            },
+            3,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn commit_evicts_expired_artifacts_before_capacity_check() {
+        let mut s = InboundContentStore::default();
+        s.set_now(0);
+        for i in 0..MAX_COMMITTED_ARTIFACTS {
+            let bytes = [i as u8];
+            let sha = format!("{:x}", Sha256::digest(bytes));
+            let mut d = declaration(1, &sha);
+            d.transfer_id = format!("evict-{i}");
+            d.content.content_id = format!("evict-content-{i}");
+            d.content.expires_at_ms = Some(10);
+            s.declare(d, 3).unwrap();
+            s.chunk(&chunk(&format!("evict-{i}"), 0, 0, 3, &bytes), 3)
+                .unwrap();
+            commit_fixture(&mut s, &format!("evict-{i}"), 1, &sha);
+        }
+        assert_eq!(s.committed.len(), MAX_COMMITTED_ARTIFACTS);
+        s.set_now(10);
+        let bytes = b"abc";
+        let sha = format!("{:x}", Sha256::digest(bytes));
+        let mut d = declaration(3, &sha);
+        d.transfer_id = "fresh".into();
+        d.content.content_id = "fresh-content".into();
+        s.declare(d, 3).unwrap();
+        s.chunk(&chunk("fresh", 0, 0, 3, bytes), 3).unwrap();
+        commit_fixture(&mut s, "fresh", 3, &sha);
+        assert_eq!(s.committed.len(), 1);
+        assert_eq!(s.committed_bytes, 3);
+    }
+
+    #[test]
+    fn recommit_same_content_id_does_not_double_count() {
+        let mut s = InboundContentStore::default();
+        let first = format!("{:x}", Sha256::digest(b"abc"));
+        let mut d = declaration(3, &first);
+        d.transfer_id = "dup-1".into();
+        d.content.content_id = "dup".into();
+        s.declare(d, 3).unwrap();
+        s.chunk(&chunk("dup-1", 0, 0, 3, b"abc"), 3).unwrap();
+        commit_fixture(&mut s, "dup-1", 3, &first);
+        let second = format!("{:x}", Sha256::digest(b"abcde"));
+        let mut d = declaration(5, &second);
+        d.transfer_id = "dup-2".into();
+        d.content.content_id = "dup".into();
+        s.declare(d, 3).unwrap();
+        s.chunk(&chunk("dup-2", 0, 0, 3, b"abc"), 3).unwrap();
+        s.chunk(&chunk("dup-2", 1, 3, 3, b"de"), 3).unwrap();
+        commit_fixture(&mut s, "dup-2", 5, &second);
+        assert_eq!(s.committed.len(), 1);
+        assert_eq!(s.committed_bytes, 5);
     }
 }

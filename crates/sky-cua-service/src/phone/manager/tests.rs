@@ -870,6 +870,12 @@ async fn direct_observe_registers_its_appshot_as_an_actionable_phone_snapshot() 
         }
     );
     responder.await.expect("responder");
+    assert!(
+        direct
+            .describe_content_artifact("direct-device", 9, "actionable-shot-screen")
+            .is_err(),
+        "screenshot artifact must be released after the host copies it"
+    );
 }
 
 #[tokio::test]
