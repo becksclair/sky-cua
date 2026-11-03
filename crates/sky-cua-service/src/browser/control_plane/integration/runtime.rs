@@ -26,6 +26,8 @@ impl BrowserControlRuntime {
         }
     }
 
+    // Used only by control_plane::integration_tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn new() -> Arc<Self> {
         Self::new_with_owner_mode(BridgeOwnerMode::Hybrid)
     }

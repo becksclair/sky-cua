@@ -1,10 +1,7 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use serde_json::{Value, json};
-use tokio::{
-    net::UnixListener,
-    sync::{Notify, mpsc},
-};
+use tokio::{net::UnixListener, sync::Notify};
 
 use super::{
     BridgeActor, BridgeActorConfig, BridgeActorRequest, BrowserInstanceId, ClientId, ControlPlane,
@@ -1890,8 +1887,8 @@ async fn production_runtime_periodically_expires_leases_and_reconciles_owners() 
 
 #[tokio::test]
 async fn released_group_pruning_removes_scheduler_and_logical_group_indexes() {
+    use super::GroupError;
     use super::integration::BrowserControlRuntime;
-    use super::{GroupError, GroupId};
 
     let runtime = BrowserControlRuntime::new();
     let principal = Principal::new("pruned-default-owner", unsafe { libc::geteuid() });

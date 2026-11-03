@@ -6,8 +6,8 @@ use super::super::{
     introspection::EventRecorder,
     lease::LeaseProof,
     operation::{
-        BrowserInstanceId, ClientId, Completion, DispatchOperation, GroupId, OperationClass,
-        OperationId, Principal, SettlementOutcome, TabKey,
+        BrowserInstanceId, ClientId, Completion, DispatchOperation, GroupId, OperationId,
+        SettlementOutcome, TabKey,
     },
     persistence::{JournalWriter, RecoveryJournal},
 };

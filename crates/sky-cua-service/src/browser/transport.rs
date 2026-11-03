@@ -21,7 +21,6 @@ pub(crate) enum BrowserControlMode {
 }
 
 impl BrowserControlMode {
-    #[allow(dead_code)] // Forwarded and consumed when WP-04 wires control ingress.
     pub(crate) fn uses_persistent_actor(self) -> bool {
         matches!(self, Self::Hybrid | Self::Strict)
     }
@@ -29,7 +28,6 @@ impl BrowserControlMode {
 
 /// Strict selects the persistent actor, but strict legacy-client rejection is
 /// deliberately deferred to WP-05b. Absence keeps the compatibility default.
-#[allow(dead_code)] // Forwarded and consumed when WP-04 wires control ingress.
 pub(crate) fn browser_control_mode() -> Result<BrowserControlMode, DiagnosticEntry> {
     resolved_browser_control_config()
         .map(|config| match config.mode {
@@ -40,7 +38,6 @@ pub(crate) fn browser_control_mode() -> Result<BrowserControlMode, DiagnosticEnt
         .map_err(browser_control_mode_error)
 }
 
-#[allow(dead_code)] // Forwarded and consumed when WP-04 wires control ingress.
 fn browser_control_mode_error(detail: String) -> DiagnosticEntry {
     DiagnosticEntry {
         code: "BrowserControlModeInvalid".to_owned(),

@@ -14,12 +14,11 @@ use sky_cua_platform::model::{
     BROWSER_CONTROL_PROTOCOL_VERSION, BrowserBridgeState, BrowserBridgeTransport,
     BrowserCallerKind, BrowserCallerProvenance, BrowserClientSurface, BrowserControlActorSnapshot,
     BrowserControlClientSummary, BrowserControlEventKind, BrowserControlPlaneSnapshot,
-    BrowserIntegrationReport, BrowserMcpClientInfo, BrowserMigrationMode, BrowserProvenanceSource,
-    BrowserRequest, BrowserRequestContext, BrowserResponse, BrowserSessionIdentity,
-    BrowserStatusReport, BrowserTabKey, BrowserTargetAvailability, BrowserTargetKind,
-    DiagnosticEntry,
+    BrowserIntegrationReport, BrowserMcpClientInfo, BrowserMigrationMode, BrowserRequest,
+    BrowserRequestContext, BrowserResponse, BrowserSessionIdentity, BrowserStatusReport,
+    BrowserTabKey, BrowserTargetAvailability, BrowserTargetKind, DiagnosticEntry,
 };
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 
 use super::introspection;
 use super::{
@@ -28,7 +27,7 @@ use super::{
     ClientId, Completion, CompletionCertainty, CompletionDisposition, ControlPlane, Executor,
     ExecutorOutcome, GroupAdmission, GroupError, GroupId, GroupSnapshot, OperationClass,
     OperationId, OperationScope, Principal, QueueLimits, SettlementOutcome, SettlementResult,
-    SubmitOperation, TabKey, UpstreamCorrelation, fixed_width_daemon_generation, persistence,
+    SubmitOperation, TabKey, UpstreamCorrelation, fixed_width_daemon_generation,
     persistent_proxy::{self, ChildTracker, ProxyContext},
 };
 use crate::{
@@ -49,8 +48,10 @@ mod support;
 
 #[cfg(test)]
 pub(in crate::browser::control_plane) use actor_events::spawn_actor_event_receiver_for_test;
+pub(in crate::browser::control_plane) use actor_events::spawn_actor_events;
+#[cfg(test)]
 pub(in crate::browser::control_plane) use actor_events::{
-    settle_actor_message, settle_late_response, spawn_actor_events,
+    settle_actor_message, settle_late_response,
 };
 pub(crate) use executor::execute_high_level;
 pub(crate) use state::BrowserControlRuntime;

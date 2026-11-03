@@ -22,7 +22,7 @@ pub(in crate::browser::control_plane) fn default_recovery_path() -> Option<std::
 {
     Some(
         sky_cua_platform::paths::sky_cua_state_dir()
-            .map(|path| path.join(super::persistence::RECOVERY_JOURNAL_FILE)),
+            .map(|path| path.join(super::super::persistence::RECOVERY_JOURNAL_FILE)),
     )
 }
 
