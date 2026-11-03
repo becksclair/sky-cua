@@ -103,7 +103,10 @@ and [`docs/features/release-package.md`](docs/features/release-package.md).
 
 For fastest Linux Wayland input, install the privileged uinput helper from a
 runtime install with `scripts/install_mcp_server.py --input-helper`; it runs as
-root and exposes `/run/sky-cua/input-helper.sock`.
+root and exposes `/run/sky-cua/input-helper.sock`. The installer copies the
+helper to `/usr/lib/sky-cua/sky-cua-input-helper` (root-owned) and the unit runs
+that copy, never the user-writable install tree; it refuses to install under a
+parent directory that is not root-owned.
 
 ## Development
 
