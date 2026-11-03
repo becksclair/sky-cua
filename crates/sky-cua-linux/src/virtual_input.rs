@@ -16,6 +16,7 @@ use sky_cua_input_helper::uinput::DesktopBounds;
 use sky_cua_platform::config::INPUT_HELPER_SOCKET_ENV as SKY_CUA_INPUT_HELPER_SOCKET;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::CuaCancellation;
+use sky_cua_platform::process::{RunError, run_with_timeout};
 use xkbcommon::xkb;
 
 use crate::portal::eis_keymap::{
@@ -1405,27 +1406,16 @@ where
     if let Some(socket_path) = probe.socket_path.as_ref() {
         command.env("YDOTOOL_SOCKET", socket_path);
     }
-    let output = match sky_cua_platform::process::run_with_timeout(&mut command, COMMAND_TIMEOUT) {
-        Ok(output) => output,
-        Err(sky_cua_platform::process::RunError::Spawn(error)) => {
-            return Err(BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                format!("failed to start ydotool: {error}"),
-            ));
-        }
-        Err(sky_cua_platform::process::RunError::TimedOut { .. }) => {
-            return Err(BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                format!("ydotool command timed out: ydotool {}", args.join(" ")),
-            ));
-        }
-        Err(sky_cua_platform::process::RunError::Wait(error)) => {
-            return Err(BackendError::new(
-                BackendErrorCode::ActionUnsupportedForEnvironment,
-                format!("failed to wait for ydotool: {error}"),
-            ));
-        }
-    };
+    let output = run_with_timeout(&mut command, COMMAND_TIMEOUT).map_err(|error| {
+        let message = match error {
+            RunError::Spawn(error) => format!("failed to start ydotool: {error}"),
+            RunError::TimedOut { .. } => {
+                format!("ydotool command timed out: ydotool {}", args.join(" "))
+            }
+            RunError::Wait(error) => format!("failed to wait for ydotool: {error}"),
+        };
+        BackendError::new(BackendErrorCode::ActionUnsupportedForEnvironment, message)
+    })?;
     if output.status.success() {
         return Ok(());
     }
@@ -1495,7 +1485,7 @@ fn socket_is_connectable(path: &Path) -> bool {
 }
 
 fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Option<Output> {
-    sky_cua_platform::process::run_with_timeout(command, timeout).ok()
+    run_with_timeout(command, timeout).ok()
 }
 
 fn find_executable(name: &str) -> Option<PathBuf> {

@@ -8,6 +8,7 @@ use sky_cua_platform::model::{
     CoordinateSpace, DisplayInfo, DisplayIntersection, DisplayTarget, DoctorDisplayProbeReport,
     DoctorDisplayTopologyReport, EnvironmentInfo, PixelSize, RectF,
 };
+use sky_cua_platform::process::{RunError, run_with_timeout};
 use zbus::Proxy;
 use zbus::zvariant::OwnedValue;
 
@@ -425,22 +426,17 @@ fn command_probe_result(
 }
 
 fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> CommandProbeOutput {
-    match sky_cua_platform::process::run_with_timeout(command, timeout) {
+    match run_with_timeout(command, timeout) {
         Ok(output) => CommandProbeOutput {
             output: Some(output),
             timed_out: false,
         },
-        Err(sky_cua_platform::process::RunError::TimedOut { .. }) => CommandProbeOutput {
-            output: None,
-            timed_out: true,
-        },
-        // Spawn failure was `timed_out: false, output: None`; a wait failure
-        // was `timed_out: true` in the old code. Keep both.
-        Err(sky_cua_platform::process::RunError::Spawn(_)) => CommandProbeOutput {
+        Err(RunError::Spawn(_)) => CommandProbeOutput {
             output: None,
             timed_out: false,
         },
-        Err(sky_cua_platform::process::RunError::Wait(_)) => CommandProbeOutput {
+        // A wait failure was reported as `timed_out: true` in the old code; keep it.
+        Err(RunError::TimedOut { .. } | RunError::Wait(_)) => CommandProbeOutput {
             output: None,
             timed_out: true,
         },
