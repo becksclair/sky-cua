@@ -4511,7 +4511,11 @@ async fn mismatched_installed_cert_refuses_companion_and_grants_nothing() {
 /// version_code comes from the sidecar JSON next to the configured APK path.
 #[tokio::test]
 async fn force_reinstall_does_not_bypass_a_blocked_downgrade() {
-    let dir = std::env::temp_dir().join(format!("sky-cua-plan014-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "sky-cua-companion-downgrade-sidecar-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("sidecar dir");
     std::fs::write(dir.join("phone-companion.json"), r#"{"version_code": 1}"#)
         .expect("write sidecar");
@@ -4525,6 +4529,10 @@ async fn force_reinstall_does_not_bypass_a_blocked_downgrade() {
     let mut selection = resolve_phone_selection(&PhoneConfig::default());
     let package = selection.companion_package.clone();
     script_verified_installed_companion(&runner, &package, 999, "9.9.9");
+    // Script a successful install so that, if the downgrade gate regressed, the
+    // forced reinstall would surface a `CompanionUpdate` diagnostic rather than a
+    // command error; this keeps the diagnostic assertion below discriminating.
+    runner.set_stdout("adb", &["-s", SERIAL, "install", "-r", &apk], "Success");
     selection.companion_enabled = true;
     selection.companion_auto_install = false;
     selection.companion_allow_downgrade = false;
