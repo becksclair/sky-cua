@@ -255,3 +255,191 @@ pub(crate) fn install_argv(serial: &str, expected: &ExpectedCompanion) -> Vec<St
     argv.push(expected.apk_path.clone());
     argv
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CERT_A: &str = "aabbccdd";
+    const CERT_A_COLON_UPPER: &str = "AA:BB:CC:DD";
+    const CERT_B: &str = "11223344";
+
+    fn installed(version_code: Option<u64>, cert: Option<&str>) -> InstalledCompanion {
+        InstalledCompanion {
+            version_name: None,
+            version_code,
+            cert_sha256: cert.map(str::to_string),
+        }
+    }
+
+    fn expected(
+        version_code: Option<u64>,
+        cert: Option<&str>,
+        allow_downgrade: bool,
+    ) -> ExpectedCompanion {
+        ExpectedCompanion {
+            package_name: "com.skycua.phonecompanion".into(),
+            version_code,
+            cert_sha256: cert.map(str::to_string),
+            allow_downgrade,
+            ..ExpectedCompanion::default()
+        }
+    }
+
+    #[test]
+    fn not_installed_is_install() {
+        assert_eq!(
+            decide_install(None, &expected(Some(3), Some(CERT_A), false), None),
+            CompanionInstallDecision::Install
+        );
+    }
+
+    #[test]
+    fn mismatched_cert_is_refused_before_any_version_logic() {
+        // Even an older installed version is refused when its cert differs.
+        let decision = decide_install(
+            Some(&installed(Some(1), Some(CERT_B))),
+            &expected(Some(3), Some(CERT_A), false),
+            None,
+        );
+        assert_eq!(
+            decision,
+            CompanionInstallDecision::RefuseSignatureMismatch {
+                installed_cert: CERT_B.into(),
+                expected_cert: CERT_A.into(),
+            }
+        );
+        assert_eq!(decision.code(), "CompanionSignatureMismatch");
+        assert!(!decision.requires_install());
+    }
+
+    #[test]
+    fn cert_comparison_ignores_colons_and_case() {
+        assert!(certs_match(CERT_A, CERT_A_COLON_UPPER));
+        let decision = decide_install(
+            Some(&installed(Some(3), Some(CERT_A_COLON_UPPER))),
+            &expected(Some(3), Some(CERT_A), false),
+            None,
+        );
+        assert_eq!(decision, CompanionInstallDecision::UpToDate);
+    }
+
+    #[test]
+    fn unreadable_installed_cert_is_not_a_mismatch() {
+        let decision = decide_install(
+            Some(&installed(Some(3), None)),
+            &expected(Some(3), Some(CERT_A), false),
+            None,
+        );
+        assert_eq!(decision, CompanionInstallDecision::UpToDate);
+    }
+
+    #[test]
+    fn no_expected_cert_skips_the_signature_gate() {
+        let decision = decide_install(
+            Some(&installed(Some(3), Some(CERT_B))),
+            &expected(Some(3), None, false),
+            None,
+        );
+        assert_eq!(decision, CompanionInstallDecision::UpToDate);
+    }
+
+    #[test]
+    fn newer_installed_version_is_a_blocked_downgrade_by_default() {
+        let decision = decide_install(
+            Some(&installed(Some(5), Some(CERT_A))),
+            &expected(Some(3), Some(CERT_A), false),
+            None,
+        );
+        assert_eq!(
+            decision,
+            CompanionInstallDecision::RefuseDowngrade {
+                installed_version_code: 5,
+                expected_version_code: 3,
+            }
+        );
+        assert_eq!(decision.code(), "CompanionDowngradeBlocked");
+    }
+
+    #[test]
+    fn downgrade_allowed_by_expected_or_override_falls_through_to_up_to_date() {
+        // Current behaviour: an allowed downgrade is not an Update; the caller
+        // decides whether to reinstall (force_reinstall). Pinned on purpose.
+        let newer = installed(Some(5), Some(CERT_A));
+        assert_eq!(
+            decide_install(Some(&newer), &expected(Some(3), Some(CERT_A), true), None),
+            CompanionInstallDecision::UpToDate
+        );
+        assert_eq!(
+            decide_install(
+                Some(&newer),
+                &expected(Some(3), Some(CERT_A), false),
+                Some(true)
+            ),
+            CompanionInstallDecision::UpToDate
+        );
+        // The override can also turn an allowed downgrade back into a refusal.
+        assert!(matches!(
+            decide_install(
+                Some(&newer),
+                &expected(Some(3), Some(CERT_A), true),
+                Some(false)
+            ),
+            CompanionInstallDecision::RefuseDowngrade { .. }
+        ));
+    }
+
+    #[test]
+    fn older_installed_version_is_an_update() {
+        let decision = decide_install(
+            Some(&installed(Some(2), Some(CERT_A))),
+            &expected(Some(3), Some(CERT_A), false),
+            None,
+        );
+        assert!(matches!(decision, CompanionInstallDecision::Update { .. }));
+        assert!(decision.requires_install());
+    }
+
+    #[test]
+    fn missing_version_codes_are_up_to_date() {
+        assert_eq!(
+            decide_install(
+                Some(&installed(None, Some(CERT_A))),
+                &expected(Some(3), Some(CERT_A), false),
+                None
+            ),
+            CompanionInstallDecision::UpToDate
+        );
+        assert_eq!(
+            decide_install(
+                Some(&installed(Some(3), Some(CERT_A))),
+                &expected(None, Some(CERT_A), false),
+                None
+            ),
+            CompanionInstallDecision::UpToDate
+        );
+    }
+
+    #[test]
+    fn companion_metadata_parses_sidecar_keys_and_normalises_hex() {
+        let parsed = parse_companion_metadata(
+            r#"{"version_name":"0.1.2","version_code":3,"signing_cert_sha256":" AABB ","apk_sha256":"CCDD"}"#,
+        );
+        assert_eq!(parsed.version_name.as_deref(), Some("0.1.2"));
+        assert_eq!(parsed.version_code, Some(3));
+        assert_eq!(parsed.cert_sha256.as_deref(), Some("aabb"));
+        assert_eq!(parsed.apk_sha256.as_deref(), Some("ccdd"));
+        assert_eq!(
+            parse_companion_metadata("not json"),
+            CompanionMetadata::default()
+        );
+        assert_eq!(
+            parse_companion_metadata(r#"{"signing_cert_sha256":""}"#).cert_sha256,
+            None
+        );
+        assert_eq!(
+            metadata_path_for_apk("resources/android/phone-companion.apk"),
+            PathBuf::from("resources/android/phone-companion.json")
+        );
+    }
+}

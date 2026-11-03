@@ -4442,6 +4442,126 @@ async fn unreachable_companion_reports_expected_apk_sha256() {
     );
 }
 
+/// A same-name companion package whose signing cert differs from the
+/// configured expected cert is an impostor: the bootstrap must surface
+/// `CompanionSignatureMismatch`, report the companion unreachable with
+/// `signature_matches_expected == false`, and never install, uninstall,
+/// grant permissions to, forward to, or deliver a token to it.
+#[tokio::test]
+async fn mismatched_installed_cert_refuses_companion_and_grants_nothing() {
+    let runner = Arc::new(FakeCommandRunner::new());
+    script_device_probes(&runner);
+    let mut selection = resolve_phone_selection(&PhoneConfig::default());
+    let package = selection.companion_package.clone();
+    runner.set_stdout(
+        "adb",
+        &["-s", SERIAL, "shell", "pm", "path", &package],
+        "package:/data/app/companion.apk",
+    );
+    runner.set_stdout(
+        "adb",
+        &["-s", SERIAL, "shell", "dumpsys", "package", &package],
+        "versionCode=2\nversionName=0.1.1\nSHA-256 cert digest: 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF\n",
+    );
+    selection.companion_enabled = true;
+    selection.companion_auto_install = true;
+    selection.companion_expected_cert_sha256 = Some(COMPANION_CERT_SHA256.to_string());
+    let mut manager = PhoneManager::with_runner(runner.clone(), selection);
+
+    let session = connect(&mut manager).await;
+
+    let companion = &session.capability_profile.companion;
+    assert!(!companion.rpc_reachable);
+    assert!(
+        !companion.signature_matches_expected,
+        "impostor path must report a mismatch"
+    );
+    assert_eq!(
+        companion.installed_cert_sha256.as_deref(),
+        Some("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+    );
+    let diagnostics = manager.companion_bootstrap_diagnostics(&session.session_id);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code == "CompanionSignatureMismatch"),
+        "diagnostics: {diagnostics:?}"
+    );
+    let calls = runner.recorded_calls();
+    let install = format!("adb -s {SERIAL} install");
+    let uninstall = format!("adb -s {SERIAL} uninstall");
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.starts_with(&install) || c.starts_with(&uninstall)),
+        "impostor must not be installed over or removed: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c.contains("allow_listener")
+            || c.contains("enabled_accessibility_services")
+            || c.contains(" forward ")
+            || c.contains(".SetupActivity")),
+        "no permission grant, forward, or token delivery may run for an impostor: {calls:?}"
+    );
+}
+
+/// A same-cert companion newer than the packaged one is a blocked downgrade:
+/// even an explicit force_reinstall without allow_downgrade must not install
+/// over it (force_reinstall only upgrades an UpToDate decision). The expected
+/// version_code comes from the sidecar JSON next to the configured APK path.
+#[tokio::test]
+async fn force_reinstall_does_not_bypass_a_blocked_downgrade() {
+    let dir = std::env::temp_dir().join(format!("sky-cua-plan014-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("sidecar dir");
+    std::fs::write(dir.join("phone-companion.json"), r#"{"version_code": 1}"#)
+        .expect("write sidecar");
+    let apk = dir
+        .join("phone-companion.apk")
+        .to_string_lossy()
+        .into_owned();
+
+    let runner = Arc::new(FakeCommandRunner::new());
+    script_device_probes(&runner);
+    let mut selection = resolve_phone_selection(&PhoneConfig::default());
+    let package = selection.companion_package.clone();
+    script_verified_installed_companion(&runner, &package, 999, "9.9.9");
+    selection.companion_enabled = true;
+    selection.companion_auto_install = false;
+    selection.companion_allow_downgrade = false;
+    selection.companion_expected_cert_sha256 = Some(COMPANION_CERT_SHA256.to_string());
+    selection.companion_apk_path = apk;
+    let mut manager = PhoneManager::with_runner(runner.clone(), selection);
+    let session = connect(&mut manager).await;
+
+    match manager
+        .handle(PhoneRequest::InstallCompanion(
+            sky_cua_platform::model::PhoneInstallCompanionRequest {
+                session: selector(&session.session_id),
+                force_reinstall: true,
+                allow_downgrade: false,
+            },
+        ))
+        .await
+    {
+        PhoneResponse::Action(action) => assert!(
+            !action
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "CompanionUpdate" || d.code == "CompanionInstall"),
+            "a blocked downgrade must not be turned into an install: {:?}",
+            action.diagnostics
+        ),
+        other => panic!("unexpected: {other:?}"),
+    }
+    let install = format!("adb -s {SERIAL} install");
+    let calls = runner.recorded_calls();
+    assert!(
+        !calls.iter().any(|c| c.starts_with(&install)),
+        "no adb install may run over a newer same-cert companion: {calls:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Proof-gate (Phase 5): the phone capture/observe path does NOT hide the
 /// host-visible desktop overlay, and it does not need to. The phone screenshot is
 /// captured ON THE DEVICE (`adb exec-out screencap` here, or the companion's
