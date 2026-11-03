@@ -86,7 +86,7 @@ pub(super) enum Command {
     Cancel(OperationId, Option<ClientId>, Reply<CancelResult>),
     Executed(OperationId, super::operation::ExecutorOutcome),
     Settle(OperationId, SettlementOutcome, Reply<SettlementResult>),
-    // Sent only by test-only ControlPlane methods exercised in control_plane::tests.
+    // Sent only by the test-only ControlPlane::settlement_state.
     #[cfg_attr(not(test), expect(dead_code))]
     SettlementState(OperationId, Reply<Option<SettlementState>>),
     CreateGroup {
@@ -111,7 +111,7 @@ pub(super) enum Command {
         u64,
         Reply<Result<LeaseSnapshot, GroupError>>,
     ),
-    // Sent only by test-only ControlPlane methods exercised in control_plane::tests.
+    // Sent only by the test-only ControlPlane::offer_handoff.
     #[cfg_attr(not(test), expect(dead_code))]
     Offer {
         group_id: GroupId,
@@ -120,7 +120,7 @@ pub(super) enum Command {
         revision: u64,
         reply: Reply<Result<GroupSnapshot, GroupError>>,
     },
-    // Sent only by test-only ControlPlane methods exercised in control_plane::tests.
+    // Sent only by the test-only ControlPlane::accept_handoff.
     #[cfg_attr(not(test), expect(dead_code))]
     Accept {
         group_id: GroupId,
@@ -129,7 +129,7 @@ pub(super) enum Command {
         now_ms: u64,
         reply: Reply<Result<GroupSnapshot, GroupError>>,
     },
-    // Sent only by test-only ControlPlane methods exercised in control_plane::tests.
+    // Sent only by the test-only ControlPlane::force_handoff.
     #[cfg_attr(not(test), expect(dead_code))]
     Force {
         group_id: GroupId,
@@ -142,7 +142,7 @@ pub(super) enum Command {
     Disconnect(Principal, u64, Reply<()>),
     EndGroup(GroupId, Principal, Reply<Result<GroupSnapshot, GroupError>>),
     Tick(u64, Reply<()>),
-    // Sent only by test-only ControlPlane methods exercised in control_plane::tests.
+    // Sent only by the test-only ControlPlane::resume_recovered.
     #[cfg_attr(not(test), expect(dead_code))]
     ResumeRecovered {
         group_id: GroupId,
@@ -285,7 +285,7 @@ impl ControlPlane {
             sender.clone(),
             executor,
             scheduler::ActorConfig {
-                generation: generation.clone(),
+                generation,
                 limits,
                 groups,
                 events: events.clone(),
