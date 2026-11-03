@@ -22,6 +22,13 @@ mod system_cursor;
 
 pub const OVERLAY_HOST_PROTOCOL_VERSION: u32 = 3;
 
+/// Idle cadence while nothing is visible or animating: cuts 60–240 Hz idle
+/// wakeups by 6–24x. Message handling on the Unix-socket and JSON-lines loops
+/// is not gated on the tick timer (the socket loop re-arms it on each
+/// request), and `SetCursor`/`Show` render their first frame synchronously,
+/// so a show is never delayed by it.
+pub const IDLE_TICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// Run the interactive desktop pointer playground (Wayland layer-shell only).
 #[cfg(target_os = "linux")]
 pub fn run_playground(args: Vec<String>) -> anyhow::Result<()> {
@@ -610,14 +617,15 @@ impl OverlayHostBackend {
         }
     }
 
-    /// Cadence the host event loop should tick at, matched to the fastest
-    /// connected display so the agent-cursor follow renders at the panel's
-    /// refresh rate instead of a fixed 60 Hz. Falls back to 60 Hz when no
-    /// display refresh rate is known.
+    /// Cadence the host event loop should tick at. While the overlay is
+    /// visible or animating it matches the fastest connected display so the
+    /// agent-cursor follow renders at the panel's refresh rate (60 Hz when no
+    /// display refresh rate is known); otherwise it is `IDLE_TICK_INTERVAL`.
+    /// The Noop backend never renders, so it always idles.
     #[must_use]
     pub fn pointer_tick_interval(&self) -> std::time::Duration {
         match self {
-            Self::Noop(_backend) => std::time::Duration::from_millis(16),
+            Self::Noop(_backend) => IDLE_TICK_INTERVAL,
             #[cfg(target_os = "linux")]
             Self::LayerShell(backend) => backend.pointer_tick_interval(),
         }
@@ -699,6 +707,12 @@ mod tests {
         OverlayArrivalOutcome, OverlayArrivalWaitRequest, OverlayHostMessage,
         OverlayHostMessageKind, cursor_asset, probe_reply,
     };
+
+    #[test]
+    fn noop_backend_tick_interval_is_idle() {
+        let backend = super::OverlayHostBackend::Noop(NoopOverlayBackend::with_reason("test"));
+        assert_eq!(backend.pointer_tick_interval(), super::IDLE_TICK_INTERVAL);
+    }
 
     #[test]
     fn protocol_messages_use_snake_case_kind_values() {

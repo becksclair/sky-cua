@@ -377,10 +377,11 @@ impl LayerShellOverlayBackend {
         }
     }
 
-    /// Tick cadence matched to the fastest connected display's current mode, so
-    /// the agent-cursor follow updates at the panel's refresh rate (e.g. 4.2 ms
-    /// on a 240 Hz screen) instead of a fixed 60 Hz. Clamped to [60, 240] Hz and
-    /// defaulting to 60 Hz when no refresh rate is advertised.
+    /// Tick cadence matched to the fastest connected display's current mode
+    /// while visible or animating, so the agent-cursor follow updates at the
+    /// panel's refresh rate (e.g. 4.2 ms on a 240 Hz screen) instead of a fixed
+    /// 60 Hz; otherwise `IDLE_TICK_INTERVAL`. The refresh rate is clamped to
+    /// [60, 240] Hz and defaults to 60 Hz when no refresh rate is advertised.
     pub fn pointer_tick_interval(&self) -> std::time::Duration {
         // Reads the geometry snapshot, not OutputState: this re-arms on every
         // timer fire, and `OutputState::info` clones the full mode list.
@@ -394,7 +395,10 @@ impl LayerShellOverlayBackend {
         let hz = max_mhz
             .map(|mhz| (f64::from(mhz) / 1000.0).clamp(60.0, 240.0))
             .unwrap_or(60.0);
-        std::time::Duration::from_secs_f64(1.0 / hz)
+        let refresh_interval = std::time::Duration::from_secs_f64(1.0 / hz);
+        let visible = self.app.state.as_ref().is_some_and(|state| state.visible);
+        let animating = self.app.should_animate(current_epoch_ms());
+        tick_interval_for(visible, animating, refresh_interval)
     }
 
     fn prime(&mut self) -> Result<()> {
@@ -738,6 +742,20 @@ impl LayerShellApp {
     }
 }
 
+/// The event-loop tick period: the display refresh period while the overlay
+/// is visible or the motion driver is animating, otherwise the idle period.
+pub(crate) fn tick_interval_for(
+    visible: bool,
+    animating: bool,
+    refresh_interval: std::time::Duration,
+) -> std::time::Duration {
+    if visible || animating {
+        refresh_interval
+    } else {
+        crate::IDLE_TICK_INTERVAL
+    }
+}
+
 fn current_epoch_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -751,6 +769,19 @@ mod tests {
         cursor_asset,
         renderer::{CursorImage, draw_cursor_asset},
     };
+
+    #[test]
+    fn tick_interval_is_refresh_rate_while_visible_or_animating_and_idle_otherwise() {
+        let refresh = std::time::Duration::from_micros(4_167); // 240 Hz
+        assert_eq!(super::tick_interval_for(true, false, refresh), refresh);
+        assert_eq!(super::tick_interval_for(false, true, refresh), refresh);
+        assert_eq!(super::tick_interval_for(true, true, refresh), refresh);
+        assert_eq!(
+            super::tick_interval_for(false, false, refresh),
+            crate::IDLE_TICK_INTERVAL
+        );
+        assert!(crate::IDLE_TICK_INTERVAL >= std::time::Duration::from_millis(50));
+    }
 
     #[test]
     fn cursor_asset_draw_keeps_background_fully_transparent() {
