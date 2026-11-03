@@ -35,8 +35,8 @@ at spawn and at runtime). Stderr capture catches pre-init output; on unix the
 daemon re-points fd 2 at each fresh log so panics follow the live log across
 rotations (on Windows panic capture ends at the first runtime rotation). An operator-run `sky-cua-service daemon` has no log path env set and
 logs to plain stderr. These files are the primary forensic record for
-daemon-side incidents — agent transcripts are the only other trace. Operator steps for raising the
-level are in `docs/operations/daemon-logs.md`.
+daemon-side incidents — agent transcripts are the only other trace.
+Operator steps for raising the level are in `docs/operations/daemon-logs.md`.
 
 Every log generation is hard-bounded even when rotation fails (for example,
 `EMFILE` prevents opening the fresh log): a file never takes more than 32 MiB,
