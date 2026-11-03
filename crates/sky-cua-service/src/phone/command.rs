@@ -82,6 +82,9 @@ pub(crate) enum CommandError {
     Spawn { program: String, message: String },
     /// The command exceeded the bounded real-runner timeout.
     Timeout { program: String, timeout_ms: u64 },
+    /// The caller supplied an argument that must not be forwarded to the
+    /// program (for example a keycode token containing shell metacharacters).
+    InvalidArgument { program: String, message: String },
 }
 
 impl CommandError {
@@ -92,6 +95,7 @@ impl CommandError {
             CommandError::NotImplemented { .. } => "PhoneCommandNotImplemented",
             CommandError::Spawn { .. } => "PhoneCommandSpawnFailed",
             CommandError::Timeout { .. } => "PhoneCommandTimedOut",
+            CommandError::InvalidArgument { .. } => "PhoneCommandInvalidArgument",
         }
     }
 }
@@ -110,6 +114,9 @@ impl std::fmt::Display for CommandError {
                 timeout_ms,
             } => {
                 write!(f, "`{program}` timed out after {timeout_ms}ms")
+            }
+            CommandError::InvalidArgument { program, message } => {
+                write!(f, "refused to run `{program}`: {message}")
             }
         }
     }
