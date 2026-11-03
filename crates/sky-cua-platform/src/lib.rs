@@ -7,6 +7,7 @@ pub mod log_rotation;
 pub mod model;
 pub mod overlay_spec_generated;
 pub mod paths;
+pub mod process;
 pub mod snapshot;
 
 pub use overlay_spec_generated::overlay_spec;

@@ -6,7 +6,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use sky_cua_input_helper::protocol::{
     HelperCommand, HelperResponse, KeyEventCommand, PointerAction, parse_response_line,
@@ -1405,43 +1405,27 @@ where
     if let Some(socket_path) = probe.socket_path.as_ref() {
         command.env("YDOTOOL_SOCKET", socket_path);
     }
-    let mut child = command.spawn().map_err(|error| {
-        BackendError::new(
-            BackendErrorCode::ActionUnsupportedForEnvironment,
-            format!("failed to start ydotool: {error}"),
-        )
-    })?;
-
-    let deadline = Instant::now() + COMMAND_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(BackendError::new(
-                    BackendErrorCode::ActionUnsupportedForEnvironment,
-                    format!("ydotool command timed out: ydotool {}", args.join(" ")),
-                ));
-            }
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(BackendError::new(
-                    BackendErrorCode::ActionUnsupportedForEnvironment,
-                    format!("failed to wait for ydotool: {error}"),
-                ));
-            }
+    let output = match sky_cua_platform::process::run_with_timeout(&mut command, COMMAND_TIMEOUT) {
+        Ok(output) => output,
+        Err(sky_cua_platform::process::RunError::Spawn(error)) => {
+            return Err(BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                format!("failed to start ydotool: {error}"),
+            ));
         }
-    }
-
-    let output = child.wait_with_output().map_err(|error| {
-        BackendError::new(
-            BackendErrorCode::ActionUnsupportedForEnvironment,
-            format!("failed to collect ydotool output: {error}"),
-        )
-    })?;
+        Err(sky_cua_platform::process::RunError::TimedOut { .. }) => {
+            return Err(BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                format!("ydotool command timed out: ydotool {}", args.join(" ")),
+            ));
+        }
+        Err(sky_cua_platform::process::RunError::Wait(error)) => {
+            return Err(BackendError::new(
+                BackendErrorCode::ActionUnsupportedForEnvironment,
+                format!("failed to wait for ydotool: {error}"),
+            ));
+        }
+    };
     if output.status.success() {
         return Ok(());
     }
@@ -1511,19 +1495,7 @@ fn socket_is_connectable(path: &Path) -> bool {
 }
 
 fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Option<Output> {
-    let mut child = command.spawn().ok()?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => return child.wait_with_output().ok(),
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-            Ok(None) | Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    }
+    sky_cua_platform::process::run_with_timeout(command, timeout).ok()
 }
 
 fn find_executable(name: &str) -> Option<PathBuf> {
