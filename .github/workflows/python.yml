@@ -23,7 +23,7 @@ jobs:
         with:
           bun-version: 1.4.4
 
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
 
       - uses: extractions/setup-just@v4
 
