@@ -654,6 +654,56 @@ mod tests {
     }
 
     #[test]
+    fn descendant_only_process_set_matches_full_table_enrichment() {
+        // Full table: the outer terminal's ancestors, an unrelated tree, a
+        // nested terminal (300) running inside the outer one (100), and a
+        // second top-level terminal (500).
+        let full_table = vec![
+            process(1, 0, 0, "systemd", None),
+            process(50, 1, 1, "plasmashell", None),
+            process(100, 50, 2, "ghostty", None),
+            process(200, 100, 10, "zsh", Some("/dev/pts/0")),
+            process(300, 200, 11, "konsole", Some("/dev/pts/0")),
+            process(301, 300, 12, "bash", Some("/dev/pts/1")),
+            process(302, 301, 13, "claude", Some("/dev/pts/1")),
+            process(400, 1, 3, "unrelated", Some("/dev/pts/9")),
+            process(500, 50, 4, "ghostty", None),
+            process(501, 500, 20, "zsh", Some("/dev/pts/2")),
+        ];
+        let base_windows = vec![
+            terminal_window("11", 100),
+            terminal_window("12", 300),
+            terminal_window("13", 500),
+        ];
+
+        let mut full_windows = base_windows.clone();
+        enrich_terminal_windows_with_processes(&mut full_windows, &full_table);
+
+        let parents = full_table
+            .iter()
+            .map(|process| (process.pid, process.ppid))
+            .collect::<HashMap<_, _>>();
+        let terminal_pids: HashSet<u32> = terminal_window_pids(&base_windows).into_keys().collect();
+        let wanted = descendant_pids(&parents, &terminal_pids);
+        let filtered = full_table
+            .iter()
+            .filter(|process| wanted.contains(&process.pid))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(filtered.len() < full_table.len());
+
+        let mut filtered_windows = base_windows;
+        enrich_terminal_windows_with_processes(&mut filtered_windows, &filtered);
+
+        // The outer terminal sees both its own PTY and the nested terminal's
+        // PTY, which is only reachable by walking through process 300.
+        assert_eq!(full_windows[0].terminal_target_sessions.len(), 2);
+        assert!(full_windows[1].terminal.is_some());
+        assert!(full_windows[2].terminal.is_some());
+        assert_eq!(filtered_windows, full_windows);
+    }
+
+    #[test]
     fn terminal_window_pids_skips_non_terminal_and_pidless_windows() {
         let windows = vec![
             terminal_window("11", 100),
