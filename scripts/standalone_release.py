@@ -563,7 +563,8 @@ def _upsert_toml_key(config_text: str, header: str, key: str, rendered_value: st
     import re
 
     section_re = re.compile(
-        rf"(^\[{re.escape(header)}\]\r?\n)(.*?)(?=^\[|\Z)", re.MULTILINE | re.DOTALL
+        rf"(^\[{re.escape(header)}\][ \t]*(?:#[^\r\n]*)?\r?\n)(.*?)(?=^\[|\Z)",
+        re.MULTILINE | re.DOTALL,
     )
     match = section_re.search(config_text)
     line = f"{key} = {rendered_value}"
@@ -573,7 +574,7 @@ def _upsert_toml_key(config_text: str, header: str, key: str, rendered_value: st
     body = match.group(2)
     key_re = re.compile(rf"^{re.escape(key)}\s*=.*$", re.MULTILINE)
     if key_re.search(body):
-        new_body = key_re.sub(line, body, count=1)
+        new_body = key_re.sub(lambda _match: line, body, count=1)
     else:
         suffix = "" if body.endswith(("\n", "\r\n")) or body == "" else "\n"
         new_body = f"{body}{suffix}{line}\n"
@@ -671,8 +672,7 @@ def _update_codex_config_for_bundled(codex_home: Path) -> None:
             "enabled",
             "true",
         )
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(config_text, encoding="utf-8")
+    _write_text_atomically(config_path, config_text)
 
 
 def _install_codex_plugins(
