@@ -17,8 +17,17 @@ stable contracts, platform backends, the daemon, and the MCP client.
 - Desktop agent-cursor overlay host (Wayland layer-shell + wgpu renderer +
   the vehicle-steering motion driver): `crates/sky-cua-overlay-host/` ->
   [sky-cua-overlay-host/AGENTS.md](sky-cua-overlay-host/AGENTS.md).
+- Chrome native-messaging host (extension to daemon bridge):
+  `crates/sky-cua-chrome-host/`.
+- COSMIC toplevel helper (Wayland `cosmic-protocols` client for window
+  discovery, focus, and activation on COSMIC, plus the cursor bridge):
+  `crates/sky-cua-cosmic-helper/`.
+- Root uinput helper (systemd system service; keyboard and absolute-pointer
+  injection plus pointer observation over `/run/sky-cua/input-helper.sock`):
+  `crates/sky-cua-input-helper/`.
 - Daemon state and IPC serving: `crates/sky-cua-service/src/**` (request
-  dispatch in `src/daemon.rs`).
+  dispatch in `src/daemon/mod.rs`; per-surface handlers live beside it in
+  `src/daemon/`).
 - MCP JSON-RPC behavior and tool text/structured output:
   `crates/sky-cua-client/src/mcp_server.rs`.
 - Workspace members and shared deps: root `Cargo.toml`; crate manifests use
@@ -41,4 +50,4 @@ stable contracts, platform backends, the daemon, and the MCP client.
 - Portal and X11 action success means transport success, not visual proof.
   Live smokes must re-check state.
 - Some tests mutate environment variables; keep serialized patterns like
-  `serial_test` in `portal/pipewire.rs`.
+  `serial_test` in `src/portal/pipewire.rs`.

@@ -9,8 +9,9 @@ behavior touches the desktop. Relevant live smokes:
 
 ## Layout
 
-- `src/backend.rs` — orchestration, fallback snapshot geometry, and the
-  cached `accessibility_connection` pattern for expensive connections.
+- `src/backend/` — orchestration (`mod.rs`), the `DesktopBackend` impl
+  (`desktop_backend.rs`), fallback snapshot geometry, and the cached
+  `accessibility_connection` pattern for expensive connections.
 - `src/actions/` — action execution: `mod.rs` owns `LinuxActionExecutor`,
   `runtime.rs` the fakeable runtime facade, `targeting.rs` physical backend
   selection and coordinate planning.

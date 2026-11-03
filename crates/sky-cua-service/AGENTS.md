@@ -6,7 +6,9 @@ backend lifetime. Run locally with `cargo run -p sky-cua-service -- daemon`.
 
 ## Layout
 
-- `src/daemon.rs` — request dispatch; `src/ipc_server.rs` — Unix-socket
+- `src/daemon/mod.rs` — request dispatch (surface handlers in
+  `src/daemon/desktop.rs`, `src/daemon/phone.rs`, `src/daemon/browser.rs`,
+  `src/daemon/appshot.rs`); `src/ipc_server.rs` — Unix-socket
   server; `src/snapshot_manager.rs` — snapshot cache; `src/approval_store.rs`
   — approval/token startup effects; `src/action_router.rs` — action wrapper.
 - Backend errors convert through `src/diagnostics.rs`, never ad hoc response
