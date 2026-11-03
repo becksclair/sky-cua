@@ -479,28 +479,43 @@ impl LinuxVirtualInput {
         Ok(())
     }
 
+    /// Press `keys` through the privileged helper. Resolver failures happen
+    /// before any keystroke is sent and are eligible for the ydotool fallback;
+    /// anything after the request is written may already have been injected, so
+    /// it is `AfterInjection` and must not be retried through another device.
+    /// Every `run_helper_command` failure, including a connect failure, is
+    /// classified `AfterInjection`, matching [`Self::type_text_via_helper`].
+    fn press_key_sequence_via_helper(
+        &self,
+        socket_path: &Path,
+        keys: &[String],
+    ) -> Result<(), HelperTypeError> {
+        let resolver =
+            LinuxKeyResolver::from_environment().map_err(HelperTypeError::BeforeInjection)?;
+        let mut events = resolver
+            .key_sequence_events(keys)
+            .map_err(HelperTypeError::BeforeInjection)?;
+        self.push_cosmic_input_flush(&mut events, desktop_is_cosmic(), COSMIC_KEY_FLUSH_KEYCODE);
+        run_helper_command(socket_path, HelperCommand::KeyEvents { events })
+            .map_err(HelperTypeError::AfterInjection)
+    }
+
     pub fn press_key_sequence(&self, keys: &[String]) -> Result<(), BackendError> {
         if let Some(socket_path) = self.probe.helper_socket_path.as_deref()
             && socket_is_connectable(socket_path)
         {
-            match LinuxKeyResolver::from_environment()
-                .and_then(|resolver| resolver.key_sequence_events(keys))
-                .and_then(|mut events| {
-                    self.push_cosmic_input_flush(
-                        &mut events,
-                        desktop_is_cosmic(),
-                        COSMIC_KEY_FLUSH_KEYCODE,
-                    );
-                    run_helper_command(socket_path, HelperCommand::KeyEvents { events })
-                }) {
+            match self.press_key_sequence_via_helper(socket_path, keys) {
                 Ok(()) => return Ok(()),
-                Err(error)
+                // The chord may already have been injected; a ydotool resend would
+                // press it twice (double Enter, two closed tabs), so surface the error.
+                Err(HelperTypeError::AfterInjection(error)) => return Err(error),
+                Err(HelperTypeError::BeforeInjection(error))
                     if self.probe.adapter != VirtualInputAdapterKind::Ydotool
                         || !self.probe.supports_keyboard() =>
                 {
                     return Err(error);
                 }
-                Err(_) => {}
+                Err(HelperTypeError::BeforeInjection(_)) => {}
             }
         }
         match self.probe.adapter {
@@ -1707,16 +1722,16 @@ fn strip_ansi(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::os::unix::net::UnixListener;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use sky_cua_input_helper::uinput::DesktopBounds;
 
     use super::{
-        ClickAction, LinuxVirtualInput, VirtualInputAdapterKind, VirtualInputCoordinatePlane,
-        VirtualInputProbe, click_code, desktop_name_is_cosmic, helper_keyboard_only_probe,
-        key_sequence_events, move_absolute_args, parse_cosmic_randr_bounds, parse_localectl_status,
-        parse_scale_milli, parse_setxkbmap_query, preferred_socket_path, scroll_vertical_args,
-        type_text_args,
+        ClickAction, LinuxKeyResolver, LinuxVirtualInput, VirtualInputAdapterKind,
+        VirtualInputCoordinatePlane, VirtualInputProbe, click_code, desktop_name_is_cosmic,
+        helper_keyboard_only_probe, key_sequence_events, move_absolute_args,
+        parse_cosmic_randr_bounds, parse_localectl_status, parse_scale_milli,
+        parse_setxkbmap_query, preferred_socket_path, scroll_vertical_args, type_text_args,
     };
     use crate::portal::remote_desktop::MouseButton;
 
@@ -1947,5 +1962,74 @@ mod tests {
         assert_eq!(names.layout, "de");
         assert_eq!(names.variant, "nodeadkeys");
         assert_eq!(names.options, "terminate:ctrl_alt_bksp");
+    }
+
+    /// Bind a Unix socket, accept one connection, read the request line and
+    /// answer with an `ok: false` helper response. Mimics a helper that received
+    /// (and may have injected) the batch before reporting a failure.
+    fn spawn_failing_helper(socket_path: &Path) -> std::thread::JoinHandle<String> {
+        let _ = std::fs::remove_file(socket_path);
+        let listener = UnixListener::bind(socket_path).unwrap();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            std::io::BufRead::read_line(&mut reader, &mut request).unwrap();
+            let mut writer = stream;
+            std::io::Write::write_all(
+                &mut writer,
+                b"{\"ok\":false,\"error\":{\"code\":\"uinput_error\",\"message\":\"simulated\"}}\n",
+            )
+            .unwrap();
+            request
+        })
+    }
+
+    #[test]
+    fn helper_failure_after_send_does_not_fall_back_to_ydotool() {
+        // Without XKB keymap data the classification below cannot be reached;
+        // fail loudly (with the real error) rather than pass vacuously.
+        LinuxKeyResolver::from_environment()
+            .expect("XKB keymap must compile on this host; see plan 009 STOP conditions");
+        let socket_dir = std::env::temp_dir().join(format!(
+            "sky-cua-helper-fallback-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&socket_dir).unwrap();
+        let socket_path = socket_dir.join("helper.sock");
+        let server = spawn_failing_helper(&socket_path);
+
+        let input = LinuxVirtualInput {
+            probe: VirtualInputProbe {
+                adapter: VirtualInputAdapterKind::Ydotool,
+                coordinate_plane: VirtualInputCoordinatePlane::DesktopLogical,
+                ydotool_path: Some(PathBuf::from("/nonexistent/sky-cua-test-ydotool")),
+                socket_path: None,
+                helper_socket_path: Some(socket_path.clone()),
+                pointer_via_helper: false,
+                desktop_bounds: None,
+            },
+        };
+
+        let error = input
+            .press_key_sequence(&["Return".to_string()])
+            .expect_err("helper failure must surface");
+        // Check the error before joining: if the client never reached the fake
+        // helper, the join would block forever instead of failing.
+        assert!(
+            error.message.contains("privileged input helper failed"),
+            "expected the helper error to be returned, not a ydotool fallback: {}",
+            error.message
+        );
+        assert!(
+            !error.message.contains("failed to start ydotool"),
+            "chord was re-sent through ydotool after the helper may have injected it"
+        );
+        let request = server.join().unwrap();
+        assert!(
+            request.contains("\"op\":\"key_events\""),
+            "helper must have received the batch: {request}"
+        );
+        std::fs::remove_dir_all(socket_dir).unwrap();
     }
 }
