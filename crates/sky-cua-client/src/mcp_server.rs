@@ -47,6 +47,34 @@ enum MessageFraming {
     JsonLine,
 }
 
+#[derive(Debug)]
+enum FrameRead {
+    /// A complete, parsed JSON-RPC message.
+    Message(Value, MessageFraming),
+    /// The frame delimiter was honoured but its body is not valid JSON;
+    /// reply `-32700` and keep reading.
+    Malformed {
+        framing: MessageFraming,
+        detail: String,
+    },
+    /// Clean end of input.
+    Eof,
+}
+
+impl FrameRead {
+    /// Classify a body parse: valid JSON is a message, anything else is a
+    /// recoverable malformed frame (the delimiter itself was intact).
+    fn parsed(result: serde_json::Result<Value>, framing: MessageFraming) -> Self {
+        match result {
+            Ok(value) => Self::Message(value, framing),
+            Err(error) => Self::Malformed {
+                framing,
+                detail: error.to_string(),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ServerSession {
     mcp_connection_id: String,
@@ -169,11 +197,27 @@ pub async fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Re
         }
     });
 
+    let mut fatal_read_error: Option<anyhow::Error> = None;
     loop {
         let (message, framing) =
-            match read_message(&mut reader, &mut read_line_buf, &mut read_payload_buf).await? {
-                Some(v) => v,
-                None => break,
+            match read_message(&mut reader, &mut read_line_buf, &mut read_payload_buf).await {
+                Ok(FrameRead::Message(message, framing)) => (message, framing),
+                Ok(FrameRead::Malformed { framing, detail }) => {
+                    tracing::warn!(%detail, "malformed JSON-RPC frame; answering parse error");
+                    if response_tx
+                        .send((parse_error(detail), framing))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    continue;
+                }
+                Ok(FrameRead::Eof) => break,
+                Err(error) => {
+                    fatal_read_error = Some(error);
+                    break;
+                }
             };
 
         let method = message.get("method").and_then(Value::as_str).unwrap_or("");
@@ -202,6 +246,7 @@ pub async fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Re
             let is_browser_call = prepared_browser_call.is_some();
             let task = async move {
                 let id = message.get("id").cloned().unwrap_or(Value::Null);
+                let panic_id = id.clone();
                 let completion = prepared_browser_call.as_ref().and_then(|prepared| {
                     prepared
                         .request_id
@@ -232,10 +277,11 @@ pub async fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Re
                 .unwrap_or_else(|_| {
                     Some(json!({
                         "jsonrpc": "2.0",
-                        "id": Value::Null,
+                        "id": panic_id,
                         "error": {
                             "code": -32603,
                             "message": "service call panicked",
+                            "data": { "code": "ServiceCallPanicked" }
                         }
                     }))
                 });
@@ -311,7 +357,10 @@ pub async fn serve(service: ServiceClient, heuristics: HeuristicsRegistry) -> Re
 
     drop(response_tx);
     writer_task.await?;
-    Ok(())
+    match fatal_read_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 fn handle_message(
@@ -835,6 +884,18 @@ fn already_initialized(id: Value) -> Value {
     })
 }
 
+fn parse_error(detail: String) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": Value::Null,
+        "error": {
+            "code": -32700,
+            "message": "Parse error",
+            "data": { "code": "ParseError", "detail": detail }
+        }
+    })
+}
+
 fn not_initialized(id: Value) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -1018,7 +1079,7 @@ async fn read_message<R>(
     reader: &mut R,
     line_buf: &mut Vec<u8>,
     payload_buf: &mut Vec<u8>,
-) -> Result<Option<(Value, MessageFraming)>>
+) -> Result<FrameRead>
 where
     R: AsyncBufRead + Unpin,
 {
@@ -1030,13 +1091,13 @@ async fn read_message_with_limit<R>(
     line_buf: &mut Vec<u8>,
     payload_buf: &mut Vec<u8>,
     max_frame_bytes: usize,
-) -> Result<Option<(Value, MessageFraming)>>
+) -> Result<FrameRead>
 where
     R: AsyncBufRead + Unpin,
 {
     let first_line = loop {
         if !read_bounded_line(reader, line_buf, max_frame_bytes).await? {
-            return Ok(None);
+            return Ok(FrameRead::Eof);
         }
         let trimmed = std::str::from_utf8(line_buf).context("MCP frame line is not UTF-8")?;
         if !trimmed.is_empty() {
@@ -1046,10 +1107,10 @@ where
 
     let trimmed = first_line.trim_start();
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        return Ok(Some((
-            serde_json::from_str(trimmed).context("invalid line-delimited JSON-RPC message")?,
+        return Ok(FrameRead::parsed(
+            serde_json::from_str(trimmed),
             MessageFraming::JsonLine,
-        )));
+        ));
     }
 
     let mut content_length: Option<usize> = None;
@@ -1082,10 +1143,10 @@ where
     }
     payload_buf.resize(length, 0);
     reader.read_exact(payload_buf).await?;
-    Ok(Some((
-        serde_json::from_slice(payload_buf)?,
+    Ok(FrameRead::parsed(
+        serde_json::from_slice(payload_buf),
         MessageFraming::ContentLength,
-    )))
+    ))
 }
 
 async fn read_bounded_line<R>(
@@ -1205,12 +1266,12 @@ mod tests {
     };
 
     use super::{
-        InFlightBrowserCalls, JsonRpcRequestId, McpSessionConfig, MessageFraming, ModelSessionInfo,
-        ServerSession, browser_call_context, browser_caller_provenance,
+        FrameRead, InFlightBrowserCalls, JsonRpcRequestId, McpSessionConfig, MessageFraming,
+        ModelSessionInfo, ServerSession, browser_call_context, browser_caller_provenance,
         browser_session_identity_from_tool_call, cancellation_request,
         current_browser_request_context, disconnect_request_once, is_browser_surface_tool_call,
         is_phone_surface_tool_call, json_rpc_id_fingerprint, model_image_capability_for_tool_call,
-        normalize_declared_caller, parse_model_session_info, phone_call_context,
+        normalize_declared_caller, parse_error, parse_model_session_info, phone_call_context,
         phone_session_and_turn_from_tool_call, prepare_browser_call, read_message,
         read_message_with_limit, with_browser_request_context, write_message,
     };
@@ -1980,10 +2041,13 @@ mod tests {
         let mut line_buf = Vec::with_capacity(128);
         let mut payload_buf = Vec::with_capacity(256);
 
-        let (message, framing) = read_message(&mut reader, &mut line_buf, &mut payload_buf)
-            .await
-            .unwrap()
-            .unwrap();
+        let FrameRead::Message(message, framing) =
+            read_message(&mut reader, &mut line_buf, &mut payload_buf)
+                .await
+                .unwrap()
+        else {
+            panic!("expected a parsed message");
+        };
         assert_eq!(framing, MessageFraming::ContentLength);
         assert_eq!(message["method"], "initialize");
         assert_eq!(message["id"], 1);
@@ -2004,10 +2068,13 @@ mod tests {
         let mut line_buf = Vec::with_capacity(128);
         let mut payload_buf = Vec::with_capacity(256);
 
-        let (message, framing) = read_message(&mut reader, &mut line_buf, &mut payload_buf)
-            .await
-            .unwrap()
-            .unwrap();
+        let FrameRead::Message(message, framing) =
+            read_message(&mut reader, &mut line_buf, &mut payload_buf)
+                .await
+                .unwrap()
+        else {
+            panic!("expected a parsed message");
+        };
         assert_eq!(framing, MessageFraming::JsonLine);
         assert_eq!(message["method"], "initialize");
         assert_eq!(message["id"], 1);
@@ -2050,11 +2117,13 @@ mod tests {
         let mut reader = Cursor::new(format!("{at_limit}\n").into_bytes());
         let mut line_buf = Vec::new();
         let mut payload_buf = Vec::new();
-        let (_, framing) =
+        let FrameRead::Message(_, framing) =
             read_message_with_limit(&mut reader, &mut line_buf, &mut payload_buf, LIMIT)
                 .await
                 .unwrap()
-                .unwrap();
+        else {
+            panic!("expected a parsed message");
+        };
         assert_eq!(framing, MessageFraming::JsonLine);
 
         let mut reader = Cursor::new(format!(" {at_limit}\n").into_bytes());
@@ -2077,11 +2146,13 @@ mod tests {
             Cursor::new(format!("Content-Length: {LIMIT}\r\n\r\n{payload}").into_bytes());
         let mut line_buf = Vec::new();
         let mut payload_buf = Vec::new();
-        let (_, framing) =
+        let FrameRead::Message(_, framing) =
             read_message_with_limit(&mut reader, &mut line_buf, &mut payload_buf, LIMIT)
                 .await
                 .unwrap()
-                .unwrap();
+        else {
+            panic!("expected a parsed message");
+        };
         assert_eq!(framing, MessageFraming::ContentLength);
 
         let mut reader = Cursor::new(format!("Content-Length: {}\r\n\r\n", LIMIT + 1).into_bytes());
@@ -2105,11 +2176,13 @@ mod tests {
         let mut payload_buf = Vec::new();
 
         let mut reader = Cursor::new(b"Content-Length: 2\r\nX-Pad: 12345678\r\n\r\n{}".to_vec());
-        let (_, framing) =
+        let FrameRead::Message(_, framing) =
             read_message_with_limit(&mut reader, &mut line_buf, &mut payload_buf, LIMIT)
                 .await
                 .unwrap()
-                .unwrap();
+        else {
+            panic!("expected a parsed message");
+        };
         assert_eq!(framing, MessageFraming::ContentLength);
 
         let mut reader = Cursor::new(b"Content-Length: 2\r\nX-Pad: 123456789\r\n\r\n{}".to_vec());
@@ -2121,5 +2194,84 @@ mod tests {
                 .to_string()
                 .contains("MCP line exceeds maximum frame size")
         );
+    }
+
+    #[tokio::test]
+    async fn read_message_reports_malformed_json_line_as_recoverable() {
+        let mut reader = Cursor::new(
+            b"{not json}\n{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n".to_vec(),
+        );
+        let mut line_buf = Vec::new();
+        let mut payload_buf = Vec::new();
+
+        let first = read_message(&mut reader, &mut line_buf, &mut payload_buf)
+            .await
+            .unwrap();
+        assert!(matches!(
+            first,
+            FrameRead::Malformed {
+                framing: MessageFraming::JsonLine,
+                ..
+            }
+        ));
+
+        let FrameRead::Message(message, framing) =
+            read_message(&mut reader, &mut line_buf, &mut payload_buf)
+                .await
+                .unwrap()
+        else {
+            panic!("expected a parsed message after the malformed line");
+        };
+        assert_eq!(framing, MessageFraming::JsonLine);
+        assert_eq!(message["id"], 7);
+    }
+
+    #[tokio::test]
+    async fn read_message_reports_malformed_content_length_body_as_recoverable() {
+        let mut reader = Cursor::new(
+            b"Content-Length: 5\r\n\r\n{nopeContent-Length: 40\r\n\r\n{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"ping\"}".to_vec(),
+        );
+        let mut line_buf = Vec::new();
+        let mut payload_buf = Vec::new();
+
+        let first = read_message(&mut reader, &mut line_buf, &mut payload_buf)
+            .await
+            .unwrap();
+        assert!(matches!(
+            first,
+            FrameRead::Malformed {
+                framing: MessageFraming::ContentLength,
+                ..
+            }
+        ));
+
+        let FrameRead::Message(message, framing) =
+            read_message(&mut reader, &mut line_buf, &mut payload_buf)
+                .await
+                .unwrap()
+        else {
+            panic!("expected a parsed message after the malformed body");
+        };
+        assert_eq!(framing, MessageFraming::ContentLength);
+        assert_eq!(message["id"], 8);
+    }
+
+    #[tokio::test]
+    async fn truncated_content_length_body_is_still_fatal() {
+        let mut reader = Cursor::new(b"Content-Length: 10\r\n\r\n{}".to_vec());
+        let mut line_buf = Vec::new();
+        let mut payload_buf = Vec::new();
+
+        read_message(&mut reader, &mut line_buf, &mut payload_buf)
+            .await
+            .unwrap_err();
+    }
+
+    #[test]
+    fn parse_error_response_shape() {
+        let response = parse_error("x".into());
+        assert_eq!(response["error"]["code"], -32700);
+        assert_eq!(response["id"], Value::Null);
+        assert_eq!(response["error"]["data"]["code"], "ParseError");
     }
 }
