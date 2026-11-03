@@ -2,12 +2,20 @@ use std::collections::{HashMap, VecDeque};
 
 use sky_cua_platform::model::{AppShotEnvelope, AppStateSnapshot};
 
-#[derive(Debug, Default)]
+/// Multiplier on `max_snapshots` giving the retained AppShot cap. Only the
+/// AppShot from the most recent capture can be accepted, so the retained
+/// tail only preserves `WrongSession` reasons and exact-window recovery
+/// targets for recent ids.
+const APPSHOTS_PER_SNAPSHOT: usize = 8;
+
+#[derive(Debug)]
 pub struct SnapshotManager {
     snapshots: HashMap<String, AppStateSnapshot>,
     order: VecDeque<String>,
     max_snapshots: usize,
     appshots: HashMap<String, AppShotEnvelope>,
+    appshot_order: VecDeque<String>,
+    max_appshots: usize,
 }
 
 impl SnapshotManager {
@@ -18,6 +26,8 @@ impl SnapshotManager {
             order: VecDeque::new(),
             max_snapshots: max_snapshots.max(1),
             appshots: HashMap::new(),
+            appshot_order: VecDeque::new(),
+            max_appshots: max_snapshots.max(1).saturating_mul(APPSHOTS_PER_SNAPSHOT),
         }
     }
 
@@ -60,7 +70,17 @@ impl SnapshotManager {
     }
 
     pub fn store_appshot(&mut self, appshot: AppShotEnvelope) {
-        self.appshots.insert(appshot.appshot_id.clone(), appshot);
+        let appshot_id = appshot.appshot_id.clone();
+        if self.appshots.insert(appshot_id.clone(), appshot).is_some() {
+            self.appshot_order.retain(|id| id != &appshot_id);
+        }
+        self.appshot_order.push_back(appshot_id);
+
+        while self.appshot_order.len() > self.max_appshots {
+            if let Some(oldest) = self.appshot_order.pop_front() {
+                self.appshots.remove(&oldest);
+            }
+        }
     }
 
     pub fn appshot(&self, appshot_id: &str) -> Option<&AppShotEnvelope> {
@@ -106,6 +126,44 @@ mod tests {
         };
         assert_eq!(window_id, "window-b");
         assert_eq!(stored.action_snapshot.snapshot_id, "snapshot-b");
+        assert_eq!(manager.appshots.len(), 1);
+        assert_eq!(manager.appshot_order.len(), 1);
+    }
+
+    #[test]
+    fn evicts_old_appshots_beyond_cap() {
+        let mut manager = SnapshotManager::new(1);
+        for index in 1..=9 {
+            manager.store_appshot(appshot(
+                &format!("shot-{index}"),
+                "window-a",
+                &format!("snapshot-{index}"),
+            ));
+        }
+
+        assert!(manager.appshot("shot-1").is_none());
+        assert!(manager.appshot("shot-9").is_some());
+        assert_eq!(manager.appshots.len(), 8);
+        assert_eq!(manager.appshot_order.len(), 8);
+    }
+
+    #[test]
+    fn restoring_appshot_refreshes_its_eviction_position() {
+        let mut manager = SnapshotManager::new(1);
+        for index in 1..=8 {
+            manager.store_appshot(appshot(
+                &format!("shot-{index}"),
+                "window-a",
+                &format!("snapshot-{index}"),
+            ));
+        }
+        manager.store_appshot(appshot("shot-1", "window-a", "snapshot-1"));
+        manager.store_appshot(appshot("shot-9", "window-a", "snapshot-9"));
+
+        assert!(manager.appshot("shot-1").is_some());
+        assert!(manager.appshot("shot-2").is_none());
+        assert_eq!(manager.appshots.len(), 8);
+        assert_eq!(manager.appshot_order.len(), 8);
     }
 
     fn appshot(id: &str, window_id: &str, snapshot_id: &str) -> AppShotEnvelope {

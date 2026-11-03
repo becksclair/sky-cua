@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
 
 use sha2::{Digest, Sha256};
@@ -16,17 +16,50 @@ struct RegisteredAppShot {
     target: BrowserTargetKind,
 }
 
-fn appshot_registry() -> &'static Mutex<HashMap<String, RegisteredAppShot>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<String, RegisteredAppShot>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+/// Global cap across all sessions and tabs. Browser AppShots stay valid
+/// while their tab's document generation is unchanged, so this is
+/// deliberately generous; an evicted id is rejected as `Missing` with a
+/// fresh AppShot attached.
+const MAX_REGISTERED_APPSHOTS: usize = 256;
+
+#[derive(Default)]
+struct AppShotRegistry {
+    entries: HashMap<String, RegisteredAppShot>,
+    order: VecDeque<String>,
+}
+
+impl AppShotRegistry {
+    fn insert(&mut self, envelope: AppShotEnvelope, target: BrowserTargetKind) {
+        let id = envelope.appshot_id.clone();
+        let replaced = self
+            .entries
+            .insert(id.clone(), RegisteredAppShot { envelope, target })
+            .is_some();
+        // Ids are fresh UUIDs, so the linear rescan only runs on a re-register.
+        if replaced {
+            self.order.retain(|existing| existing != &id);
+        }
+        self.order.push_back(id);
+        while self.order.len() > MAX_REGISTERED_APPSHOTS {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+    }
+
+    fn get(&self, id: &str) -> Option<&RegisteredAppShot> {
+        self.entries.get(id)
+    }
+}
+
+fn appshot_registry() -> &'static Mutex<AppShotRegistry> {
+    static REGISTRY: OnceLock<Mutex<AppShotRegistry>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(AppShotRegistry::default()))
 }
 
 fn register_appshot(envelope: AppShotEnvelope, target: BrowserTargetKind) {
     if let Ok(mut registry) = appshot_registry().lock() {
-        registry.insert(
-            envelope.appshot_id.clone(),
-            RegisteredAppShot { envelope, target },
-        );
+        registry.insert(envelope, target);
     }
 }
 
@@ -884,5 +917,23 @@ mod appshot_fence_tests {
             driver_calls, 0,
             "rejected AppShots must not reach the driver mutation"
         );
+    }
+
+    #[test]
+    fn registry_evicts_oldest_beyond_cap() {
+        let mut registry = AppShotRegistry::default();
+        for index in 0..=MAX_REGISTERED_APPSHOTS {
+            let mut shot = entry(BrowserTargetKind::UserChrome, "tab-1", "session-1", 7);
+            shot.envelope.appshot_id = format!("shot-{index}");
+            registry.insert(shot.envelope, shot.target);
+        }
+        assert!(registry.get("shot-0").is_none());
+        assert!(
+            registry
+                .get(&format!("shot-{MAX_REGISTERED_APPSHOTS}"))
+                .is_some()
+        );
+        assert_eq!(registry.entries.len(), MAX_REGISTERED_APPSHOTS);
+        assert_eq!(registry.order.len(), MAX_REGISTERED_APPSHOTS);
     }
 }
