@@ -31,9 +31,14 @@ struct AppShotRegistry {
 impl AppShotRegistry {
     fn insert(&mut self, envelope: AppShotEnvelope, target: BrowserTargetKind) {
         let id = envelope.appshot_id.clone();
-        self.entries
-            .insert(id.clone(), RegisteredAppShot { envelope, target });
-        self.order.retain(|existing| existing != &id);
+        let replaced = self
+            .entries
+            .insert(id.clone(), RegisteredAppShot { envelope, target })
+            .is_some();
+        // Ids are fresh UUIDs, so the linear rescan only runs on a re-register.
+        if replaced {
+            self.order.retain(|existing| existing != &id);
+        }
         self.order.push_back(id);
         while self.order.len() > MAX_REGISTERED_APPSHOTS {
             if let Some(oldest) = self.order.pop_front() {

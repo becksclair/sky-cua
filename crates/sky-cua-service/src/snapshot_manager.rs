@@ -27,7 +27,7 @@ impl SnapshotManager {
             max_snapshots: max_snapshots.max(1),
             appshots: HashMap::new(),
             appshot_order: VecDeque::new(),
-            max_appshots: max_snapshots.max(1) * APPSHOTS_PER_SNAPSHOT,
+            max_appshots: max_snapshots.max(1).saturating_mul(APPSHOTS_PER_SNAPSHOT),
         }
     }
 
@@ -71,8 +71,9 @@ impl SnapshotManager {
 
     pub fn store_appshot(&mut self, appshot: AppShotEnvelope) {
         let appshot_id = appshot.appshot_id.clone();
-        self.appshots.insert(appshot_id.clone(), appshot);
-        self.appshot_order.retain(|id| id != &appshot_id);
+        if self.appshots.insert(appshot_id.clone(), appshot).is_some() {
+            self.appshot_order.retain(|id| id != &appshot_id);
+        }
         self.appshot_order.push_back(appshot_id);
 
         while self.appshot_order.len() > self.max_appshots {
@@ -142,6 +143,25 @@ mod tests {
 
         assert!(manager.appshot("shot-1").is_none());
         assert!(manager.appshot("shot-9").is_some());
+        assert_eq!(manager.appshots.len(), 8);
+        assert_eq!(manager.appshot_order.len(), 8);
+    }
+
+    #[test]
+    fn restoring_appshot_refreshes_its_eviction_position() {
+        let mut manager = SnapshotManager::new(1);
+        for index in 1..=8 {
+            manager.store_appshot(appshot(
+                &format!("shot-{index}"),
+                "window-a",
+                &format!("snapshot-{index}"),
+            ));
+        }
+        manager.store_appshot(appshot("shot-1", "window-a", "snapshot-1"));
+        manager.store_appshot(appshot("shot-9", "window-a", "snapshot-9"));
+
+        assert!(manager.appshot("shot-1").is_some());
+        assert!(manager.appshot("shot-2").is_none());
         assert_eq!(manager.appshots.len(), 8);
         assert_eq!(manager.appshot_order.len(), 8);
     }
