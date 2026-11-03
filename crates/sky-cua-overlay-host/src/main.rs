@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 #[cfg(unix)]
 use calloop::{
-    EventLoop, Interest, LoopSignal, Mode, PostAction,
+    EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction, RegistrationToken,
     generic::Generic,
     timer::{TimeoutAction, Timer},
 };
@@ -23,10 +23,12 @@ const CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(test)]
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_millis(500);
 
-// Initial loop cadence before the first display-refresh-matched interval is
-// computed; subsequent ticks use OverlayHostBackend::pointer_tick_interval().
+// Initial `armed_interval` for the socket loop before its timer is first
+// armed; every armed period comes from OverlayHostBackend::pointer_tick_interval().
 #[cfg(unix)]
 const SOCKET_LOOP_TICK_INTERVAL: Duration = Duration::from_millis(16);
+// Upper bound on the TCP accept loop's poll sleep; see `run_accept_loop`.
+const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
 fn main() -> Result<()> {
     // The overlay host is a long-lived child of the service daemon; drop any
@@ -251,27 +253,24 @@ fn run_unix_socket_event_loop(listener: UnixListener) -> Result<()> {
     handle
         .insert_source(listener_source, |_readiness, _listener, state| {
             state.accept_ready();
+            state.rearm_tick_timer_if_sooner();
             Ok(PostAction::Continue)
         })
         .context("failed to register overlay host socket listener")?;
-    handle
-        .insert_source(
-            Timer::from_duration(SOCKET_LOOP_TICK_INTERVAL),
-            |_deadline, _timer, state| {
-                state.backend.tick();
-                TimeoutAction::ToDuration(state.backend.pointer_tick_interval())
-            },
-        )
-        .map_err(|error| {
-            anyhow::anyhow!("failed to register overlay host socket timer: {error}")
-        })?;
 
     let mut state = UnixSocketLoopState {
         listener,
         backend: OverlayHostBackend::from_env(),
         signal,
         label: "socket",
+        handle: handle.clone(),
+        tick_timer: None,
+        armed_interval: SOCKET_LOOP_TICK_INTERVAL,
     };
+    state.rearm_tick_timer_if_sooner();
+    if state.tick_timer.is_none() {
+        anyhow::bail!("failed to register overlay host socket timer");
+    }
     event_loop
         .run(None::<Duration>, &mut state, |_state| {})
         .context("overlay host socket event loop failed")
@@ -283,10 +282,38 @@ struct UnixSocketLoopState {
     backend: OverlayHostBackend,
     signal: LoopSignal,
     label: &'static str,
+    handle: LoopHandle<'static, UnixSocketLoopState>,
+    tick_timer: Option<RegistrationToken>,
+    armed_interval: Duration,
 }
 
 #[cfg(unix)]
 impl UnixSocketLoopState {
+    /// (Re)arms the frame-pacing timer when the backend now wants a faster
+    /// cadence than the armed one, so a request that makes the overlay visible
+    /// does not wait out an idle period armed while it was hidden.
+    fn rearm_tick_timer_if_sooner(&mut self) {
+        let interval = self.backend.pointer_tick_interval();
+        if self.tick_timer.is_some() && interval >= self.armed_interval {
+            return;
+        }
+        if let Some(token) = self.tick_timer.take() {
+            self.handle.remove(token);
+        }
+        self.armed_interval = interval;
+        self.tick_timer = self
+            .handle
+            .insert_source(
+                Timer::from_duration(interval),
+                |_deadline, _timer, state| {
+                    state.backend.tick();
+                    state.armed_interval = state.backend.pointer_tick_interval();
+                    TimeoutAction::ToDuration(state.armed_interval)
+                },
+            )
+            .ok();
+    }
+
     fn accept_ready(&mut self) {
         loop {
             let mut stream = match self.listener.accept() {
@@ -340,7 +367,9 @@ fn run_accept_loop<S: ClientStream>(
             Ok(stream) => stream,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 backend.tick();
-                std::thread::sleep(backend.pointer_tick_interval());
+                // This loop polls accept, so its sleep bounds per-request
+                // latency; the idle period applies only to the evented loops.
+                std::thread::sleep(backend.pointer_tick_interval().min(ACCEPT_POLL_INTERVAL));
                 continue;
             }
             Err(error) => {
