@@ -964,11 +964,11 @@ describe("Node 24 release surface", () => {
   test("built package keeps only the root export and selects Darwin lazily", () => {
     const source = `import { sky } from ${JSON.stringify(`${process.cwd()}/dist/index.js`)}; console.log(JSON.stringify(Object.keys(sky)));`;
     const result = Bun.spawnSync(["node", "--input-type=module", "-e", source], {
-      env: { OAI_SKY_CONFIG_PATH: TEST_CONFIG }
+      env: { PATH: process.env.PATH ?? "", OAI_SKY_CONFIG_PATH: TEST_CONFIG }
     });
     writeFileSync(TEST_CONFIG, JSON.stringify({ target: "darwin" }));
     const rerun = Bun.spawnSync(["node", "--input-type=module", "-e", source], {
-      env: { OAI_SKY_CONFIG_PATH: TEST_CONFIG }
+      env: { PATH: process.env.PATH ?? "", OAI_SKY_CONFIG_PATH: TEST_CONFIG }
     });
     unlinkSync(TEST_CONFIG);
     expect(result.exitCode).toBe(1);
