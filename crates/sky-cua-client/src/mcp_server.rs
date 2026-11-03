@@ -61,6 +61,20 @@ enum FrameRead {
     Eof,
 }
 
+impl FrameRead {
+    /// Classify a body parse: valid JSON is a message, anything else is a
+    /// recoverable malformed frame (the delimiter itself was intact).
+    fn parsed(result: serde_json::Result<Value>, framing: MessageFraming) -> Self {
+        match result {
+            Ok(value) => Self::Message(value, framing),
+            Err(error) => Self::Malformed {
+                framing,
+                detail: error.to_string(),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ServerSession {
     mcp_connection_id: String,
@@ -1093,13 +1107,10 @@ where
 
     let trimmed = first_line.trim_start();
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        return Ok(match serde_json::from_str(trimmed) {
-            Ok(value) => FrameRead::Message(value, MessageFraming::JsonLine),
-            Err(error) => FrameRead::Malformed {
-                framing: MessageFraming::JsonLine,
-                detail: error.to_string(),
-            },
-        });
+        return Ok(FrameRead::parsed(
+            serde_json::from_str(trimmed),
+            MessageFraming::JsonLine,
+        ));
     }
 
     let mut content_length: Option<usize> = None;
@@ -1132,13 +1143,10 @@ where
     }
     payload_buf.resize(length, 0);
     reader.read_exact(payload_buf).await?;
-    Ok(match serde_json::from_slice(payload_buf) {
-        Ok(value) => FrameRead::Message(value, MessageFraming::ContentLength),
-        Err(error) => FrameRead::Malformed {
-            framing: MessageFraming::ContentLength,
-            detail: error.to_string(),
-        },
-    })
+    Ok(FrameRead::parsed(
+        serde_json::from_slice(payload_buf),
+        MessageFraming::ContentLength,
+    ))
 }
 
 async fn read_bounded_line<R>(
