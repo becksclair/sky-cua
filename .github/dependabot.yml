@@ -15,6 +15,13 @@ updates:
       cargo-minor-patch:
         applies-to: version-updates
         update-types: [minor, patch]
+    ignore:
+      # zbus 6 cannot be adopted alone: ashpd and atspi still build on zbus 5,
+      # and two zbus stacks cannot share a Connection. Lift this when both
+      # publish zbus-6 releases and bump zbus, ashpd, atspi and
+      # atspi-connection in one change.
+      - dependency-name: zbus
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: uv
     directory: /

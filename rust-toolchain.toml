@@ -1,3 +1,7 @@
 [toolchain]
-channel = "stable"
+# Pinned on purpose: `just verify-rust` runs clippy with -D warnings, and a
+# floating `stable` turned the gate red on each toolchain release (see
+# c30005b). Bump deliberately, together with any lint fixes the new release
+# needs.
+channel = "1.99.1"
 components = ["rustfmt", "clippy"]
