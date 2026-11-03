@@ -341,23 +341,12 @@ impl KwinEffectSystemCursorAdapter {
 /// child is killed and reaped before returning an error, so a wedged helper
 /// never leaks a zombie process or hangs the caller.
 fn spawn_with_timeout(command: &mut Command, timeout: Duration) -> Result<std::process::Output> {
-    let mut child = command.spawn().context("failed to spawn subprocess")?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => return child.wait_with_output().context("collect output"),
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                bail!("subprocess timed out after {timeout:?}");
-            }
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error).context("failed to wait for subprocess");
-            }
-        }
+    use sky_cua_platform::process::RunError;
+    match sky_cua_platform::process::run_with_timeout(command, timeout) {
+        Ok(output) => Ok(output),
+        Err(RunError::Spawn(error)) => Err(error).context("failed to spawn subprocess"),
+        Err(RunError::TimedOut { .. }) => bail!("subprocess timed out after {timeout:?}"),
+        Err(RunError::Wait(error)) => Err(error).context("failed to wait for subprocess"),
     }
 }
 

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::process::{Command, Output, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Deserialize;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
@@ -9,6 +8,7 @@ use sky_cua_platform::model::{
     CoordinateSpace, DisplayInfo, DisplayIntersection, DisplayTarget, DoctorDisplayProbeReport,
     DoctorDisplayTopologyReport, EnvironmentInfo, PixelSize, RectF,
 };
+use sky_cua_platform::process::{RunError, run_with_timeout};
 use zbus::Proxy;
 use zbus::zvariant::OwnedValue;
 
@@ -426,31 +426,20 @@ fn command_probe_result(
 }
 
 fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> CommandProbeOutput {
-    let Ok(mut child) = command.spawn() else {
-        return CommandProbeOutput {
+    match run_with_timeout(command, timeout) {
+        Ok(output) => CommandProbeOutput {
+            output: Some(output),
+            timed_out: false,
+        },
+        Err(RunError::Spawn(_)) => CommandProbeOutput {
             output: None,
             timed_out: false,
-        };
-    };
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => {
-                return CommandProbeOutput {
-                    output: child.wait_with_output().ok(),
-                    timed_out: false,
-                };
-            }
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-            Ok(None) | Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return CommandProbeOutput {
-                    output: None,
-                    timed_out: true,
-                };
-            }
-        }
+        },
+        // A wait failure was reported as `timed_out: true` in the old code; keep it.
+        Err(RunError::TimedOut { .. } | RunError::Wait(_)) => CommandProbeOutput {
+            output: None,
+            timed_out: true,
+        },
     }
 }
 
