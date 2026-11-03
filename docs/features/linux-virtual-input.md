@@ -72,7 +72,8 @@ Inside `LinuxVirtualInput`, adapter probe order is:
   key events. Its `observe_pointer` stream remains available for non-exact
   pointer observation; it does not inject pointer events. The installer copies
   the binary to the root-owned `/usr/lib/sky-cua/sky-cua-input-helper` and the
-  unit runs that copy; it refuses a parent directory that is not root-owned.
+  unit runs that copy; it refuses a parent directory that is not root-owned or
+  that is group/world-writable.
 - **Keyboard / text resolution**: helper-backed keyboard actions compile an
   XKB keymap from `SKY_CUA_XKB_*`, then `XKB_DEFAULT_*`, then
   `setxkbmap -query` / `localectl status`, then defaults, and send evdev

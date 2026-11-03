@@ -994,7 +994,8 @@ def run_sudo(args: list[str]) -> None:
 
 def require_root_owned_ancestors(path: Path) -> None:
     """Refuse a system path whose existing ancestors a non-root user could replace."""
-    for ancestor in path.parents:
+    # Resolve symlinks first so a root-owned link target cannot hide a user-writable real parent.
+    for ancestor in path.resolve().parents:
         if not ancestor.exists():
             continue
         info = ancestor.stat()

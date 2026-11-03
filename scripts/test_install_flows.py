@@ -464,6 +464,27 @@ def test_require_root_owned_ancestors_rejects_user_owned_parent(tmp_path: Path) 
         install_mcp_server.require_root_owned_ancestors(tmp_path / "x" / "helper")
 
 
+def test_require_root_owned_ancestors_rejects_world_writable_root_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world_writable_root_dir = os.stat_result((stat.S_IFDIR | 0o777, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+    monkeypatch.setattr(Path, "stat", lambda _self, **_kwargs: world_writable_root_dir)
+
+    with pytest.raises(RuntimeError):
+        install_mcp_server.require_root_owned_ancestors(tmp_path / "x" / "helper")
+
+
+def test_require_root_owned_ancestors_accepts_root_owned_parents(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_dir = os.stat_result((stat.S_IFDIR | 0o755, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+    monkeypatch.setattr(Path, "stat", lambda _self, **_kwargs: root_dir)
+
+    install_mcp_server.require_root_owned_ancestors(tmp_path / "x" / "helper")
+
+
 def test_refresh_accessibility_bus_skips_without_user_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
