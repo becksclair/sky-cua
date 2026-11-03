@@ -253,7 +253,9 @@ fn run_unix_socket_event_loop(listener: UnixListener) -> Result<()> {
     handle
         .insert_source(listener_source, |_readiness, _listener, state| {
             state.accept_ready();
-            state.rearm_tick_timer_if_sooner();
+            if let Err(error) = state.rearm_tick_timer_if_sooner() {
+                eprintln!("{error:#}");
+            }
             Ok(PostAction::Continue)
         })
         .context("failed to register overlay host socket listener")?;
@@ -267,10 +269,7 @@ fn run_unix_socket_event_loop(listener: UnixListener) -> Result<()> {
         tick_timer: None,
         armed_interval: SOCKET_LOOP_TICK_INTERVAL,
     };
-    state.rearm_tick_timer_if_sooner();
-    if state.tick_timer.is_none() {
-        anyhow::bail!("failed to register overlay host socket timer");
-    }
+    state.rearm_tick_timer_if_sooner()?;
     event_loop
         .run(None::<Duration>, &mut state, |_state| {})
         .context("overlay host socket event loop failed")
@@ -291,17 +290,15 @@ struct UnixSocketLoopState {
 impl UnixSocketLoopState {
     /// (Re)arms the frame-pacing timer when the backend now wants a faster
     /// cadence than the armed one, so a request that makes the overlay visible
-    /// does not wait out an idle period armed while it was hidden.
-    fn rearm_tick_timer_if_sooner(&mut self) {
+    /// does not wait out an idle period armed while it was hidden. The new
+    /// timer is registered before the old one is removed, so a failed insert
+    /// keeps the existing timer ticking.
+    fn rearm_tick_timer_if_sooner(&mut self) -> Result<()> {
         let interval = self.backend.pointer_tick_interval();
         if self.tick_timer.is_some() && interval >= self.armed_interval {
-            return;
+            return Ok(());
         }
-        if let Some(token) = self.tick_timer.take() {
-            self.handle.remove(token);
-        }
-        self.armed_interval = interval;
-        self.tick_timer = self
+        let token = self
             .handle
             .insert_source(
                 Timer::from_duration(interval),
@@ -311,7 +308,14 @@ impl UnixSocketLoopState {
                     TimeoutAction::ToDuration(state.armed_interval)
                 },
             )
-            .ok();
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register overlay host socket timer: {error}")
+            })?;
+        if let Some(previous) = self.tick_timer.replace(token) {
+            self.handle.remove(previous);
+        }
+        self.armed_interval = interval;
+        Ok(())
     }
 
     fn accept_ready(&mut self) {
