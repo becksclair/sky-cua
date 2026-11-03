@@ -483,6 +483,8 @@ impl LinuxVirtualInput {
     /// before any keystroke is sent and are eligible for the ydotool fallback;
     /// anything after the request is written may already have been injected, so
     /// it is `AfterInjection` and must not be retried through another device.
+    /// Every `run_helper_command` failure, including a connect failure, is
+    /// classified `AfterInjection`, matching [`Self::type_text_via_helper`].
     fn press_key_sequence_via_helper(
         &self,
         socket_path: &Path,
@@ -2012,11 +2014,8 @@ mod tests {
         let error = input
             .press_key_sequence(&["Return".to_string()])
             .expect_err("helper failure must surface");
-        let request = server.join().unwrap();
-        assert!(
-            request.contains("\"op\":\"key_events\""),
-            "helper must have received the batch: {request}"
-        );
+        // Check the error before joining: if the client never reached the fake
+        // helper, the join would block forever instead of failing.
         assert!(
             error.message.contains("privileged input helper failed"),
             "expected the helper error to be returned, not a ydotool fallback: {}",
@@ -2025,6 +2024,11 @@ mod tests {
         assert!(
             !error.message.contains("failed to start ydotool"),
             "chord was re-sent through ydotool after the helper may have injected it"
+        );
+        let request = server.join().unwrap();
+        assert!(
+            request.contains("\"op\":\"key_events\""),
+            "helper must have received the batch: {request}"
         );
         std::fs::remove_dir_all(socket_dir).unwrap();
     }
