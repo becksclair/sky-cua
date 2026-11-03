@@ -1,0 +1,39 @@
+name: js
+
+# Mirrors the `js` job in .gitea/workflows/verify.yml on GitHub-hosted runners.
+# The full verify workflow (Rust, Python) runs on Gitea only; this file is
+# deliberately limited to the bun packages (see the guard in
+# scripts/test_release_pipeline.py against a duplicate .github verify.yml).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Same bun as the dev host and Saga runner.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      # runtime/cua-node and browser-use tests spawn `node`; match the
+      # engines pin in packages/browser-use/package.json.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.14.0
+
+      - uses: extractions/setup-just@v4
+
+      # The real-Chrome DOM acceptance test skips here: the runner has Chrome
+      # but not the assembled out/components/cua-node-linux-x64-glibc tree.
+      - name: Verify bun packages
+        run: just verify-js
