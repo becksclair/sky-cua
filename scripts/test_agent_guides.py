@@ -7,6 +7,8 @@ every tracked AGENTS.md and fails when a token that looks like a repository
 path does not exist, resolved against the repo root, the guide's own
 directory, or any immediate subdirectory of the guide's directory (so a
 crate-group guide may cite `src/foo.rs` meaning "inside one of these crates").
+A `:line`, `::symbol` or `#anchor` suffix on a path token is ignored. Relative
+Markdown link targets must resolve against the guide's own directory.
 """
 
 from __future__ import annotations
@@ -38,6 +40,8 @@ PATH_PREFIXES = (
 PATH_EXTENSIONS = (".rs", ".py", ".md", ".kt", ".ts", ".json", ".toml", ".yml", ".yaml", ".service")
 TOKEN_RE = re.compile(r"`([^`\s]+)`")
 SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
+LOCATION_SUFFIX_RE = re.compile(r"[:#].*$")
+LINK_RE = re.compile(r"\]\(([^)\s]+)\)")
 
 
 def tracked_agent_guides() -> list[Path]:
@@ -57,21 +61,35 @@ def looks_like_repo_path(token: str) -> bool:
     return token.startswith(PATH_PREFIXES) or ("/" in token and token.endswith(PATH_EXTENSIONS))
 
 
-def resolves(token: str, guide: Path) -> bool:
+def search_roots(guide: Path) -> list[Path]:
     guide_dir = guide.parent
-    candidates = [REPO_ROOT / token, guide_dir / token]
-    candidates.extend(child / token for child in guide_dir.iterdir() if child.is_dir())
-    return any(candidate.exists() for candidate in candidates)
+    return [REPO_ROOT, guide_dir, *(child for child in guide_dir.iterdir() if child.is_dir())]
+
+
+def is_local_link(target: str) -> bool:
+    return (
+        not target.startswith(("#", "/"))
+        and "://" not in target
+        and not target.startswith("mailto:")
+    )
 
 
 def stale_path_citations() -> list[str]:
     stale: list[str] = []
     for guide in tracked_agent_guides():
+        roots = search_roots(guide)
+        location = guide.relative_to(REPO_ROOT)
         for line_number, line in enumerate(guide.read_text(encoding="utf-8").splitlines(), 1):
             for match in TOKEN_RE.finditer(line):
-                token = match.group(1)
-                if looks_like_repo_path(token) and not resolves(token, guide):
-                    stale.append(f"{guide.relative_to(REPO_ROOT)}:{line_number}: `{token}`")
+                token = LOCATION_SUFFIX_RE.sub("", match.group(1))
+                if looks_like_repo_path(token) and not any(
+                    (root / token).exists() for root in roots
+                ):
+                    stale.append(f"{location}:{line_number}: `{token}`")
+            for match in LINK_RE.finditer(line):
+                target = match.group(1).split("#", 1)[0]
+                if target and is_local_link(target) and not (guide.parent / target).exists():
+                    stale.append(f"{location}:{line_number}: link ({target})")
     return stale
 
 

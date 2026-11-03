@@ -19,10 +19,11 @@ stable contracts, platform backends, the daemon, and the MCP client.
   [sky-cua-overlay-host/AGENTS.md](sky-cua-overlay-host/AGENTS.md).
 - Chrome native-messaging host (extension to daemon bridge):
   `crates/sky-cua-chrome-host/`.
-- COSMIC toplevel helper (Wayland `cosmic-protocols` client used for window
-  discovery on COSMIC): `crates/sky-cua-cosmic-helper/`.
-- Root uinput helper (systemd system service; keyboard injection and pointer
-  observation over `/run/sky-cua/input-helper.sock`):
+- COSMIC toplevel helper (Wayland `cosmic-protocols` client for window
+  discovery, focus, and activation on COSMIC, plus the cursor bridge):
+  `crates/sky-cua-cosmic-helper/`.
+- Root uinput helper (systemd system service; keyboard and absolute-pointer
+  injection plus pointer observation over `/run/sky-cua/input-helper.sock`):
   `crates/sky-cua-input-helper/`.
 - Daemon state and IPC serving: `crates/sky-cua-service/src/**` (request
   dispatch in `src/daemon/mod.rs`; per-surface handlers live beside it in

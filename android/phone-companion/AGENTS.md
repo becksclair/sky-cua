@@ -19,15 +19,15 @@ host side in lockstep.
 
 ## Toolchain
 
-- JDK 21 is required for Gradle/AGP. The default system `java` (26) is rejected
-  by AGP. Build with `JAVA_HOME=/usr/lib/jvm/java-21-openjdk`.
+- JDK 21 is required for Gradle/AGP and pinned via `jvmToolchain(21)` in
+  `app/build.gradle.kts`. The default system `java` (26) is rejected by AGP.
+  Build with `JAVA_HOME=/usr/lib/jvm/java-21-openjdk`.
 - `ANDROID_SDK_ROOT=$HOME/Android/Sdk`. `local.properties` (gitignored) also
   carries `sdk.dir`.
 - AGP 9.4.1 + Gradle 9.8.1 (wrapper checksum pinned). AGP 9 has built-in
   Kotlin support; the standalone Kotlin Gradle plugin must not be applied.
-- `compileSdk = 37`, `targetSdk = 36`, `minSdk = 33`. JDK 21 is pinned via
-  `jvmToolchain(21)` in `app/build.gradle.kts`. Features are runtime-gated by
-  `Build.VERSION.SDK_INT`: `takeScreenshotOfWindow` (API 34+).
+- `compileSdk = 37`, `targetSdk = 36`, `minSdk = 33`. Features are
+  runtime-gated by `Build.VERSION.SDK_INT`: `takeScreenshotOfWindow` (API 34+).
 
 ## Build and test
 
@@ -80,7 +80,8 @@ screenshots. The overlay is non-focusable and non-touchable so taps pass
 through. Each host link is mutually authenticated before any method frame is
 dispatched: an HMAC-SHA256 challenge/response under the per-host device secret,
 with a strictly increasing link epoch persisted on `auth_ok` (`direct/`
-package: `Auth`, `DirectLink`, `LinkEpoch`). Frames other than the handshake
-that arrive before the link is authenticated fail it. Cleartext `ws://` is
+package: `Auth`, `DirectLink`, `LinkEpoch`). Before the link is
+authenticated, `request` and `content_*` text frames are dropped, while binary
+frames and any other non-handshake frame fail it. Cleartext `ws://` is
 accepted only for loopback, private/link-local/Tailscale IP literals, or
 `*.ts.net` names; other hosts require `wss://`.
