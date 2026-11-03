@@ -33,7 +33,7 @@ Open boxes link to the active ExecPlan that owns the work.
   - [ ] Capture a dedicated `list_resources(surface="desktop", resource="windows")` workspace artifact on real KWin and X11
 - [x] KWin window targeting (focused_window + verified activation via KWin scripting) — [`docs/features/kwin-window-targeting.md`](docs/features/kwin-window-targeting.md)
 - [x] Linux virtual input (`LinuxVirtualInput` backend) — [`docs/features/linux-virtual-input.md`](docs/features/linux-virtual-input.md)
-  - [ ] Privileged helper fast path for Wayland input — [`plans/privileged_linux_uinput_helper.md`](plans/privileged_linux_uinput_helper.md)
+  - [x] Privileged helper fast path for Wayland input (root `sky-cua-input-helper` service) — [`docs/features/linux-virtual-input.md`](docs/features/linux-virtual-input.md)
 - [x] Native agent cursor overlay — [`docs/features/agent-cursor-overlay.md`](docs/features/agent-cursor-overlay.md)
   - [x] WGPU-only Wayland layer-shell visible renderer with evented pointer tracking; legacy SHM, GNOME actor, and X11 shaped-window renderers retired to honest unsupported/Noop reporting
   - [x] Phone-parity cursor motion: Mover2D vehicle steering, eased heading rotation, arrival-gated gesture feedback, spec-driven trail resample, and cloud bloom on the desktop WGPU host, pinned by cross-language mover fixtures, an offline dense-frame dump, and the live motion harness (`scripts/overlay_motion_animations.py`); portal-MP4 recording and the VM overlay profiles remain as verification gaps tracked in the feature doc

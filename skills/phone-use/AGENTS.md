@@ -15,7 +15,8 @@ every line costs tokens and competes with task context.
 - Keep guidance aligned with the tool definitions in
   `crates/sky-cua-client/src/mcp_tools/` and the service phone backends in
   `crates/sky-cua-service/src/phone/`. The companion wire contract is
-  authoritative in `docs/runtime/phone-companion-protocol.md` (repo-side
+  authoritative in `docs/runtime/phone-control-v2.md`, with transport rules in
+  `docs/runtime/direct-lan.md` (repo-side
   reference; do not link repo paths from `SKILL.md` — installed copies cannot
   reach them).
 - Do not turn native-host or Android implementation details into workflow

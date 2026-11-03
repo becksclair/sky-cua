@@ -14,8 +14,9 @@ cargo run -p sky-cua-client -- get-app-state --detail compact --capture-screen i
 
 - `src/mcp_server.rs` — JSON-RPC framing, session init, message read/write.
 - `src/mcp_tools.rs` — tool dispatch, argument parsing, and response shaping.
-- `src/mcp_tools/definitions.rs` — advertised grouped tool definitions and
-  schemas.
+- `src/mcp_tools/definitions/` — advertised grouped tool definitions and
+  schemas (`mod.rs` assembles them; `desktop.rs`, `browser.rs`, `phone.rs`,
+  `status.rs` per surface; `fixture_tests.rs` pins the contract fixtures).
 - `src/output_shapes.rs` — compact/full snapshot shaping (`AppStateDetail`,
   `compact_snapshot`), reused by both the MCP path and `src/operator_cli.rs`.
 - `src/heuristics.rs` — app guidance lookup (`HeuristicsRegistry`); enrich
