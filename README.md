@@ -114,7 +114,7 @@ From the repo root:
 
 ```bash
 cargo build
-cargo nextest run   # install once: cargo install cargo-nextest
+cargo nextest run --workspace   # install once: cargo install cargo-nextest
 uv sync --dev
 uv run ruff format scripts
 uv run ruff check scripts

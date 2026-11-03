@@ -10,7 +10,7 @@ Subdirectories have their own `AGENTS.md`; read the nearest one before editing f
 ## Root Setup Commands
 
 ```bash
-cargo build && cargo nextest run
+cargo build && cargo nextest run --workspace
 uv sync --dev
 uv run ruff format scripts && uv run ruff check scripts
 uv run basedpyright
@@ -19,8 +19,9 @@ python3 scripts/build_plugin.py
 ```
 
 `just verify` runs the aggregate headless suite (Rust fmt/clippy/nextest,
-Python ruff/basedpyright/pytest, and the Kotlin companion unit tests when a
-JDK is present) in one command; see the root `justfile`.
+Python ruff/basedpyright/pytest, bun typecheck/test for the three JS projects,
+and the Kotlin companion unit tests when a JDK is present) in one command; see
+the root `justfile`.
 
 Run Rust tests with `cargo nextest run`, not `cargo test`. Parts of the
 `sky-cua-service` suite mutate process-global state (`std::env::set_var` for
@@ -30,7 +31,10 @@ env mutation is a data race (UB in Rust 2024) and a different test flakes on
 each run; nextest runs each test in its own process and serializes the
 socket/child-process integration tests via `.config/nextest.toml`. Install once
 with `cargo install cargo-nextest`. nextest does not run doctests; run
-`cargo test --doc` for those (currently none in this workspace).
+`cargo test --doc` for those (currently none in this workspace). Always pass
+`--workspace`: the root `default-members` list excludes the Linux, capture,
+cosmic-helper and Windows crates, so a bare `cargo nextest run` silently skips
+their tests.
 
 ## Conventions
 
@@ -106,7 +110,8 @@ parallel structures (`goals/`, `specs/`, `prds/`, `rfcs/`, or similar).
 - Run the narrowest relevant crate/package check first, then the root check
   if shared contracts changed.
 - Rust runtime changes: `cargo fmt --check && cargo clippy --workspace
-  --all-targets && cargo nextest run` (use nextest, not `cargo test`; see Root
+  --all-targets && cargo nextest run --workspace` (use nextest, not `cargo test`;
+  see Root
   Setup Commands for why). Add `cargo test --doc` when a change touches
   doctests.
 - Python harness changes: `uv run ruff format --check scripts && uv run ruff check scripts && uv run basedpyright && uv run pytest`.

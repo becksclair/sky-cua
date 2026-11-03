@@ -15,6 +15,8 @@ jobs:
           clean: true
 
       - name: Verify Rust
+        env:
+          NEXTEST_PROFILE: ci
         run: just verify-rust
 
   python:
@@ -35,6 +37,16 @@ jobs:
 
       - name: Verify Python
         run: just verify-python
+
+  js:
+    runs-on: saga-sky-cua-build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Verify bun packages
+        run: just verify-js
 
   # Kotlin companion unit tests remain a local gate through `just verify-kotlin`.
   # The Gitea host runner does not need an Android SDK solely for this workflow.

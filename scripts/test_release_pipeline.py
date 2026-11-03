@@ -411,7 +411,7 @@ def test_release_workflow_publishes_tags_and_keeps_manual_retry() -> None:
     assert "- standalone-v*" in release_workflow
     assert "${{ inputs.tag || gitea.ref_name }}" in release_workflow
     assert "runs-on: saga-sky-cua-build" in release_workflow
-    assert verify_workflow.count("runs-on: saga-sky-cua-build") == 2
+    assert verify_workflow.count("runs-on: saga-sky-cua-build") == 3
     assert "runs-on: asgard-build-1" not in verify_workflow
     assert "python3 install.py build" in release_workflow
     assert 'minimum="$((8 * 1024 * 1024 * 1024))"' in release_workflow
