@@ -20,6 +20,29 @@ const DEVICE_CAPTURE_DEADLINE_MS: u64 = 2_000;
 // truthful partial result at its deadline) to be serialized and returned.
 const DIRECT_APPSHOT_RPC_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Releases every companion content artifact an AppShot response referenced,
+/// on every exit path. The host copies what it needs into its own artifact
+/// directory, so the per-link store copy is never read again.
+struct ReleaseDirectContent {
+    runtime: crate::phone::direct::DirectRuntimeHandle,
+    device_id: String,
+    epoch: u64,
+    content_ids: Vec<String>,
+}
+
+impl Drop for ReleaseDirectContent {
+    fn drop(&mut self) {
+        for content_id in &self.content_ids {
+            if let Err(error) =
+                self.runtime
+                    .release_content_artifact(&self.device_id, self.epoch, content_id)
+            {
+                tracing::debug!(%error, %content_id, "direct AppShot artifact release failed");
+            }
+        }
+    }
+}
+
 impl PhoneManager {
     /// Capture the canonical AppShot from a direct Companion link. The wire
     /// response may contain screenshot bytes, but those are immediately moved
@@ -59,6 +82,23 @@ impl PhoneManager {
                 message: format!("CompanionDirect AppShot capture failed: {error:?}"),
                 details: None,
             })?;
+        let _release = ReleaseDirectContent {
+            runtime: provider.runtime(),
+            device_id: device_id.clone(),
+            epoch,
+            content_ids: [
+                value.get("full_tree_content_ref"),
+                value.get("screenshot").and_then(|v| v.get("content_ref")),
+            ]
+            .into_iter()
+            .flatten()
+            .filter_map(|r| {
+                r.get("content_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect(),
+        };
         let id = value
             .get("appshot_id")
             .and_then(serde_json::Value::as_str)
