@@ -39,6 +39,14 @@ use content_transfer::InboundContentStore;
 
 pub(crate) const DEFAULT_ENROLLMENT_TTL: Duration = Duration::from_secs(5 * 60);
 
+/// A link that produces no inbound frame (data, ping, pong, or close) for
+/// this long is dead: the companion pings every 20 s
+/// (`OkHttpDirectSocket.kt`), so this is three missed pings plus slack.
+/// Without it a phone that drops off Wi-Fi stays "connected" until TCP
+/// retransmission gives up (minutes), and every request burns its full
+/// deadline instead of failing fast with `NotConnected`.
+pub(crate) const DIRECT_LINK_IDLE_TIMEOUT: Duration = Duration::from_secs(75);
+
 /// Errors returned by the internal direct Companion provider.  In particular,
 /// a request which has crossed a disconnect boundary is never retried: the
 /// caller must decide whether the operation is safe to issue again.
@@ -429,14 +437,25 @@ impl DirectRuntimeHandle {
             link
         };
         let message = tokio_tungstenite::tungstenite::Message::Text(encoded.into());
-        if link.control.send(message).await.is_err() {
-            link.pending
-                .lock()
-                .expect("pending mutex poisoned")
-                .remove(&request_id);
-            return Err(DirectRuntimeError::Disconnected);
+        let send_deadline = tokio::time::Instant::now() + deadline;
+        match tokio::time::timeout_at(send_deadline, link.control.send(message)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => {
+                link.pending
+                    .lock()
+                    .expect("pending mutex poisoned")
+                    .remove(&request_id);
+                return Err(DirectRuntimeError::Disconnected);
+            }
+            Err(_) => {
+                link.pending
+                    .lock()
+                    .expect("pending mutex poisoned")
+                    .remove(&request_id);
+                return Err(DirectRuntimeError::DeadlineExceeded);
+            }
         }
-        match tokio::time::timeout(deadline, rx).await {
+        match tokio::time::timeout_at(send_deadline, rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(DirectRuntimeError::Disconnected),
             Err(_) => {
@@ -609,11 +628,31 @@ impl DirectRuntimeHandle {
 
     async fn serve_socket(
         &self,
+        socket: WebSocketStream<TcpStream>,
+        peer: SocketAddr,
+        device_id: String,
+        epoch: u64,
+        cancel: tokio::sync::oneshot::Receiver<()>,
+    ) -> io::Result<()> {
+        self.serve_socket_with_idle_timeout(
+            socket,
+            peer,
+            device_id,
+            epoch,
+            cancel,
+            DIRECT_LINK_IDLE_TIMEOUT,
+        )
+        .await
+    }
+
+    async fn serve_socket_with_idle_timeout(
+        &self,
         mut socket: WebSocketStream<TcpStream>,
         peer: SocketAddr,
         device_id: String,
         epoch: u64,
         mut cancel: tokio::sync::oneshot::Receiver<()>,
+        idle_timeout: Duration,
     ) -> io::Result<()> {
         tracing::info!(%peer, %device_id, epoch, "Direct link established");
         let (control_tx, mut control_rx) = mpsc::channel(64);
@@ -634,6 +673,8 @@ impl DirectRuntimeHandle {
         let mut control_burst = 0u8;
         let mut inbound_burst = 0u8;
         let mut terminal_error = None;
+        let idle = tokio::time::sleep(idle_timeout);
+        tokio::pin!(idle);
         loop {
             // Cancellation wins; control is preferred, but every eight control
             // frames reserve a turn for bulk. Inbound traffic is present in
@@ -643,24 +684,52 @@ impl DirectRuntimeHandle {
                     biased;
                     _ = &mut cancel => break,
                     message = socket.next(), if inbound_burst < 4 || (control_rx.is_empty() && bulk_rx.is_empty()) => {
+                        idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                         if !matches!(self.handle_inbound(&link, &device_id, epoch, message).await, Ok(true)) {
                             break;
                         }
                         inbound_burst = inbound_burst.saturating_add(1);
                     }
+                    () = &mut idle => {
+                        terminal_error = Some(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "direct link idle timeout: no inbound frame",
+                        ));
+                        break;
+                    }
                     Some(frame) = bulk_rx.recv() => {
-                        if let Err(error) = socket.send(frame.message).await {
-                            terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
-                            break;
+                        match tokio::time::timeout_at(idle.deadline(), socket.send(frame.message)).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => {
+                                terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
+                                break;
+                            }
+                            Err(_) => {
+                                terminal_error = Some(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "direct link idle timeout: send stalled",
+                                ));
+                                break;
+                            }
                         }
                         if let Some(sent) = frame.sent { let _ = sent.send(()); }
                         control_burst = 0;
                         inbound_burst = 0;
                     }
                     Some(message) = control_rx.recv() => {
-                        if let Err(error) = socket.send(message).await {
-                            terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
-                            break;
+                        match tokio::time::timeout_at(idle.deadline(), socket.send(message)).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => {
+                                terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
+                                break;
+                            }
+                            Err(_) => {
+                                terminal_error = Some(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "direct link idle timeout: send stalled",
+                                ));
+                                break;
+                            }
                         }
                         control_burst = control_burst.saturating_add(1);
                         inbound_burst = 0;
@@ -671,23 +740,51 @@ impl DirectRuntimeHandle {
                     biased;
                     _ = &mut cancel => break,
                     message = socket.next(), if inbound_burst < 4 || (control_rx.is_empty() && bulk_rx.is_empty()) => {
+                        idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                         if !matches!(self.handle_inbound(&link, &device_id, epoch, message).await, Ok(true)) {
                             break;
                         }
                         inbound_burst = inbound_burst.saturating_add(1);
                     }
+                    () = &mut idle => {
+                        terminal_error = Some(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "direct link idle timeout: no inbound frame",
+                        ));
+                        break;
+                    }
                     Some(message) = control_rx.recv() => {
-                        if let Err(error) = socket.send(message).await {
-                            terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
-                            break;
+                        match tokio::time::timeout_at(idle.deadline(), socket.send(message)).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => {
+                                terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
+                                break;
+                            }
+                            Err(_) => {
+                                terminal_error = Some(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "direct link idle timeout: send stalled",
+                                ));
+                                break;
+                            }
                         }
                         control_burst = control_burst.saturating_add(1);
                         inbound_burst = 0;
                     }
                     Some(frame) = bulk_rx.recv() => {
-                        if let Err(error) = socket.send(frame.message).await {
-                            terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
-                            break;
+                        match tokio::time::timeout_at(idle.deadline(), socket.send(frame.message)).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => {
+                                terminal_error = Some(io::Error::new(io::ErrorKind::BrokenPipe, error));
+                                break;
+                            }
+                            Err(_) => {
+                                terminal_error = Some(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "direct link idle timeout: send stalled",
+                                ));
+                                break;
+                            }
                         }
                         if let Some(sent) = frame.sent { let _ = sent.send(()); }
                         control_burst = 0;
@@ -3148,6 +3245,116 @@ mod tests {
             .expect("server must stop after peer EOF")
             .unwrap();
         assert!(handle.snapshot("device-a").is_none());
+    }
+
+    #[tokio::test]
+    async fn live_socket_scheduler_times_out_a_silent_link_and_fails_pending_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = DirectRuntimeHandle::new();
+        let server_handle = handle.clone();
+        let (_cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            server_handle
+                .serve_socket_with_idle_timeout(
+                    socket,
+                    "127.0.0.1:0".parse().unwrap(),
+                    "device-a".into(),
+                    1,
+                    cancel_rx,
+                    Duration::from_millis(500),
+                )
+                .await
+        });
+        // Connect but never send anything (a silent peer).
+        let _client = tokio_tungstenite::connect_async(format!("ws://{addr}"))
+            .await
+            .unwrap()
+            .0;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while handle.snapshot("device-a").is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        // A request issued against the silent link must fail once the link is
+        // declared dead, not wait out its own (longer) deadline.
+        let request = handle.request(
+            "device-a",
+            1,
+            "companion.status",
+            serde_json::json!({}),
+            true,
+            Duration::from_secs(5),
+        );
+        let (request_result, server_result) = tokio::join!(
+            request,
+            tokio::time::timeout(Duration::from_secs(2), server)
+        );
+        let error = server_result
+            .expect("server must stop on idle timeout")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{error}");
+        assert_eq!(request_result, Err(DirectRuntimeError::Disconnected));
+        assert!(handle.snapshot("device-a").is_none());
+    }
+
+    #[tokio::test]
+    async fn live_socket_scheduler_treats_pings_as_liveness() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = DirectRuntimeHandle::new();
+        let server_handle = handle.clone();
+        let (_cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            server_handle
+                .serve_socket_with_idle_timeout(
+                    socket,
+                    "127.0.0.1:0".parse().unwrap(),
+                    "device-a".into(),
+                    1,
+                    cancel_rx,
+                    Duration::from_millis(500),
+                )
+                .await
+        });
+        let mut client = tokio_tungstenite::connect_async(format!("ws://{addr}"))
+            .await
+            .unwrap()
+            .0;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while handle.snapshot("device-a").is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        // Ping every 100 ms for 1.5 s: three idle windows' worth of liveness.
+        for _ in 0..15 {
+            client
+                .send(tokio_tungstenite::tungstenite::Message::Ping(
+                    Default::default(),
+                ))
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(!server.is_finished(), "pinged link must not idle out");
+
+        drop(client);
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("server must stop after peer EOF")
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]
