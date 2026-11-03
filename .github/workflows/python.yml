@@ -1,0 +1,41 @@
+name: python
+
+# Mirrors the `python` job in .gitea/workflows/verify.yml on GitHub-hosted
+# runners. Named python.yml (not verify.yml) per the guard in
+# scripts/test_release_pipeline.py against a duplicate .github verify.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - uses: astral-sh/setup-uv@v10
+
+      - uses: extractions/setup-just@v4
+
+      # The Python tests read the built Browser Use client.
+      - name: Build Browser Use client
+        working-directory: packages/browser-use
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Sync Python environment
+        run: uv sync --dev
+
+      - name: Verify Python
+        run: just verify-python

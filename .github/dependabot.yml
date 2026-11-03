@@ -8,6 +8,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Hold back brand-new releases for a week; security updates are exempt.
+    cooldown:
+      default-days: 7
     groups:
       cargo-security:
         applies-to: security-updates
@@ -27,6 +30,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Hold back brand-new releases for a week; security updates are exempt.
+    cooldown:
+      default-days: 7
     groups:
       python-security:
         applies-to: security-updates
@@ -42,6 +48,9 @@ updates:
       - /packages/sky-cua-js
     schedule:
       interval: weekly
+    # Hold back brand-new releases for a week; security updates are exempt.
+    cooldown:
+      default-days: 7
     # Hash- and compliance-pinned runtime packages move together; finish these
     # PRs with scripts/refresh_cua_node_pins.py. First matching group wins.
     groups:
@@ -62,6 +71,9 @@ updates:
     directory: /android/phone-companion
     schedule:
       interval: weekly
+    # Hold back brand-new releases for a week; security updates are exempt.
+    cooldown:
+      default-days: 7
     groups:
       gradle-security:
         applies-to: security-updates
@@ -69,3 +81,14 @@ updates:
       gradle-minor-patch:
         applies-to: version-updates
         update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Hold back brand-new releases for a week; security updates are exempt.
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]

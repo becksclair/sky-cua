@@ -1,0 +1,48 @@
+name: rust
+
+# Mirrors the `rust` job in .gitea/workflows/verify.yml on GitHub-hosted
+# runners. Named rust.yml (not verify.yml) per the guard in
+# scripts/test_release_pipeline.py against a duplicate .github verify.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    env:
+      NEXTEST_PROFILE: ci
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+
+      # Build-time system libraries (GStreamer for PipeWire capture,
+      # libxkbcommon, Wayland client libs), plus the headless X tools the
+      # isolated-X11 tests need so they run instead of skipping vacuously.
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libxkbcommon-dev libwayland-dev \
+            xvfb x11-utils xdotool
+
+      # rust-toolchain.toml pins the channel; install exactly that.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,just
+
+      - name: Verify Rust
+        run: just verify-rust
