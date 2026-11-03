@@ -370,9 +370,7 @@ impl InboundContentStore {
                 "artifact epoch mismatch",
             ));
         }
-        let artifact = self.committed.remove(content_id).expect("artifact exists");
-        self.committed_bytes = self.committed_bytes.saturating_sub(artifact.size);
-        let _ = fs::remove_file(artifact.path);
+        self.discard_committed(content_id);
         Ok(())
     }
 
@@ -412,17 +410,23 @@ impl InboundContentStore {
     /// cannot consume slots.
     fn evict_expired(&mut self) {
         let now = self.now();
-        let expired: Vec<String> = self
-            .committed
-            .iter()
-            .filter(|(_, artifact)| artifact.expires_at_ms <= now)
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in expired {
-            if let Some(artifact) = self.committed.remove(&id) {
-                self.committed_bytes = self.committed_bytes.saturating_sub(artifact.size);
-                let _ = fs::remove_file(artifact.path);
+        let committed_bytes = &mut self.committed_bytes;
+        self.committed.retain(|_, artifact| {
+            if artifact.expires_at_ms > now {
+                return true;
             }
+            *committed_bytes = committed_bytes.saturating_sub(artifact.size);
+            let _ = fs::remove_file(&artifact.path);
+            false
+        });
+    }
+
+    /// Remove one committed entry, return its bytes to the budget and delete
+    /// its file.
+    fn discard_committed(&mut self, content_id: &str) {
+        if let Some(artifact) = self.committed.remove(content_id) {
+            self.committed_bytes = self.committed_bytes.saturating_sub(artifact.size);
+            let _ = fs::remove_file(artifact.path);
         }
     }
 
@@ -432,12 +436,7 @@ impl InboundContentStore {
             .get(content_id)
             .is_some_and(|artifact| artifact.expires_at_ms <= self.now());
         if expired {
-            let artifact = self
-                .committed
-                .remove(content_id)
-                .expect("artifact entry exists");
-            self.committed_bytes = self.committed_bytes.saturating_sub(artifact.size);
-            let _ = fs::remove_file(artifact.path);
+            self.discard_committed(content_id);
             return Err(io::Error::new(io::ErrorKind::NotFound, "artifact expired"));
         }
         Ok(())
