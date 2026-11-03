@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tarfile
+import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -1366,3 +1367,128 @@ def test_install_opencode_drops_jsonc_comments_but_keeps_user_keys_on_first_writ
     assert node_repl["timeout"] == 30_000
     opencode = cast("dict[str, object]", report["opencode_config"])
     assert opencode["status"] == "updated"
+
+
+def _toml_ok(text: str) -> dict[str, Any]:
+    return tomllib.loads(text)
+
+
+def test_upsert_toml_key_creates_table_and_key_in_empty_text() -> None:
+    out = standalone_release._upsert_toml_key("", "features", "plugins", "true")
+    assert out == "\n[features]\nplugins = true\n"
+    assert _toml_ok(out) == {"features": {"plugins": True}}
+
+
+def test_upsert_toml_key_replaces_existing_key_in_place_and_preserves_neighbours() -> None:
+    before = 'model = "gpt-5.6-luna"\n\n[features]\nplugins = false\nother = 1\n\n[plugins.example]\nenabled = true\n'
+    out = standalone_release._upsert_toml_key(before, "features", "plugins", "true")
+    assert (
+        out
+        == 'model = "gpt-5.6-luna"\n\n[features]\nplugins = true\nother = 1\n\n[plugins.example]\nenabled = true\n'
+    )
+    assert _toml_ok(out)["features"] == {"plugins": True, "other": 1}
+
+
+def test_upsert_toml_key_appends_key_to_existing_table_without_trailing_newline() -> None:
+    before = "[features]\nother = 1"
+    out = standalone_release._upsert_toml_key(before, "features", "plugins", "true")
+    assert _toml_ok(out) == {"features": {"other": 1, "plugins": True}}
+    assert out.endswith("plugins = true\n")
+
+
+def test_upsert_toml_key_handles_crlf_input() -> None:
+    before = "[features]\r\nother = 1\r\n"
+    out = standalone_release._upsert_toml_key(before, "features", "plugins", "true")
+    assert _toml_ok(out) == {"features": {"other": 1, "plugins": True}}
+
+
+def test_upsert_toml_key_quoted_dotted_header_round_trips() -> None:
+    out = standalone_release._upsert_toml_key(
+        "", 'plugins."computer-use@openai-bundled"', "enabled", "true"
+    )
+    assert _toml_ok(out) == {"plugins": {"computer-use@openai-bundled": {"enabled": True}}}
+
+
+def test_upsert_toml_key_matches_header_with_trailing_comment_or_spaces() -> None:
+    # Codex and humans both write `[features] # note` or `[features]   `.
+    for header_line in ("[features] # enabled by hand", "[features]   "):
+        before = f"{header_line}\nother = 1\n"
+        out = standalone_release._upsert_toml_key(before, "features", "plugins", "true")
+        parsed = _toml_ok(out)  # a duplicate [features] table would raise here
+        assert parsed == {"features": {"other": 1, "plugins": True}}, out
+        assert out.count("[features]") == 1, out
+
+
+def test_upsert_toml_key_inserts_rendered_values_literally() -> None:
+    # Existing-key path: the rendered value must survive re.sub untouched.
+    # A Windows path exercises backslashes; a non-ASCII home path exercises the
+    # `\u00e9` escapes json.dumps emits (the realistic Linux reinstall case).
+    for raw in (r"C:\Users\x\.codex", "/home/josé/.codex"):
+        rendered = standalone_release._toml_string(raw)
+        before = '[marketplaces.openai-bundled]\nsource = "old"\n'
+        out = standalone_release._upsert_toml_key(
+            before, "marketplaces.openai-bundled", "source", rendered
+        )
+        assert _toml_ok(out)["marketplaces"]["openai-bundled"]["source"] == raw, out
+
+
+def _codex_config_after_install(tmp_path: Path, initial: str | None) -> tuple[Path, str]:
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    config_path = codex_home / "config.toml"
+    if initial is not None:
+        _write(config_path, initial)
+    standalone_release._update_codex_config_for_bundled(codex_home)
+    return config_path, config_path.read_text(encoding="utf-8")
+
+
+def test_update_codex_config_for_bundled_creates_valid_config_from_nothing(tmp_path: Path) -> None:
+    config_path, text = _codex_config_after_install(tmp_path, None)
+    parsed = _toml_ok(text)
+    assert parsed["features"] == {"plugins": True}
+    marketplace = parsed["marketplaces"]["openai-bundled"]
+    assert marketplace["source_type"] == "local"
+    assert marketplace["source"] == str(
+        config_path.parent / ".tmp/bundled-marketplaces/openai-bundled"
+    )
+    assert marketplace["last_updated"].endswith("Z")
+    assert parsed["plugins"] == {
+        "computer-use@openai-bundled": {"enabled": True},
+        "browser@openai-bundled": {"enabled": True},
+    }
+
+
+def test_update_codex_config_for_bundled_preserves_unrelated_content_and_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    initial = (
+        'model = "gpt-5.6-luna"\n'
+        'approval_policy = "on-request"\n\n'
+        "[features]\nplugins = false\nweb_search = true\n\n"
+        "[plugins.example]\nenabled = true\n"
+    )
+    config_path, text = _codex_config_after_install(tmp_path, initial)
+    parsed = _toml_ok(text)
+    assert parsed["model"] == "gpt-5.6-luna"
+    assert parsed["features"] == {"plugins": True, "web_search": True}
+    assert parsed["plugins"]["example"] == {"enabled": True}
+    assert text.startswith('model = "gpt-5.6-luna"\napproval_policy = "on-request"\n')
+
+    standalone_release._update_codex_config_for_bundled(config_path.parent)
+    again = config_path.read_text(encoding="utf-8")
+    assert _toml_ok(again)["features"] == parsed["features"]
+    assert again.count("[features]") == 1
+    assert again.count("[marketplaces.openai-bundled]") == 1
+    assert again.count('[plugins."computer-use@openai-bundled"]') == 1
+
+
+def test_update_codex_config_for_bundled_writes_atomically_and_keeps_mode(tmp_path: Path) -> None:
+    config_path, _ = _codex_config_after_install(tmp_path, 'model = "x"\n')
+    # 0o640 rather than the writer's 0o600 default, so a writer that always
+    # forces 0o600 would fail this.
+    config_path.chmod(0o640)
+    inode_before = config_path.stat().st_ino
+    standalone_release._update_codex_config_for_bundled(config_path.parent)
+    assert config_path.stat().st_mode & 0o777 == 0o640
+    assert config_path.stat().st_ino != inode_before  # os.replace of a temp file
+    assert not list(config_path.parent.glob(".config.toml.tmp-*"))
