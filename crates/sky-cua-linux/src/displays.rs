@@ -435,7 +435,7 @@ fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Comm
             output: None,
             timed_out: false,
         },
-        // A wait failure was reported as `timed_out: true` in the old code; keep it.
+        // A wait failure is reported as a timeout, like an expired deadline.
         Err(RunError::TimedOut { .. } | RunError::Wait(_)) => CommandProbeOutput {
             output: None,
             timed_out: true,

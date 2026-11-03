@@ -6,7 +6,8 @@
 
 use std::io::Read;
 use std::process::{Child, Command, Output};
-use std::thread::{self, JoinHandle};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// Why a bounded run did not produce an [`Output`].
@@ -14,8 +15,9 @@ use std::time::{Duration, Instant};
 pub enum RunError {
     /// `Command::spawn` failed (program missing, permissions, ...).
     Spawn(std::io::Error),
-    /// The child was still running at the deadline; it has been killed and
-    /// reaped.
+    /// The child was still running at the deadline (it has been killed and
+    /// reaped), or it exited but its output pipes stayed open past the
+    /// deadline because a descendant still holds them.
     TimedOut { timeout: Duration },
     /// `try_wait` failed; the child has been killed and reaped.
     Wait(std::io::Error),
@@ -35,6 +37,11 @@ impl std::error::Error for RunError {}
 
 /// Polling interval between `try_wait` checks.
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Minimum time the reader threads get, after the child exits, to finish
+/// draining what it wrote, so a child that exits just before the deadline is
+/// not misreported as a timeout.
+const READER_GRACE: Duration = Duration::from_millis(500);
 
 /// Run `command` to completion or until `timeout` elapses, draining stdout and
 /// stderr concurrently. The caller decides which streams are piped; streams
@@ -58,31 +65,43 @@ pub fn run_with_timeout(command: &mut Command, timeout: Duration) -> Result<Outp
             }
         }
     };
+    // A descendant that inherited a pipe keeps it open after the child exits,
+    // so the readers are waited on only until the deadline (plus a grace).
+    let readers_until = deadline.max(Instant::now() + READER_GRACE);
     Ok(Output {
         status,
-        stdout: join_reader(stdout),
-        stderr: join_reader(stderr),
+        stdout: collect_reader(stdout, readers_until).ok_or(RunError::TimedOut { timeout })?,
+        stderr: collect_reader(stderr, readers_until).ok_or(RunError::TimedOut { timeout })?,
     })
 }
 
-fn spawn_reader<R: Read + Send + 'static>(mut reader: R) -> JoinHandle<Vec<u8>> {
+fn spawn_reader<R: Read + Send + 'static>(mut reader: R) -> Receiver<Vec<u8>> {
+    let (sender, receiver) = mpsc::sync_channel(1);
     thread::spawn(move || {
         let mut buffer = Vec::new();
         let _ = reader.read_to_end(&mut buffer);
-        buffer
-    })
+        let _ = sender.send(buffer);
+    });
+    receiver
 }
 
-fn join_reader(handle: Option<JoinHandle<Vec<u8>>>) -> Vec<u8> {
-    handle
-        .and_then(|handle| handle.join().ok())
-        .unwrap_or_default()
+/// The reader's bytes, or `None` when the pipe is still open at `until`. An
+/// absent stream or a reader that died without sending yields empty output.
+fn collect_reader(receiver: Option<Receiver<Vec<u8>>>, until: Instant) -> Option<Vec<u8>> {
+    let Some(receiver) = receiver else {
+        return Some(Vec::new());
+    };
+    match receiver.recv_timeout(until.saturating_duration_since(Instant::now())) {
+        Ok(buffer) => Some(buffer),
+        Err(RecvTimeoutError::Disconnected) => Some(Vec::new()),
+        Err(RecvTimeoutError::Timeout) => None,
+    }
 }
 
-/// Kill and reap the child. Reader threads are intentionally not joined on
-/// this path: a grandchild may still hold the pipe's write end, and joining
-/// would block past the deadline. Dropping the handles detaches the threads;
-/// they exit at EOF when the last writer goes away.
+/// Kill and reap the child. Reader threads are intentionally not waited on
+/// this path: a grandchild may still hold the pipe's write end, and waiting
+/// would block past the deadline. Dropping the receivers detaches the
+/// threads; they exit at EOF when the last writer goes away.
 fn kill_and_reap(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
@@ -128,6 +147,25 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "timeout must not wait for pipe holders"
+        );
+        assert!(matches!(error, RunError::TimedOut { .. }), "got {error:?}");
+    }
+
+    #[test]
+    fn exited_child_with_a_pipe_holding_grandchild_is_bounded() {
+        // `sh` exits at once, but the backgrounded `sleep` inherited stdout,
+        // so the pipe never reaches EOF; the run must still return promptly.
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "sleep 10 & echo started"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let started = Instant::now();
+        let error = run_with_timeout(&mut command, Duration::from_millis(200)).unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "an exited child must not wait for pipe holders"
         );
         assert!(matches!(error, RunError::TimedOut { .. }), "got {error:?}");
     }
