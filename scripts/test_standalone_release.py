@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tarfile
+import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -1369,8 +1370,6 @@ def test_install_opencode_drops_jsonc_comments_but_keeps_user_keys_on_first_writ
 
 
 def _toml_ok(text: str) -> dict[str, Any]:
-    import tomllib
-
     return tomllib.loads(text)
 
 
@@ -1479,6 +1478,7 @@ def test_update_codex_config_for_bundled_preserves_unrelated_content_and_is_idem
     again = config_path.read_text(encoding="utf-8")
     assert _toml_ok(again)["features"] == parsed["features"]
     assert again.count("[features]") == 1
+    assert again.count("[marketplaces.openai-bundled]") == 1
     assert again.count('[plugins."computer-use@openai-bundled"]') == 1
 
 
