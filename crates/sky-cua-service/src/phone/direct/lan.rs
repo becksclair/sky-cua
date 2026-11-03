@@ -1,11 +1,8 @@
-#![allow(dead_code)]
-
 use std::net::IpAddr;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-#[allow(unused_imports)]
-use super::{is_private_ip, validate_bind_addr};
+use super::is_private_ip;
 
 const LAN_CACHE_TTL: Duration = Duration::from_secs(5);
 static LAN_CACHE: OnceLock<Mutex<(Option<Instant>, Vec<LanCandidate>)>> = OnceLock::new();
@@ -81,15 +78,6 @@ pub fn cached_enumerate_lan_candidates() -> Vec<LanCandidate> {
     fresh
 }
 
-#[cfg(test)]
-pub(crate) fn clear_lan_cache_for_tests() {
-    if let Some(cache) = LAN_CACHE.get() {
-        let mut guard = cache.lock().expect("lan cache poisoned");
-        guard.0 = None;
-        guard.1.clear();
-    }
-}
-
 fn score_ip(ip: &IpAddr) -> u8 {
     match ip {
         IpAddr::V4(v4) => {
@@ -140,17 +128,6 @@ fn score_ip(ip: &IpAddr) -> u8 {
 
 fn sort_candidates(candidates: &mut [LanCandidate]) {
     candidates.sort_by_key(|c| (score_ip(&c.ip), c.iface.clone(), c.ip));
-}
-
-/// Validate that each candidate can be used as a bind address (0.0.0.0 coverage also valid).
-/// Used by the `0.0.0.0` bind-probe tests to ensure every enumerated LAN candidate
-/// would pass `validate_bind_addr`.
-#[cfg(test)]
-pub fn candidates_are_bindable(candidates: &[LanCandidate], port: u16) -> bool {
-    candidates.iter().all(|c| {
-        let addr = std::net::SocketAddr::new(c.ip, port);
-        validate_bind_addr(addr).is_ok()
-    })
 }
 
 #[cfg(test)]

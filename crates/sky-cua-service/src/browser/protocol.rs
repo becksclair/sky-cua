@@ -26,10 +26,7 @@ pub(super) const RECOVER_CLAIM_TAB_RETRY_REQUEST_ID: &str =
 pub(super) const RECOVER_ENABLE_PAGE_REQUEST_ID: &str = "sky-cua-browser-recover-enable-page";
 pub(super) const WAKE_TAB_REQUEST_ID: &str = "sky-cua-browser-wake-tab";
 pub(super) const RECOVER_WAKE_TAB_REQUEST_ID: &str = "sky-cua-browser-recover-wake-tab";
-#[allow(dead_code)]
 pub(super) const RESOLVE_ELEMENT_REQUEST_ID: &str = "sky-cua-browser-resolve-element";
-#[allow(dead_code)]
-pub(super) const ELEMENT_FOCUS_REQUEST_ID: &str = "sky-cua-browser-element-focus";
 pub(super) const NAVIGATE_REQUEST_ID: &str = "sky-cua-browser-navigate";
 pub(super) const NAVIGATION_METADATA_REQUEST_ID: &str = "sky-cua-browser-navigation-metadata";
 pub(super) const NAVIGATION_RENDER_REQUEST_ID: &str = "sky-cua-browser-navigation-render";

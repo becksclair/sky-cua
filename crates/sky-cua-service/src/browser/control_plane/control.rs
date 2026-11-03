@@ -86,6 +86,8 @@ pub(super) enum Command {
     Cancel(OperationId, Option<ClientId>, Reply<CancelResult>),
     Executed(OperationId, super::operation::ExecutorOutcome),
     Settle(OperationId, SettlementOutcome, Reply<SettlementResult>),
+    // Sent only by test-only ControlPlane methods exercised in control_plane::tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     SettlementState(OperationId, Reply<Option<SettlementState>>),
     CreateGroup {
         group_id: GroupId,
@@ -109,6 +111,8 @@ pub(super) enum Command {
         u64,
         Reply<Result<LeaseSnapshot, GroupError>>,
     ),
+    // Sent only by test-only ControlPlane methods exercised in control_plane::tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     Offer {
         group_id: GroupId,
         principal: Principal,
@@ -116,6 +120,8 @@ pub(super) enum Command {
         revision: u64,
         reply: Reply<Result<GroupSnapshot, GroupError>>,
     },
+    // Sent only by test-only ControlPlane methods exercised in control_plane::tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     Accept {
         group_id: GroupId,
         target: Principal,
@@ -123,6 +129,8 @@ pub(super) enum Command {
         now_ms: u64,
         reply: Reply<Result<GroupSnapshot, GroupError>>,
     },
+    // Sent only by test-only ControlPlane methods exercised in control_plane::tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     Force {
         group_id: GroupId,
         requester: Principal,
@@ -134,6 +142,8 @@ pub(super) enum Command {
     Disconnect(Principal, u64, Reply<()>),
     EndGroup(GroupId, Principal, Reply<Result<GroupSnapshot, GroupError>>),
     Tick(u64, Reply<()>),
+    // Sent only by test-only ControlPlane methods exercised in control_plane::tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     ResumeRecovered {
         group_id: GroupId,
         browser: BrowserInstanceId,
@@ -156,8 +166,9 @@ pub(super) type SubmitCommand = (
 pub(crate) struct ControlPlane {
     sender: mpsc::UnboundedSender<Command>,
     submit_sender: mpsc::Sender<SubmitCommand>,
-    generation: String,
     pub(super) events: EventRecorder,
+    // Read only by the #[cfg(test)] flush_persistence helper used in control_plane tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     persistence: Option<JournalWriter>,
 }
 
@@ -170,6 +181,8 @@ impl ControlPlane {
         Self::start_with_groups(generation, executor, limits, GroupRegistry::default(), None)
     }
 
+    // Used only by control_plane::tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn recover(
         generation: impl Into<String>,
         executor: Arc<dyn Executor>,
@@ -282,14 +295,9 @@ impl ControlPlane {
         Self {
             sender,
             submit_sender,
-            generation,
             events,
             persistence,
         }
-    }
-
-    pub(crate) fn generation(&self) -> &str {
-        &self.generation
     }
 
     pub(crate) async fn submit(
@@ -306,6 +314,8 @@ impl ControlPlane {
         receive.await.unwrap_or(Err(AdmissionError::ActorStopped))
     }
 
+    // Used only by control_plane::tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) async fn cancel(&self, operation_id: OperationId) -> CancelResult {
         self.call(|reply| Command::Cancel(operation_id, None, reply))
             .await
@@ -332,6 +342,8 @@ impl ControlPlane {
             .unwrap_or(SettlementResult::Ignored)
     }
 
+    // Used only by control_plane::tests and integration_tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) async fn settlement_state(
         &self,
         operation_id: OperationId,
@@ -402,6 +414,8 @@ impl ControlPlane {
             .unwrap_or(Err(GroupError::UnknownGroup))
     }
 
+    // Used only by control_plane::tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) async fn offer_handoff(
         &self,
         group_id: GroupId,
@@ -420,6 +434,8 @@ impl ControlPlane {
         .unwrap_or(Err(GroupError::UnknownGroup))
     }
 
+    // Used only by control_plane::tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) async fn accept_handoff(
         &self,
         group_id: GroupId,
@@ -438,6 +454,8 @@ impl ControlPlane {
         .unwrap_or(Err(GroupError::UnknownGroup))
     }
 
+    // Used only by control_plane::tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) async fn force_handoff(
         &self,
         group_id: GroupId,
@@ -480,6 +498,8 @@ impl ControlPlane {
 
     /// Resume a restart hint only after the caller has independently reconciled
     /// the exact browser identity and complete tab membership.
+    // Used only by control_plane::tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) async fn resume_recovered(
         &self,
         group_id: GroupId,

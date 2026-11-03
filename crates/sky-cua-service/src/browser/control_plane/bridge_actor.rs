@@ -28,7 +28,7 @@ mod wire;
 
 use runtime::{PendingRequest, QueuedRequest, Runtime};
 use wire::{
-    HEARTBEAT_DEADLINE, HOST_RELEASE_METHOD, HOST_SETTLEMENT_ACK_METHOD, Handshake,
+    HEARTBEAT_DEADLINE, HOST_RELEASE_METHOD, HOST_SETTLEMENT_ACK_METHOD,
     acknowledge_receipted_settlement, is_ping, operation_class_name, perform_handshake,
     request_size, requires_settlement, route_notification, settlement_ack_frame,
     settlement_original_request_id, unix_epoch_ms, write_frame_bounded, write_pong,

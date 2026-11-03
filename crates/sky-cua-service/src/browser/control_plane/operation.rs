@@ -106,8 +106,12 @@ pub(crate) const SETTLEMENT_DEADLINE_MS: u64 = 30_000;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SettlementOutcome {
     DefinitiveSuccess(String),
+    // Constructed only in control_plane::tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     ProvenPreDispatchFailure(String),
     Error(String),
+    // Constructed only in control_plane::tests.
+    #[cfg_attr(not(test), expect(dead_code))]
     TargetLost(TabKey),
     BrowserLost(BrowserInstanceId),
 }
