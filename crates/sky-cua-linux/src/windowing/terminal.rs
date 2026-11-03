@@ -17,7 +17,13 @@ struct ProcessInfo {
 }
 
 pub fn enrich_terminal_windows(windows: &mut [LinuxWindowInfo]) {
-    let processes = read_process_table();
+    let terminal_pids: HashSet<u32> = terminal_window_pids(windows).into_keys().collect();
+    if terminal_pids.is_empty() {
+        return;
+    }
+    let parents = read_parent_map();
+    let wanted = descendant_pids(&parents, &terminal_pids);
+    let processes: Vec<ProcessInfo> = wanted.into_iter().filter_map(read_process_info).collect();
     if !processes.is_empty() {
         enrich_terminal_windows_with_processes(windows, &processes);
     }
@@ -27,15 +33,7 @@ fn enrich_terminal_windows_with_processes(
     windows: &mut [LinuxWindowInfo],
     processes: &[ProcessInfo],
 ) {
-    let mut windows_by_terminal_pid: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
-    for (index, window) in windows.iter().enumerate() {
-        if looks_like_terminal_window(window)
-            && let Some(pid) = window.pid
-        {
-            windows_by_terminal_pid.entry(pid).or_default().push(index);
-        }
-    }
-
+    let windows_by_terminal_pid = terminal_window_pids(windows);
     if windows_by_terminal_pid.is_empty() {
         return;
     }
@@ -242,18 +240,53 @@ fn looks_like_terminal_window(window: &LinuxWindowInfo) -> bool {
     .any(|needle| haystack.contains(needle))
 }
 
-fn read_process_table() -> Vec<ProcessInfo> {
-    let Ok(entries) = fs::read_dir("/proc") else {
-        return Vec::new();
-    };
+fn terminal_window_pids(windows: &[LinuxWindowInfo]) -> BTreeMap<u32, Vec<usize>> {
+    let mut windows_by_terminal_pid: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    for (index, window) in windows.iter().enumerate() {
+        if looks_like_terminal_window(window)
+            && let Some(pid) = window.pid
+        {
+            windows_by_terminal_pid.entry(pid).or_default().push(index);
+        }
+    }
+    windows_by_terminal_pid
+}
 
+/// `/proc/<pid>/stat` only: pid -> ppid for every process. One small read per
+/// process, no fd listing.
+fn read_parent_map() -> HashMap<u32, u32> {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return HashMap::new();
+    };
     entries
         .flatten()
         .filter_map(|entry| {
             let pid = entry.file_name().to_string_lossy().parse::<u32>().ok()?;
-            read_process_info(pid)
+            let (ppid, _) = parse_stat(pid)?;
+            Some((pid, ppid))
         })
         .collect()
+}
+
+/// Every pid whose ancestry passes through one of `roots`. Pure, so it is
+/// unit-testable without `/proc`.
+fn descendant_pids(parents: &HashMap<u32, u32>, roots: &HashSet<u32>) -> HashSet<u32> {
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (&pid, &ppid) in parents {
+        children.entry(ppid).or_default().push(pid);
+    }
+    let mut out = HashSet::new();
+    let mut stack: Vec<u32> = roots.iter().copied().collect();
+    while let Some(pid) = stack.pop() {
+        if let Some(kids) = children.get(&pid) {
+            for &kid in kids {
+                if out.insert(kid) {
+                    stack.push(kid);
+                }
+            }
+        }
+    }
+    out
 }
 
 fn read_process_info(pid: u32) -> Option<ProcessInfo> {
@@ -593,6 +626,102 @@ mod tests {
         assert_eq!(
             terminal.active_process.as_ref().unwrap().command_line,
             "node /home/user/app.js --port 3000"
+        );
+    }
+
+    #[test]
+    fn descendant_pids_collects_transitive_children_only() {
+        let parents = HashMap::from([(200, 100), (201, 200), (300, 1), (301, 300), (100, 1)]);
+        let roots = HashSet::from([100]);
+        assert_eq!(descendant_pids(&parents, &roots), HashSet::from([200, 201]));
+    }
+
+    #[test]
+    fn descendant_pids_handles_nested_terminal_roots() {
+        let parents = HashMap::from([(200, 100), (300, 200), (301, 300)]);
+        let roots = HashSet::from([100, 200]);
+        assert_eq!(
+            descendant_pids(&parents, &roots),
+            HashSet::from([200, 300, 301])
+        );
+    }
+
+    #[test]
+    fn descendant_pids_terminates_on_cycles() {
+        let parents = HashMap::from([(2, 3), (3, 2)]);
+        let roots = HashSet::from([2]);
+        assert_eq!(descendant_pids(&parents, &roots), HashSet::from([2, 3]));
+    }
+
+    #[test]
+    fn descendant_only_process_set_matches_full_table_enrichment() {
+        // Full table: the outer terminal's ancestors, an unrelated tree, a
+        // nested terminal (300) running inside the outer one (100), and a
+        // second top-level terminal (500).
+        let full_table = vec![
+            process(1, 0, 0, "systemd", None),
+            process(50, 1, 1, "plasmashell", None),
+            process(100, 50, 2, "ghostty", None),
+            process(200, 100, 10, "zsh", Some("/dev/pts/0")),
+            process(300, 200, 11, "konsole", Some("/dev/pts/0")),
+            process(301, 300, 12, "bash", Some("/dev/pts/1")),
+            process(302, 301, 13, "claude", Some("/dev/pts/1")),
+            process(400, 1, 3, "unrelated", Some("/dev/pts/9")),
+            process(500, 50, 4, "ghostty", None),
+            process(501, 500, 20, "zsh", Some("/dev/pts/2")),
+        ];
+        let base_windows = vec![
+            terminal_window("11", 100),
+            terminal_window("12", 300),
+            terminal_window("13", 500),
+        ];
+
+        let mut full_windows = base_windows.clone();
+        enrich_terminal_windows_with_processes(&mut full_windows, &full_table);
+
+        let parents = full_table
+            .iter()
+            .map(|process| (process.pid, process.ppid))
+            .collect::<HashMap<_, _>>();
+        let terminal_pids: HashSet<u32> = terminal_window_pids(&base_windows).into_keys().collect();
+        let wanted = descendant_pids(&parents, &terminal_pids);
+        let filtered = full_table
+            .iter()
+            .filter(|process| wanted.contains(&process.pid))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(filtered.len() < full_table.len());
+
+        let mut filtered_windows = base_windows;
+        enrich_terminal_windows_with_processes(&mut filtered_windows, &filtered);
+
+        // The outer terminal sees both its own PTY and the nested terminal's
+        // PTY, which is only reachable by walking through process 300.
+        assert_eq!(full_windows[0].terminal_target_sessions.len(), 2);
+        assert!(full_windows[1].terminal.is_some());
+        assert!(full_windows[2].terminal.is_some());
+        assert_eq!(filtered_windows, full_windows);
+    }
+
+    #[test]
+    fn terminal_window_pids_skips_non_terminal_and_pidless_windows() {
+        let windows = vec![
+            terminal_window("11", 100),
+            terminal_window("12", 200),
+            LinuxWindowInfo {
+                title: Some("Firefox".into()),
+                app_id: Some("firefox".into()),
+                wm_class: Some("firefox".into()),
+                ..terminal_window("13", 300)
+            },
+            LinuxWindowInfo {
+                pid: None,
+                ..terminal_window("14", 0)
+            },
+        ];
+        assert_eq!(
+            terminal_window_pids(&windows),
+            BTreeMap::from([(100, vec![0]), (200, vec![1])])
         );
     }
 }
