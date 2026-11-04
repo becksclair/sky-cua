@@ -72,6 +72,12 @@ enum DisplayProvider {
 /// A GUI application to launch into the sandbox. `kcalc` is the spike's Qt
 /// repro (the toolkit app that escaped); `xmessage` is the pure-Xlib fallback
 /// that needs no Qt/KDE stack but still exercises the same launch path.
+///
+/// The two are found differently. Qt sets `_NET_WM_PID`, so `kcalc` is matched
+/// by pid. `xmessage` (Xt/Athena) sets no `_NET_WM_PID`, so a pid search can
+/// never find it; it is launched with a title unique to this test process and
+/// matched by exact title instead, which is just as unambiguous on the host
+/// display as a pid match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LaunchApp {
     /// `kcalc -- ` with no extra args.
@@ -91,9 +97,41 @@ impl LaunchApp {
     fn args(self) -> Vec<String> {
         match self {
             LaunchApp::Kcalc => Vec::new(),
-            LaunchApp::Xmessage => vec!["sky-cua isolated leak guard".to_string()],
+            // `-fn fixed` uses the core font every X server can resolve (the
+            // test's Xvfb serves `built-ins`); without it xmessage aborts with
+            // "no font found" on a server that has no core font packages.
+            LaunchApp::Xmessage => vec![
+                "-title".to_string(),
+                xmessage_title(),
+                "-fn".to_string(),
+                "fixed".to_string(),
+                "sky-cua isolated leak guard".to_string(),
+            ],
         }
     }
+
+    /// How to find this app's window on a display, given its pid.
+    fn window_query(self, pid: u32) -> WindowQuery {
+        match self {
+            LaunchApp::Kcalc => WindowQuery::Pid(pid),
+            LaunchApp::Xmessage => WindowQuery::ExactTitle(xmessage_title()),
+        }
+    }
+}
+
+/// How a launched app's top-level window is located with `xdotool`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WindowQuery {
+    /// `_NET_WM_PID` equals this pid.
+    Pid(u32),
+    /// `WM_NAME` is exactly this string.
+    ExactTitle(String),
+}
+
+/// A window title unique to this test process, so the exact-title match cannot
+/// collide with any window the user already has open on the host display.
+fn xmessage_title() -> String {
+    format!("sky-cua-leak-guard-{}", std::process::id())
 }
 
 /// Restores, on drop, every environment variable the test mutates or the
@@ -350,25 +388,27 @@ fn isolated_app_launch_leak_guard_keeps_app_off_host() {
     guard.app_pid = Some(pid);
 
     // Assertion 1: the launched window is PRESENT on the sandbox display :N.
-    // Bounded poll: GUI startup is not instantaneous. Prefer matching by pid
-    // (xdotool reads _NET_WM_PID); fall back to "any window on :N maps to our
-    // process tree" via the pid match only — we do not loosen to a name match,
-    // because a name match could in principle catch a host window.
-    let present_on_sandbox = wait_for_window_on_display(&display, pid, Duration::from_secs(15));
+    // Bounded poll: GUI startup is not instantaneous. kcalc is matched by pid
+    // (xdotool reads _NET_WM_PID); xmessage sets no _NET_WM_PID, so it is
+    // matched by a title unique to this test process. Neither is a loose name
+    // match that could catch an unrelated host window.
+    let window_query = app.window_query(pid);
+    let present_on_sandbox =
+        wait_for_window_on_display(&display, &window_query, Duration::from_secs(15));
     if !present_on_sandbox {
         guard.teardown();
         panic!(
             "launched {} (pid {pid}) never appeared on the sandbox display {display}; \
-             xdotool search --all --pid {pid} on {display} found no window",
+             xdotool search for {window_query:?} on {display} found no window",
             app.command()
         );
     }
 
     // Assertion 2: the launched window is ABSENT from the user's real (host)
-    // display. Query the host root window list for this pid; assert none.
+    // display. Run the same pid or unique-title query there; assert none.
     match host_display.as_deref() {
         Some(host) if host != display && xdpyinfo_reachable(host) => {
-            let host_windows = windows_for_pid_on_display(host, pid);
+            let host_windows = windows_on_display(host, &window_query);
             assert!(
                 host_windows.is_empty(),
                 "leak detected: launched {} (pid {pid}) has window(s) {host_windows:?} on the \
@@ -665,9 +705,11 @@ fn start_display(
         DisplayProvider::Xvfb => {
             // Xvfb stays in the foreground; keep the child handle so teardown
             // kills exactly this process and nothing else.
+            // `-fp built-ins` gives the server its compiled-in core fonts, so
+            // the xmessage fallback does not depend on font packages.
             let child = Command::new("Xvfb")
                 .arg(display)
-                .args(["-screen", "0", "1920x1080x24"])
+                .args(["-screen", "0", "1920x1080x24", "-fp", "built-ins"])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()?;
@@ -734,10 +776,10 @@ fn xpra_xauthority(display: &str) -> Result<String, String> {
 
 /// Bounded poll until a window owned by `pid` (via `_NET_WM_PID`) appears on
 /// `display`, or the deadline passes. GUI startup is not instantaneous.
-fn wait_for_window_on_display(display: &str, pid: u32, timeout: Duration) -> bool {
+fn wait_for_window_on_display(display: &str, query: &WindowQuery, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        if !windows_for_pid_on_display(display, pid).is_empty() {
+        if !windows_on_display(display, query).is_empty() {
             return true;
         }
         if Instant::now() >= deadline {
@@ -747,19 +789,23 @@ fn wait_for_window_on_display(display: &str, pid: u32, timeout: Duration) -> boo
     }
 }
 
-/// Window ids on `display` whose `_NET_WM_PID` equals `pid`, via
-/// `xdotool search --all --pid <pid>`. `--all` requires every match criterion;
-/// with only `--pid` it returns exactly the windows owned by that process.
-/// Returns an empty vec when xdotool finds nothing or fails (no window yet).
-fn windows_for_pid_on_display(display: &str, pid: u32) -> Vec<String> {
-    let output = Command::new("xdotool")
-        .env("DISPLAY", display)
-        .arg("search")
-        .arg("--all")
-        .arg("--pid")
-        .arg(pid.to_string())
-        .stderr(std::process::Stdio::null())
-        .output();
+/// Window ids on `display` matching `query`, via `xdotool search`. A pid query
+/// uses `--all --pid <pid>` (`_NET_WM_PID`); a title query uses
+/// `--name '^<title>$'` (anchored, and the generated title has no regex
+/// metacharacters). Returns an empty vec when xdotool finds nothing or fails
+/// (no window yet).
+fn windows_on_display(display: &str, query: &WindowQuery) -> Vec<String> {
+    let mut command = Command::new("xdotool");
+    command.env("DISPLAY", display).arg("search");
+    match query {
+        WindowQuery::Pid(pid) => {
+            command.arg("--all").arg("--pid").arg(pid.to_string());
+        }
+        WindowQuery::ExactTitle(title) => {
+            command.arg("--name").arg(format!("^{title}$"));
+        }
+    }
+    let output = command.stderr(std::process::Stdio::null()).output();
     let Ok(output) = output else {
         return Vec::new();
     };
