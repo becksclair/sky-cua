@@ -24,9 +24,9 @@ jobs:
 
       # Build-time system libraries (GStreamer for PipeWire capture,
       # libxkbcommon, Wayland client libs), plus the headless X tools the
-      # isolated-X11 tests need so they run instead of skipping vacuously
-      # (xfonts-base: xmessage, the leak test's fallback app, aborts without
-      # a core X font).
+      # isolated-X11 tests need so they run instead of skipping vacuously.
+      # kcalc is the leak test's primary app (the KDBusService repro); its
+      # xmessage fallback cannot pass because xmessage sets no _NET_WM_PID.
       - name: Install system packages
         run: |
           sudo apt-get update
@@ -34,7 +34,7 @@ jobs:
             pkg-config \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libxkbcommon-dev libwayland-dev \
-            xvfb x11-utils xfonts-base xdotool
+            xvfb x11-utils xdotool kcalc
 
       # rust-toolchain.toml pins the channel; install exactly that.
       - name: Install the pinned Rust toolchain
