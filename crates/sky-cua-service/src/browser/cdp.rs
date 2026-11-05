@@ -13,7 +13,17 @@ use super::protocol::{
 };
 use super::session;
 use super::snapshot;
-use super::transport::execute_cdp_until;
+use super::transport::{execute_cdp_capped_until, execute_cdp_until};
+
+/// Ceiling on a single `Page.captureScreenshot`. `fromSurface` captures wait
+/// for the next compositor frame, and a minimized browser window on Wayland
+/// can stop producing them (covered windows keep rendering), so an uncapped
+/// capture of such a window burned the whole ~6s command budget before wedge
+/// recovery re-attached and the replayed capture succeeded in milliseconds.
+/// Healthy captures finish well under a second, including under software
+/// compositing; failing fast at this cap hands the same structured timeout to
+/// recovery ~5s sooner.
+const SCREENSHOT_COMMAND_TIMEOUT_MS: u64 = 1_000;
 
 #[derive(Debug)]
 pub(super) enum BrowserCdpAction {
@@ -255,7 +265,7 @@ pub(super) async fn cdp_action_on_stream(
                     "scale": 1,
                 });
             }
-            let response = execute_cdp_until(
+            let response = execute_cdp_capped_until(
                 stream,
                 socket,
                 SCREENSHOT_REQUEST_ID,
@@ -263,6 +273,7 @@ pub(super) async fn cdp_action_on_stream(
                 "Page.captureScreenshot",
                 params,
                 deadline,
+                SCREENSHOT_COMMAND_TIMEOUT_MS,
                 identity,
             )
             .await?;
