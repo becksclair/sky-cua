@@ -53,6 +53,27 @@ setup messages that say exactly which state the extension install reached.
   process start time (`/proc/<pid>/stat`) with the boot-relative time sky-cua
   flipped `IsEnabled`. Sandboxed (Flatpak/Snap cgroup) processes register
   through a proxy PID, so they always classify as `cause=unknown`.
+- Dormant Chromium tree activation (2026-11-05): Chromium/Electron register
+  their AT-SPI root when accessibility is enabled at startup but build the
+  views and web-content tree only after detecting an assistive technology;
+  until then each frame's only child is the AT-SPI null object. When a
+  snapshot walk finds a node whose every child is null and the app's
+  `ToolkitName` is `Chromium`, sky-cua sends one ATK `GetAttributes` to the
+  walk root (the call Chromium treats as a screen-reader signal in
+  `AtkGetAttributes`), re-walks after 150/250/400 ms until no null-only node
+  remains, and records the outcome once per AT-SPI bus name. It emits
+  `AccessibilityTreeActivated`, or `AccessibilityTreeDormant` with
+  `remedy=relaunch_with_force_renderer_accessibility` when the tree did not
+  grow (e.g. `--disable-platform-accessibility-integration`). `details`:
+  `toolkit=; activation_sent=; nodes_before=; null_only_parents_before=;
+  nodes_after=; null_only_parents_after=; settle_attempts=; repeated=`.
+  Snapshot diagnostics now keep their own codes instead of all being
+  reported as `AccessibilityCoverageLimited`, and focus detection skips null
+  children instead of failing the app's focus score on them. The standalone
+  installer exports `ACCESSIBILITY_ENABLED=1` through an `environment.d`
+  drop-in (`scripts/_session_accessibility_env.py`) so apps that autostart
+  before the daemon still register; activation then builds their trees. `ACCESSIBILITY_ENABLED=1` only
+  makes Chromium register; it does not build the tree.
 - Operator probes: `sky-cua-client doctor`, `list-windows`,
   `focused-window` (`crates/sky-cua-client/src/operator_cli.rs`); degraded
   states exit non-zero.
@@ -112,6 +133,8 @@ setup messages that say exactly which state the extension install reached.
   `enable_session_accessibility`
 - `crates/sky-cua-linux/src/atspi/status.rs` — `IsEnabled` assertion,
   enablement record, `AccessibilityAppNotRegistered` classification
+- `crates/sky-cua-linux/src/atspi/wake.rs` — dormant Chromium tree
+  activation and its diagnostics
 - `crates/sky-cua-linux/src/windowing/registry.rs` — backend `list_note`
   wording
 

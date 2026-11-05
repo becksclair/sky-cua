@@ -57,6 +57,10 @@ Open boxes link to the active ExecPlan that owns the work.
       granular input doctor diagnostics, AT-SPI app-root prefiltering,
       GNOME setup-message polish) —
       [`docs/features/linux-targeting-and-diagnostics.md`](docs/features/linux-targeting-and-diagnostics.md)
+- [x] Linux session accessibility — `IsEnabled` assertion, unregistered-app
+      diagnostics, dormant Chromium/Electron tree activation, and the
+      installer's `environment.d` `ACCESSIBILITY_ENABLED=1` drop-in —
+      [`docs/features/linux-targeting-and-diagnostics.md`](docs/features/linux-targeting-and-diagnostics.md)
 
 ## Phase: Windows parity
 

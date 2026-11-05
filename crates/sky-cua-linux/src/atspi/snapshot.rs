@@ -3,7 +3,7 @@ use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::DiagnosticEntry;
 
 use crate::apps::discovery::{AccessibleTopLevel, DiscoveredApp};
-use crate::atspi::tree::{flatten_accessible_tree, flatten_accessible_tree_from_ref};
+use crate::atspi::wake::walk_with_activation;
 
 pub async fn snapshot_for_app(
     connection: &AccessibilityConnection,
@@ -15,18 +15,16 @@ pub async fn snapshot_for_app(
     ),
     BackendError,
 > {
-    let elements = flatten_accessible_tree(connection, app, 256).await;
-    let diagnostics = if elements.is_empty() {
-        vec![DiagnosticEntry {
+    let (elements, mut diagnostics) = walk_with_activation(connection, &app.object_ref, 256).await;
+    if elements.is_empty() {
+        diagnostics.push(DiagnosticEntry {
             code: BackendErrorCode::AccessibilityCoverageLimited
                 .as_str()
                 .to_string(),
             message: "Focused application exposed no meaningful accessible elements".to_string(),
             details: None,
-        }]
-    } else {
-        Vec::new()
-    };
+        });
+    }
     Ok((elements, diagnostics))
 }
 
@@ -40,17 +38,16 @@ pub async fn snapshot_for_top_level(
     ),
     BackendError,
 > {
-    let elements = flatten_accessible_tree_from_ref(connection, &top_level.object_ref, 256).await;
-    let diagnostics = if elements.is_empty() {
-        vec![DiagnosticEntry {
+    let (elements, mut diagnostics) =
+        walk_with_activation(connection, &top_level.object_ref, 256).await;
+    if elements.is_empty() {
+        diagnostics.push(DiagnosticEntry {
             code: BackendErrorCode::AccessibilityCoverageLimited
                 .as_str()
                 .to_string(),
             message: "Selected window exposed no meaningful accessible elements".to_string(),
             details: None,
-        }]
-    } else {
-        Vec::new()
-    };
+        });
+    }
     Ok((elements, diagnostics))
 }

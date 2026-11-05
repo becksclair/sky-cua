@@ -3,6 +3,7 @@ mod repair;
 pub mod snapshot;
 pub(crate) mod status;
 pub mod tree;
+pub(crate) mod wake;
 
 use std::time::Duration;
 

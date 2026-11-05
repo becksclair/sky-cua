@@ -465,11 +465,7 @@ impl DesktopBackend for LinuxDesktopBackend {
             .at_spi_call_with_timeout(snapshot_for_app(&connection, &chosen_app))
             .await?;
         for entry in snapshot_diags {
-            diagnostics.push(
-                BackendErrorCode::AccessibilityCoverageLimited,
-                entry.message,
-                entry.details,
-            );
+            diagnostics.push_code(entry.code, entry.message, entry.details);
         }
         if let Some(window) = focused_window {
             let (omitted, scaled) =
@@ -584,11 +580,7 @@ impl DesktopBackend for LinuxDesktopBackend {
                         .at_spi_call_with_timeout(snapshot_for_top_level(&connection, top_level))
                         .await?;
                     for entry in snapshot_diags {
-                        diagnostics.push(
-                            BackendErrorCode::AccessibilityCoverageLimited,
-                            entry.message,
-                            entry.details,
-                        );
+                        diagnostics.push_code(entry.code, entry.message, entry.details);
                     }
                     elements
                 }

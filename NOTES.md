@@ -144,6 +144,14 @@ and the idle auto-hide watchdog chain are documented in
   Qt/Chromium AT-SPI tree; sky-cua sets it at daemon start. A Chromium app
   started while it was `false` never registers (no root for its PID) until
   relaunched; `ACCESSIBILITY_ENABLED=1` at launch sidesteps the ordering.
+  A registered Chromium still builds no tree (frame child is the null
+  object) until an AT calls ATK `GetAttributes`/`GetRelationSet`; sky-cua
+  sends that itself (`atspi/wake.rs`). Neither `ACCESSIBILITY_ENABLED` nor
+  `IsEnabled` builds the tree; only that call or
+  `--force-renderer-accessibility` does. The standalone installer writes
+  `~/.config/environment.d/60-sky-cua-accessibility.conf`
+  (`ACCESSIBILITY_ENABLED=1`); on KDE it reaches apps via plasmashell's
+  systemd unit environment from the next login.
   Inherited `NO_AT_BRIDGE=1`/`CHROME_DESKTOP` from an Electron agent host do
   not block Chromium AT-SPI, but `CHROME_DESKTOP` rewrites its KWin `app_id`.
 - Selector matching is score-based: PID dominates; class/instance/executable

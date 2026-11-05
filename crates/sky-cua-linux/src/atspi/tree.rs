@@ -23,6 +23,29 @@ pub async fn flatten_accessible_tree_from_ref(
     root: &atspi::ObjectRefOwned,
     max_nodes: usize,
 ) -> Vec<ElementNode> {
+    walk_accessible_tree(connection, root, max_nodes).await.0
+}
+
+/// Structural facts gathered while flattening, beyond the kept nodes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TreeWalkStats {
+    /// Nodes whose every child was the null object. This is the signature of
+    /// a dormant Chromium tree: each unbuilt subtree is a lone null child.
+    pub null_only_parents: usize,
+}
+
+const NULL_OBJECT_PATH: &str = "/org/a11y/atspi/null";
+
+pub(crate) fn is_null_object_ref(object_ref: &atspi::ObjectRefOwned) -> bool {
+    object_ref.is_null() || object_ref.path().as_str() == NULL_OBJECT_PATH
+}
+
+pub(crate) async fn walk_accessible_tree(
+    connection: &AccessibilityConnection,
+    root: &atspi::ObjectRefOwned,
+    max_nodes: usize,
+) -> (Vec<ElementNode>, TreeWalkStats) {
+    let mut stats = TreeWalkStats::default();
     let mut nodes = Vec::new();
     let mut stack = vec![(root.clone(), None, 0usize)];
 
@@ -158,12 +181,18 @@ pub async fn flatten_accessible_tree_from_ref(
         };
 
         let children = accessible.get_children().await.unwrap_or_default();
+        if !children.is_empty() && children.iter().all(is_null_object_ref) {
+            stats.null_only_parents += 1;
+        }
         for child in children.into_iter().rev() {
+            if is_null_object_ref(&child) {
+                continue;
+            }
             stack.push((child, current_index, depth + 1));
         }
     }
 
-    nodes
+    (nodes, stats)
 }
 
 async fn read_text_readback(

@@ -63,8 +63,12 @@ async fn focus_score(
             score = score.max(10);
         }
         let children = accessible.get_children().await.unwrap_or_default();
+        // A dormant Chromium tree reports null children; they have no state
+        // to score and would fail proxy construction.
         for child in children.into_iter().rev() {
-            stack.push(child);
+            if !crate::atspi::tree::is_null_object_ref(&child) {
+                stack.push(child);
+            }
         }
     }
     Ok(score)

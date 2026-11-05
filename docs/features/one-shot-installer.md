@@ -44,6 +44,13 @@ The installer projects these stable user-facing surfaces:
 - launchers in `~/.local/bin` for `sky-cua-client`, `sky-cua-service`,
   `sky-cua-overlay-host`, `node_repl`, and `sky-cua-chrome-host`;
 - Chrome, Chromium, Brave, and Brave Origin native-messaging manifests;
+- the hidden `com.heliasar.SkyCua.desktop` portal-identity entry;
+- `$XDG_CONFIG_HOME/environment.d/60-sky-cua-accessibility.conf`
+  (`ACCESSIBILITY_ENABLED=1`), so Chromium/Electron apps launched by a
+  systemd-managed session (KDE Plasma, GNOME; Hyprland only through uwsm)
+  register on the AT-SPI bus even when they start before the daemon sets
+  `IsEnabled`. It applies from the next login. Setting
+  `ACCESSIBILITY_ENABLED=0` in it opts out; installs keep an edited file;
 - `computer-use`, `browser-use`, and `phone-use` skill links for detected
   agent homes. Shared `~/.agents/skills` links use relative targets such as
   `../../.local/share/sky-cua/skills/computer-use`;

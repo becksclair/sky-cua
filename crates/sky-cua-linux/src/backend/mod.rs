@@ -249,6 +249,7 @@ impl LinuxDesktopBackend {
         }
         let connection =
             connect_with_repair(&self.atspi_repair, connect_attempt, connect_attempt).await?;
+        crate::atspi::wake::forget_activations();
         *guard = Some(connection.clone());
         Ok(connection)
     }

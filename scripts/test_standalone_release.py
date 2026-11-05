@@ -102,6 +102,7 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
         "scripts/_opencode_config.py",
         "scripts/_plugin_bundle.py",
         "scripts/_portal_desktop_entry.py",
+        "scripts/_session_accessibility_env.py",
         "scripts/_skill_projection.py",
         "scripts/_standalone_topology.py",
         "scripts/_standalone_release_command.py",
@@ -411,6 +412,9 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
     assert f"Exec={home / '.local/bin/sky-cua-service'} daemon\n" in entry_text
     assert "NoDisplay=true\n" in entry_text
     assert "Hidden=" not in entry_text
+    session_env = home / ".config/environment.d/60-sky-cua-accessibility.conf"
+    assert second_report["session_accessibility_env"] == str(session_env)
+    assert "\nACCESSIBILITY_ENABLED=1\n" in session_env.read_text(encoding="utf-8")
 
     raw_links = {
         name: (home / ".agents/skills" / name).readlink() for name in standalone_release.SKILL_NAMES
@@ -625,6 +629,7 @@ def test_extracted_payload_install_imports_hermes_adapter(
         "scripts/_opencode_config.py",
         "scripts/_plugin_bundle.py",
         "scripts/_portal_desktop_entry.py",
+        "scripts/_session_accessibility_env.py",
         "scripts/_skill_projection.py",
         "scripts/_standalone_topology.py",
         "scripts/_standalone_release_command.py",
