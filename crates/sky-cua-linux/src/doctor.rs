@@ -70,11 +70,20 @@ pub fn build_doctor_report_with_session_presence(
     ];
     checks.push(accessibility.toolkit_accessibility.clone());
     checks.push(accessibility.at_spi_enabled.clone());
-    checks.push(bus_name_check("org.freedesktop.portal.Desktop"));
+    // `busctl status` asks the bus driver and never starts the portal;
+    // introspecting the portal's well-known name would D-Bus-activate it, so
+    // the interface checks only run against an already running portal.
+    let portal_bus = bus_name_check("org.freedesktop.portal.Desktop");
+    let portal_running = portal_bus.ok;
+    checks.push(portal_bus);
     checks.push(portal_interface_check(
         "org.freedesktop.portal.RemoteDesktop",
+        portal_running,
     ));
-    checks.push(portal_interface_check("org.freedesktop.portal.ScreenCast"));
+    checks.push(portal_interface_check(
+        "org.freedesktop.portal.ScreenCast",
+        portal_running,
+    ));
     checks.push(gnome_shell_version_check());
     checks.push(session_env_check());
 
@@ -99,6 +108,8 @@ pub fn build_doctor_report_with_session_presence(
         "Computer Use desktop integrations are ready.".to_string()
     } else if !can_build_accessibility_tree {
         "Run setup_accessibility, then restart target applications.".to_string()
+    } else if !can_capture_screen && let Some(cause) = capture_unavailable(&environment) {
+        cause.to_error().message
     } else if kwin_can_list && !can_target_windows {
         "KWin/Plasma can list windows, but KWin scripting (org.kde.KWin /Scripting on the session bus) is unavailable, so activate_window, focused_window, and verified targeted keyboard input are not supported.".to_string()
     } else if !can_target_windows {
@@ -254,7 +265,19 @@ fn portal_report(environment: &EnvironmentInfo) -> DoctorPortalReport {
             "screencast={:?}, remote_desktop={:?}, screenshot={:?}",
             caps.screencast_version, caps.remote_desktop_version, caps.screenshot_version
         ),
+        capture_unavailable: capture_unavailable(environment)
+            .map(crate::portal::readiness::CaptureUnavailable::to_doctor),
     }
+}
+
+/// The recorded cause, only while the environment really has no capture
+/// backend.
+fn capture_unavailable(
+    environment: &EnvironmentInfo,
+) -> Option<crate::portal::readiness::CaptureUnavailable> {
+    (environment.capture_backend == sky_cua_platform::model::CaptureBackendKind::None)
+        .then(crate::portal::readiness::last_capture_unavailable)
+        .flatten()
 }
 
 fn accessibility_report() -> DoctorAccessibilityReport {
@@ -614,7 +637,14 @@ fn bus_name_check(name: &str) -> DoctorCheck {
     run_command(name, "busctl", &["--user", "status", name], true)
 }
 
-fn portal_interface_check(interface: &str) -> DoctorCheck {
+fn portal_interface_check(interface: &str, portal_running: bool) -> DoctorCheck {
+    if !portal_running {
+        return DoctorCheck {
+            name: interface.to_string(),
+            ok: false,
+            detail: "xdg-desktop-portal is not running; doctor does not start it (the first capture starts it once the desktop session is ready)".to_string(),
+        };
+    }
     run_command(
         interface,
         "busctl",
@@ -807,6 +837,13 @@ mod tests {
         );
 
         assert!(can_build_accessibility_tree(&report));
+    }
+
+    #[test]
+    fn portal_interface_check_never_introspects_a_stopped_portal() {
+        let check = portal_interface_check("org.freedesktop.portal.ScreenCast", false);
+        assert!(!check.ok);
+        assert!(check.detail.contains("does not start it"));
     }
 
     #[test]

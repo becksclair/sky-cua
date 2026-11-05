@@ -21,6 +21,7 @@ pub async fn probe_environment() -> Result<EnvironmentInfo, BackendError> {
     let compositor = detect_compositor();
     let desktop_environment = detect_desktop_environment();
     if display_var.is_none() && wayland_display.is_none() {
+        crate::portal::readiness::clear_capture_unavailable();
         return Ok(EnvironmentInfo {
             session_kind: SessionKind::Unsupported,
             compositor,
@@ -36,8 +37,16 @@ pub async fn probe_environment() -> Result<EnvironmentInfo, BackendError> {
         });
     }
 
-    debug!("probing portal capabilities");
-    let portal_capabilities = probe_portals().await;
+    // Probing activates xdg-desktop-portal if it is not running; doing that
+    // before the desktop session names itself leaves the portal without any
+    // capture backend for the whole session.
+    let portal_probe_allowed = crate::portal::readiness::portal_probe_allowed().await;
+    let portal_capabilities = if portal_probe_allowed {
+        debug!("probing portal capabilities");
+        probe_portals().await
+    } else {
+        empty_portal_capabilities()
+    };
     debug!(
         session_type = ?xdg_session_type,
         x11_display = ?display_var,
@@ -78,6 +87,12 @@ pub async fn probe_environment() -> Result<EnvironmentInfo, BackendError> {
         x11::capture::x11_capture_available(),
         input_backend.clone(),
     );
+
+    crate::portal::readiness::record_capture_availability(
+        capture_backend != CaptureBackendKind::None,
+        !portal_probe_allowed,
+    )
+    .await;
 
     Ok(EnvironmentInfo {
         session_kind,

@@ -6,6 +6,7 @@ pub(crate) mod legacy_input;
 pub(crate) mod pipewire;
 pub(crate) mod portal_session;
 pub(crate) mod preauthorize;
+pub(crate) mod readiness;
 pub mod remote_desktop;
 pub mod screencast;
 pub mod screenshot;

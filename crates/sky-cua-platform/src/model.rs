@@ -897,6 +897,19 @@ pub struct DoctorPortalReport {
     pub screenshot_version: Option<u32>,
     pub input_capture_version: Option<u32>,
     pub detail: String,
+    /// Why screen capture is unavailable, when it is; absent when a capture
+    /// backend was selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_unavailable: Option<DoctorCaptureUnavailable>,
+}
+
+/// Structured cause for a missing capture backend. `code` is a
+/// `BackendErrorCode` string (`PortalSessionNotReady`, `PortalBackendMissing`),
+/// the same code a capture request fails with.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DoctorCaptureUnavailable {
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

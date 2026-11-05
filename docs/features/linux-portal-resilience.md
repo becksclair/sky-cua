@@ -37,6 +37,21 @@ keyboard modifiers and compositor targeting across supported desktops.
   a fresh grant under any of those ids completes without a dialog. On GNOME the
   seeded restore token carries a permission row for each of those ids, because
   the frontend only restores for an app id with a row.
+- Portal activation gate (2026-11-05): the environment probe only queries
+  `org.freedesktop.portal.Desktop` when it is already running or the systemd
+  user environment has `XDG_CURRENT_DESKTOP` (or that environment cannot be
+  read). Doctor's portal interface checks run only against a running portal,
+  since introspecting its well-known name D-Bus-activates it. A portal
+  activated before the desktop session names itself falls back to gtk and
+  exposes no ScreenCast, RemoteDesktop or Screenshot for the whole session.
+- With no capture backend, captures fail with a cause-specific code:
+  `PortalSessionNotReady` (the probe deferred activation; retry after the
+  session finishes starting) or `PortalBackendMissing` (the running portal
+  has no capture implementation; when it was started without
+  `XDG_CURRENT_DESKTOP` the message names its pid and the
+  `systemctl --user restart xdg-desktop-portal` remedy). `doctor` reports the
+  same `{code, message}` as `portal.capture_unavailable` and uses the message
+  as `readiness.recommended_next_step`.
 - `PortalSessionRestoreMiss` is reported when a persisted token was sent but
   the portal returned a different one (it granted a fresh session instead of
   restoring); `PortalSessionRestored` only when the same token came back.
@@ -82,6 +97,8 @@ the retry prompts again.
   restore-outcome classification
 - `crates/sky-cua-linux/src/portal/host_app.rs` — portal app id registration
 - `crates/sky-cua-linux/src/portal/preauthorize.rs` — preauthorized app ids
+- `crates/sky-cua-linux/src/portal/readiness.rs` — activation gate and
+  missing-backend explanation
 - `scripts/_portal_desktop_entry.py` — installed desktop entry
 - `crates/sky-cua-linux/src/portal/eis_fallback.rs` — fallback and worker
   generation fencing

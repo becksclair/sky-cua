@@ -439,6 +439,7 @@ mod tests {
                 screenshot_version: Some(1),
                 input_capture_version: None,
                 detail: String::new(),
+                capture_unavailable: None,
             }),
             accessibility: Some(accessibility),
             windowing: Some(DoctorWindowingReport {

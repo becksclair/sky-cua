@@ -314,6 +314,8 @@ export type CuaJsServiceErrorCode =
 export type BackendServiceErrorCode =
   | "UnsupportedEnvironment"
   | "PortalUnavailable"
+  | "PortalSessionNotReady"
+  | "PortalBackendMissing"
   | "PortalCapabilityMissing"
   | "PortalApprovalPending"
   | "PortalRequestDenied"

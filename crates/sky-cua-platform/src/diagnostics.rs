@@ -6,6 +6,13 @@ use crate::model::DiagnosticEntry;
 pub enum BackendErrorCode {
     UnsupportedEnvironment,
     PortalUnavailable,
+    /// sky-cua deferred starting xdg-desktop-portal because the desktop session
+    /// has not named itself yet; a portal started now would have no capture
+    /// backend. Retry once the session has finished starting.
+    PortalSessionNotReady,
+    /// The running portal exposes no ScreenCast or Screenshot implementation,
+    /// typically because it was started before the desktop session.
+    PortalBackendMissing,
     PortalCapabilityMissing,
     PortalApprovalPending,
     PortalRequestDenied,
@@ -36,6 +43,8 @@ impl BackendErrorCode {
         match self {
             Self::UnsupportedEnvironment => "UnsupportedEnvironment",
             Self::PortalUnavailable => "PortalUnavailable",
+            Self::PortalSessionNotReady => "PortalSessionNotReady",
+            Self::PortalBackendMissing => "PortalBackendMissing",
             Self::PortalCapabilityMissing => "PortalCapabilityMissing",
             Self::PortalApprovalPending => "PortalApprovalPending",
             Self::PortalRequestDenied => "PortalRequestDenied",

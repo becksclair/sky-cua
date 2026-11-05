@@ -845,6 +845,11 @@ impl DesktopBackend for LinuxDesktopBackend {
         );
         push_portal_lifecycle_diagnostics(&mut portal_lifecycle_events, &mut diagnostics);
         reject_unactionable_targeted_capture(capture_target.as_ref(), &capture_plan, &environment)?;
+        if capture_plan.capture.is_none()
+            && environment.capture_backend == sky_cua_platform::model::CaptureBackendKind::None
+        {
+            return Err(crate::portal::readiness::capture_backend_unavailable_error());
+        }
         require_screenshot_image(
             capture_plan.capture.as_ref(),
             capture_plan.portal_session_error.as_ref(),
