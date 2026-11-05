@@ -19,6 +19,7 @@ from typing import Any
 import _hermes_config
 import _opencode_config
 import _plugin_bundle
+import _portal_desktop_entry
 import _standalone_release_command
 from _skill_projection import apply_skill_link_plan, plan_skill_links
 from _standalone_release_command import (
@@ -195,6 +196,10 @@ def assemble_payload(payload_root: Path, *, core_root: Path, cua_node_root: Path
     _copy_file(REPO_ROOT / "scripts/_hermes_config.py", artifact_scripts / "_hermes_config.py")
     _copy_file(REPO_ROOT / "scripts/_plugin_bundle.py", artifact_scripts / "_plugin_bundle.py")
     _copy_file(
+        REPO_ROOT / "scripts/_portal_desktop_entry.py",
+        artifact_scripts / "_portal_desktop_entry.py",
+    )
+    _copy_file(
         REPO_ROOT / "scripts/_skill_projection.py", artifact_scripts / "_skill_projection.py"
     )
     _copy_file(
@@ -244,6 +249,7 @@ def validate_payload(payload_root: Path) -> None:
         "scripts/_opencode_config.py",
         "scripts/_hermes_config.py",
         "scripts/_plugin_bundle.py",
+        "scripts/_portal_desktop_entry.py",
         "scripts/_skill_projection.py",
         "scripts/_standalone_topology.py",
     )
@@ -999,6 +1005,9 @@ def install_payload(
     manifests = _install_native_manifests(
         install_home, install_home / ".local/bin/sky-cua-chrome-host"
     )
+    portal_desktop_entry = _portal_desktop_entry.install_portal_desktop_entry(
+        install_home, active_env, install_home / ".local/bin/sky-cua-service"
+    )
     pi_config = _install_pi_mcp(public_root, home=install_home, env=active_env)
     opencode_report = _opencode_config.install_opencode_config(
         public_root, home=install_home, env=active_env
@@ -1047,6 +1056,7 @@ def install_payload(
         "public_root": str(public_root),
         "launchers": [str(path) for path in launchers],
         "native_manifests": [str(path) for path in manifests],
+        "portal_desktop_entry": str(portal_desktop_entry),
         "skills": [str(path) for path in skills],
         "pi_config": str(pi_config) if pi_config is not None else None,
         "codex_plugins": list(plugins),

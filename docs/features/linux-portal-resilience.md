@@ -26,6 +26,20 @@ keyboard modifiers and compositor targeting across supported desktops.
   `NotifyPointerAxis` calls from a session that may forbid that legacy lane.
 - Explicit portal denial remains distinct from an unavailable portal and is
   not silently bypassed.
+- Portal identity (2026-11-05): before its first ashpd portal request the
+  daemon registers its portal connection as `com.heliasar.SkyCua` through
+  `org.freedesktop.host.portal.Registry`. The installer projects the hidden
+  `com.heliasar.SkyCua.desktop` entry the portal requires to resolve that id.
+  Without the entry (checkout runs) registration fails with a warning and the
+  portal falls back to the spawning scope's id.
+- KDE preauthorization (`kde-authorized` RemoteDesktop and screenshot rows)
+  covers `""`, `desktop`, `com.anthropic.Claude` and `com.heliasar.SkyCua`, so
+  a fresh grant under any of those ids completes without a dialog. On GNOME the
+  seeded restore token carries a permission row for each of those ids, because
+  the frontend only restores for an app id with a row.
+- `PortalSessionRestoreMiss` is reported when a persisted token was sent but
+  the portal returned a different one (it granted a fresh session instead of
+  restoring); `PortalSessionRestored` only when the same token came back.
 
 ## Behavior
 
@@ -49,10 +63,26 @@ XTest move. Other compositors receive one injection. The live pointer fixture
 checks the resulting widget adjustment cardinality, so one requested scroll
 must still produce exactly one observed vertical or horizontal movement.
 
+xdg-desktop-portal consumes a restore token at `SelectDevices` and re-saves
+the restore data under the same token at `Start`, and only restores for the
+app id that owns the token. The app id of an unsandboxed process comes from
+its systemd scope, so before registration the daemon's id changed with
+whichever host spawned it (`com.anthropic.Claude`, `claude`, `""`, ...). A
+daemon under another id could not restore the stored token, received a fresh
+grant, and replaced the file with a token the next daemon could not use; on
+KDE, a fresh grant for an id outside `kde-authorized` shows the interactive
+dialog, and the combined session start waits for it until its 12 s timeout
+(`PortalApprovalPending`). A timed-out `Start` leaves the token consumed, so
+the retry prompts again.
+
 ## Source paths
 
 - `crates/sky-cua-linux/src/portal/remote_desktop.rs` — session lifecycle
-- `crates/sky-cua-linux/src/portal/portal_session.rs` — setup and cleanup
+- `crates/sky-cua-linux/src/portal/portal_session.rs` — setup and cleanup,
+  restore-outcome classification
+- `crates/sky-cua-linux/src/portal/host_app.rs` — portal app id registration
+- `crates/sky-cua-linux/src/portal/preauthorize.rs` — preauthorized app ids
+- `scripts/_portal_desktop_entry.py` — installed desktop entry
 - `crates/sky-cua-linux/src/portal/eis_fallback.rs` — fallback and worker
   generation fencing
 - `crates/sky-cua-linux/src/portal/eis_input.rs` — device lifecycle and worker

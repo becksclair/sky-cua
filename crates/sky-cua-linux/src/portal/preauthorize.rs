@@ -8,6 +8,7 @@ use zbus::{
     zvariant::{OwnedValue, Value},
 };
 
+use crate::portal::host_app::PORTAL_APP_ID;
 use crate::portal::session::{portal_u32_property, session_bus};
 use crate::portal::token_store::{
     PersistedPortalToken, PortalCompositorFamily, PortalTokenStore, current_compositor_hint,
@@ -26,7 +27,11 @@ const REMOTE_DESKTOP_ID: &str = "remote-desktop";
 const SCREENSHOT_TABLE: &str = "screenshot";
 const SCREENSHOT_ID: &str = "screenshot";
 const ALLOW_PERMISSION: &str = "yes";
-const GENERIC_APP_IDS: &[&str] = &["", "desktop"];
+/// App ids granted RemoteDesktop/Screenshot without a prompt: `""` and
+/// `desktop` cover unidentified host processes, `com.anthropic.Claude` covers
+/// processes the portal attributes to the Claude desktop app's scope, and
+/// [`PORTAL_APP_ID`] is the id the daemon registers itself as.
+const PREAUTHORIZED_APP_IDS: &[&str] = &["", "desktop", "com.anthropic.Claude", PORTAL_APP_ID];
 const GNOME_RESTORE_BACKEND_NAME: &str = "GNOME";
 const GNOME_RESTORE_VERSION: u32 = 1;
 const GNOME_DEFAULT_DEVICE_TYPES: u32 = 3;
@@ -127,15 +132,20 @@ async fn preauthorize_screenshot(connection: &zbus::Connection) -> Result<()> {
         .await
         .context("failed to seed screenshot portal authorization")?;
 
-    verify_permission_roundtrip(&proxy, SCREENSHOT_TABLE, SCREENSHOT_ID, GENERIC_APP_IDS)
-        .await
-        .context("screenshot portal authorization round-trip failed")
+    verify_permission_roundtrip(
+        &proxy,
+        SCREENSHOT_TABLE,
+        SCREENSHOT_ID,
+        PREAUTHORIZED_APP_IDS,
+    )
+    .await
+    .context("screenshot portal authorization round-trip failed")
 }
 
 async fn preauthorize_kde_remote_desktop(connection: &zbus::Connection) -> Result<()> {
     let proxy = permission_store_proxy(connection).await?;
     let permissions = vec![ALLOW_PERMISSION.to_string()];
-    for app_id in GENERIC_APP_IDS {
+    for app_id in PREAUTHORIZED_APP_IDS {
         let _: () = proxy
             .call(
                 "SetPermission",
@@ -157,7 +167,7 @@ async fn preauthorize_kde_remote_desktop(connection: &zbus::Connection) -> Resul
         &proxy,
         KDE_AUTHORIZED_TABLE,
         REMOTE_DESKTOP_ID,
-        GENERIC_APP_IDS,
+        PREAUTHORIZED_APP_IDS,
     )
     .await
     .context("KDE RemoteDesktop authorization round-trip failed")
@@ -200,6 +210,16 @@ struct GnomePreauthorizationDetails {
     token_path: Option<String>,
 }
 
+/// The frontend only restores a token for an app id with a row in its entry,
+/// so the seeded GNOME token carries one for every preauthorized id,
+/// including the id the daemon registers as.
+fn seeded_restore_permissions() -> HashMap<String, Vec<String>> {
+    PREAUTHORIZED_APP_IDS
+        .iter()
+        .map(|app_id| ((*app_id).to_string(), vec![ALLOW_PERMISSION.to_string()]))
+        .collect()
+}
+
 async fn preauthorize_gnome_remote_desktop(
     connection: &zbus::Connection,
     token_store: Option<&PortalTokenStore>,
@@ -216,7 +236,7 @@ async fn preauthorize_gnome_remote_desktop(
         Utc::now().timestamp_micros(),
     );
     let proxy = permission_store_proxy(connection).await?;
-    let permissions = HashMap::from([(String::new(), vec![ALLOW_PERMISSION.to_string()])]);
+    let permissions = seeded_restore_permissions();
     let _: () = proxy
         .call(
             "Set",
@@ -399,6 +419,18 @@ mod tests {
         DisplayConfigState, GNOME_RESTORE_BACKEND_NAME, GNOME_RESTORE_VERSION, LogicalMonitor,
         Monitor, MonitorIdentity, gnome_restore_data, primary_monitor_identity_from_state,
     };
+
+    #[test]
+    fn seeded_gnome_token_grants_the_registered_app_id() {
+        let permissions = super::seeded_restore_permissions();
+        for app_id in ["", super::PORTAL_APP_ID] {
+            assert_eq!(
+                permissions.get(app_id).map(Vec::as_slice),
+                Some([super::ALLOW_PERMISSION.to_string()].as_slice()),
+                "missing seeded row for {app_id:?}"
+            );
+        }
+    }
 
     fn monitor(connector: &str, vendor: &str, product: &str, serial: &str) -> Monitor {
         (

@@ -1,6 +1,7 @@
 pub(crate) mod eis_fallback;
 pub(crate) mod eis_input;
 pub(crate) mod eis_keymap;
+pub(crate) mod host_app;
 pub(crate) mod legacy_input;
 pub(crate) mod pipewire;
 pub(crate) mod portal_session;

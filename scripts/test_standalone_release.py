@@ -101,6 +101,7 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
         "scripts/_hermes_config.py",
         "scripts/_opencode_config.py",
         "scripts/_plugin_bundle.py",
+        "scripts/_portal_desktop_entry.py",
         "scripts/_skill_projection.py",
         "scripts/_standalone_topology.py",
         "scripts/_standalone_release_command.py",
@@ -404,6 +405,12 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
         ).read_text(encoding="utf-8")
     )
     assert native_manifest["path"] == str(home / ".local/bin/sky-cua-chrome-host")
+    desktop_entry = tmp_path / "xdg-data/applications/com.heliasar.SkyCua.desktop"
+    assert second_report["portal_desktop_entry"] == str(desktop_entry)
+    entry_text = desktop_entry.read_text(encoding="utf-8")
+    assert f"Exec={home / '.local/bin/sky-cua-service'} daemon\n" in entry_text
+    assert "NoDisplay=true\n" in entry_text
+    assert "Hidden=" not in entry_text
 
     raw_links = {
         name: (home / ".agents/skills" / name).readlink() for name in standalone_release.SKILL_NAMES
@@ -617,6 +624,7 @@ def test_extracted_payload_install_imports_hermes_adapter(
         "scripts/_hermes_config.py",
         "scripts/_opencode_config.py",
         "scripts/_plugin_bundle.py",
+        "scripts/_portal_desktop_entry.py",
         "scripts/_skill_projection.py",
         "scripts/_standalone_topology.py",
         "scripts/_standalone_release_command.py",

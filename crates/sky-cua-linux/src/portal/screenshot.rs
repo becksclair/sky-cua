@@ -24,6 +24,7 @@ pub async fn version() -> Result<u32, BackendError> {
 }
 
 pub async fn capture_still(snapshot_id: &str) -> Result<PathBuf, BackendError> {
+    crate::portal::host_app::ensure_registered().await;
     let response = Screenshot::request()
         .interactive(false)
         .modal(false)

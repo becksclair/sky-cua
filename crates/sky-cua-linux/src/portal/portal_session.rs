@@ -44,6 +44,9 @@ async fn start_session(
 ) -> Result<StartedPortalSession, BackendError> {
     debug!("starting combined RemoteDesktop + ScreenCast portal session");
     let mut lifecycle_events = Vec::new();
+    // Before the first ashpd request: the portal only accepts registration for
+    // a connection it has not identified yet.
+    crate::portal::host_app::ensure_registered().await;
     let remote_desktop = RemoteDesktop::new().await.map_err(|error| {
         BackendError::new(
             BackendErrorCode::PortalUnavailable,
@@ -158,14 +161,13 @@ async fn start_session(
 
     let primary_stream = selected.streams().first().map(stream_to_info);
 
-    if stored_token.is_some() {
-        lifecycle_events.push(PortalLifecycleEvent {
-            code: PORTAL_SESSION_RESTORED,
-            message:
-                "Reused a persisted RemoteDesktop approval token for the combined portal session."
-                    .to_string(),
-            details: None,
-        });
+    if let Some(stored) = stored_token.as_ref() {
+        // No replacement token: persistence reports that miss below, and
+        // nothing here proves a restore.
+        lifecycle_events.extend(restore_outcome_event(
+            &stored.restore_token,
+            selected.restore_token(),
+        ));
     } else {
         lifecycle_events.push(PortalLifecycleEvent {
             code: PORTAL_SESSION_STARTED,
@@ -199,6 +201,29 @@ async fn start_session(
             eis_worker: None,
         },
         lifecycle_events,
+    })
+}
+
+/// A real restore re-saves the restore data under the token that was sent;
+/// a different returned token means the portal could not restore it (token
+/// consumed, or owned by another app id) and granted a fresh session.
+fn restore_outcome_event(sent: &str, returned: Option<&str>) -> Option<PortalLifecycleEvent> {
+    Some(match returned? {
+        returned if returned != sent => PortalLifecycleEvent {
+            code: PORTAL_SESSION_RESTORE_MISS,
+            message: "The portal did not accept the persisted RemoteDesktop token and granted a fresh session."
+                .to_string(),
+            details: Some(
+                "the returned restore token differs from the one sent".to_string(),
+            ),
+        },
+        _ => PortalLifecycleEvent {
+            code: PORTAL_SESSION_RESTORED,
+            message:
+                "Reused a persisted RemoteDesktop approval token for the combined portal session."
+                    .to_string(),
+            details: None,
+        },
     })
 }
 
@@ -381,7 +406,29 @@ fn source_type_code(source_type: SourceType) -> u32 {
 mod tests {
     use ashpd::desktop::screencast::CursorMode;
 
-    use super::cursor_mode_for_available_modes;
+    use super::{
+        PORTAL_SESSION_RESTORE_MISS, PORTAL_SESSION_RESTORED, cursor_mode_for_available_modes,
+        restore_outcome_event,
+    };
+
+    #[test]
+    fn restore_outcome_flags_a_replaced_token_as_a_miss() {
+        assert_eq!(
+            restore_outcome_event("token-a", Some("token-a")).map(|event| event.code),
+            Some(PORTAL_SESSION_RESTORED)
+        );
+        assert!(
+            restore_outcome_event("token-a", None).is_none(),
+            "no returned token proves no restore; persistence reports the miss"
+        );
+        let miss = restore_outcome_event("token-a", Some("token-b")).expect("miss event");
+        assert_eq!(miss.code, PORTAL_SESSION_RESTORE_MISS);
+        assert!(
+            !miss.message.contains("token-")
+                && !miss.details.unwrap_or_default().contains("token-"),
+            "tokens never reach diagnostics"
+        );
+    }
 
     #[test]
     fn chooses_supported_portal_cursor_mode() {
