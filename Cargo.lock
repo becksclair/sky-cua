@@ -2436,6 +2436,7 @@ dependencies = [
  "qrcode",
  "serde",
  "serde_json",
+ "sky-cua-model-client",
  "sky-cua-platform",
  "tokio",
  "tracing",

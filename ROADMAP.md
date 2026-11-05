@@ -377,6 +377,42 @@ pick them off between feature work.
 
 ## Backlog / Ideas
 
+- [x] [Optional browser ranking](docs/features/browser-ranking.md) (2026-11-05):
+  native Rust MCP path with explicit deterministic matching, Jev at 0.8, and
+  Terra fallback; default off. Reusable provider-neutral JSON model client.
+  Browser/desktop feasibility evidence informing this boundary follows.
+  [`Measured results`](docs/research/2026-11-jev-ui-experiment-results.md) found
+  confident stale-banner false success, insufficient gated semantic-target coverage,
+  and no demonstrated workflow benefit. [Follow-up](docs/research/2026-11-jev-ranking-thresholds-and-image-fix.md)
+  found limited gains at a 0.7 ranking threshold and fixed the image-size rejection.
+  A [live browser pilot](docs/research/2026-11-jev-live-browser-pilot.md) then selected
+  12/12 additional semantic targets correctly, with zero wrong clicks and 82.4%
+  less semantic-case wall time. This is controlled Chrome fixture evidence, not
+  native/phone or installed-runtime acceptance. Preserve deterministic gates and
+  the full judge.
+  The [native desktop pilot](docs/research/2026-11-jev-desktop-ranking-pilot.md)
+  subsequently proved 40 correct trials through installed sky-cua against Terra:
+  semantic ranking saved 24.3% overall, but with variable latency; image assistance
+  saved 11.7% and added no accepted targets. Keep native ranking experimental;
+  defer image-assisted integration.
+  A [warm semantic repeat](docs/research/2026-11-jev-desktop-warm-repeat.md) saved
+  15.7% overall with zero wrong actions, missing the 20% gate and reinforcing the
+  experimental disposition.
+  The [initial real-workflow attempt](docs/research/2026-11-jev-real-workflow-pilot.md)
+  stopped before model calls on KWrite snapshot/focus checks; the corrected
+  follow-up below establishes the actual consumer result.
+  The [completed edit/save pilot](docs/research/2026-11-jev-real-edit-save-results.md)
+  corrected stale snapshot ordering and completed all six workflows, but Jev
+  abstained every time: zero Terra calls avoided and 9.0% slower observed total.
+  Keep this real workflow on its existing deterministic/Terra path.
+  A [real TodoMVC browser workflow](docs/research/2026-11-jev-real-browser-workflow.md)
+  at 0.8 then passed three warm paired comparisons against Terra: 26.7% less
+  total time, Terra calls 9→3, all six workflows correct. Three wrong low-confidence
+  checkbox proposals were rejected and handled by Terra; retain the gated route.
+  [Shared page text](docs/research/2026-11-jev-shared-page-text.md) then sent
+  page text once per request (89–95% smaller payloads on long pages) with
+  unchanged gated accuracy and a replicated 25.2% workflow saving; 0.8 stays.
+  [`Original research and experiment design`](docs/research/2026-11-jev-ui-classification-and-testing.md).
 - Compositor cursor hiding upstream integrations (Hyprland plugin, COSMIC accepted patch)
 - Stronger Windows capture lane: WGC vs DXGI Desktop Duplication tradeoff once one is live
 - KWin EIS support for broader pointer/scroll parity; GNOME RemoteDesktop EIS

@@ -53,6 +53,8 @@ surface when enabled. Otherwise report that the task requires a disabled surface
 
 ## Actions
 
+- If `browser_rank` is advertised, it can resolve a target-selection intent before an action. Supply `exact_name` (and optionally `exact_role`) when known so deterministic matching runs first. On `status="selected"`, use its returned `ref` and `appshot_id` directly with `browser_input`; on `unresolved`, inspect the reason and current page instead of guessing coordinates. Ranking already includes its configured model fallback; use it for unresolved intent-to-target work, not after you have already selected an exact target.
+
 - Keep `tab_id`, `appshot_id`, `operation`, coordinates, deltas, and text as top-level tool fields; never pack JSON or action fields into an id string.
 - `browser_input(operation="click")` moves the visible browser agent cursor before clicking; call `browser_move_mouse` first only for hover or cursor placement without a click.
 - Prefer a `ref` from the latest `observe(surface="browser")` over `x`/`y` for actionable controls.

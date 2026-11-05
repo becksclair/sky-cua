@@ -21,6 +21,7 @@ use crate::service_launcher::ServiceClient;
 mod annotations;
 mod app_state;
 mod browser;
+mod browser_ranking;
 mod definitions;
 mod phone;
 mod semantic_text;
@@ -91,6 +92,10 @@ pub(crate) fn handle_session_tool_call_with_browser_identity(
                 "FeatureDisabled",
                 "browser_eval is disabled for this MCP process",
             ),
+            Some(InactiveToolReason::BrowserRankingDisabled) => tool_error(
+                "FeatureDisabled",
+                "browser_rank is disabled for this MCP process; enable SKY_CUA_BROWSER_RANKING",
+            ),
             None => tool_error("UnknownTool", format!("unknown tool: {tool_name}")),
         };
     }
@@ -116,6 +121,9 @@ fn handle_grouped_tool_call(
 ) -> Result<Value> {
     if let Err(message) = registry.validate_arguments(tool_name, &arguments) {
         return Ok(grouped_invalid_request_result(tool_name, message));
+    }
+    if tool_name == "browser_rank" {
+        return browser_ranking::handle(service, arguments, browser_identity);
     }
     let call = match grouped_handler_call(tool_name, arguments) {
         Ok(call) => call,
@@ -1689,10 +1697,58 @@ mod tests {
     fn process_config(browser_eval_enabled: bool) -> McpProcessConfig {
         McpProcessConfig {
             browser_eval_enabled,
+            browser_ranking_enabled: false,
             surfaces: sky_cua_platform::config::AgentSurfacePolicy::default(),
             model_supports_images_override: None,
             diagnostics: Vec::new(),
         }
+    }
+
+    #[test]
+    fn browser_ranking_disabled_or_invalid_never_dispatches() {
+        let service = FakeService::default();
+        let heuristics = HeuristicsRegistry::load_from_repo().expect("heuristics should load");
+        let model = ModelSessionInfo::default();
+        for (browser, enabled, arguments, expected_code) in [
+            (
+                true,
+                false,
+                json!({"tab_id": "tab-1", "intent": "save"}),
+                "FeatureDisabled",
+            ),
+            (
+                false,
+                true,
+                json!({"tab_id": "tab-1", "intent": "save"}),
+                "UnknownTool",
+            ),
+            (
+                true,
+                true,
+                json!({"tab_id": "tab-1", "intent": " "}),
+                "InvalidRequest",
+            ),
+        ] {
+            let mut process = process_config(false);
+            process.surfaces.browser = browser;
+            process.browser_ranking_enabled = enabled;
+            let registry = build_tool_registry(&process, &model);
+            let result = handle_session_tool_call(
+                &service,
+                &heuristics,
+                &model,
+                &registry,
+                "browser_rank",
+                arguments,
+            )
+            .expect("tool result");
+            assert_eq!(result["isError"], true);
+            let code = result["structuredContent"]["code"]
+                .as_str()
+                .or_else(|| result["structuredContent"]["error"]["code"].as_str());
+            assert_eq!(code, Some(expected_code));
+        }
+        assert!(service.requests.borrow().is_empty());
     }
 
     #[test]

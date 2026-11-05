@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Map, Value, json};
 use sky_cua_platform::{config::AgentSurfacePolicy, model::BROWSER_EVAL_ENV};
 
+const BROWSER_RANKING_ENV: &str = "SKY_CUA_BROWSER_RANKING";
+
 use super::annotations::{
     LOCAL_DESTRUCTIVE_ACTION, LOCAL_NAVIGATION_ACTION, LOCAL_STATEFUL_ACTION, READ_ONLY_TOOL,
     ToolAnnotations,
@@ -33,12 +35,14 @@ use status::*;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum McpConfigDiagnostic {
     InvalidBrowserEval { value: String },
+    BrowserRankingValueInvalid { value: String },
     InvalidModelSupportsImages { value: String },
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct McpProcessConfig {
     pub(crate) browser_eval_enabled: bool,
+    pub(crate) browser_ranking_enabled: bool,
     pub(crate) surfaces: AgentSurfacePolicy,
     pub(crate) model_supports_images_override: Option<bool>,
     #[allow(dead_code)]
@@ -48,6 +52,7 @@ pub(crate) struct McpProcessConfig {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum InactiveToolReason {
     BrowserEvalDisabled,
+    BrowserRankingDisabled,
 }
 
 #[derive(Debug, Clone)]
@@ -77,9 +82,14 @@ impl McpToolRegistry {
     }
 
     pub(crate) fn inactive_reason(&self, name: &str) -> Option<InactiveToolReason> {
-        self.inactive_names
-            .contains(name)
-            .then_some(InactiveToolReason::BrowserEvalDisabled)
+        if !self.inactive_names.contains(name) {
+            return None;
+        }
+        match name {
+            "browser_eval" => Some(InactiveToolReason::BrowserEvalDisabled),
+            "browser_rank" => Some(InactiveToolReason::BrowserRankingDisabled),
+            _ => None,
+        }
     }
 
     pub(crate) fn validate_arguments(&self, name: &str, arguments: &Value) -> Result<(), String> {
@@ -302,7 +312,7 @@ pub(crate) fn mcp_process_config_from_env() -> Result<McpProcessConfig, String> 
     // Enabled by default; only an explicit off/0/false disables it. An invalid
     // value is reported and falls back to the enabled default.
     let browser_eval_enabled = match std::env::var(BROWSER_EVAL_ENV) {
-        Ok(value) => match parse_browser_eval_runtime(&value) {
+        Ok(value) => match parse_feature_switch(&value) {
             Some(value) => value,
             None => {
                 diagnostics.push(McpConfigDiagnostic::InvalidBrowserEval { value });
@@ -310,6 +320,24 @@ pub(crate) fn mcp_process_config_from_env() -> Result<McpProcessConfig, String> 
             }
         },
         Err(_) => true,
+    };
+    let browser_ranking_enabled = match std::env::var(BROWSER_RANKING_ENV) {
+        Ok(value) => match parse_feature_switch(&value) {
+            Some(value) => value,
+            None => {
+                diagnostics.push(McpConfigDiagnostic::BrowserRankingValueInvalid { value });
+                false
+            }
+        },
+        Err(std::env::VarError::NotPresent) => sky_cua_platform::config::load_machine_config()?
+            .browser_ranking
+            .unwrap_or(false),
+        Err(std::env::VarError::NotUnicode(value)) => {
+            diagnostics.push(McpConfigDiagnostic::BrowserRankingValueInvalid {
+                value: value.to_string_lossy().into_owned(),
+            });
+            false
+        }
     };
     let model_supports_images_override = match std::env::var("SKY_CUA_MODEL_SUPPORTS_IMAGES") {
         Ok(value) => match parse_bool_runtime(&value) {
@@ -324,6 +352,7 @@ pub(crate) fn mcp_process_config_from_env() -> Result<McpProcessConfig, String> 
 
     Ok(McpProcessConfig {
         browser_eval_enabled,
+        browser_ranking_enabled,
         surfaces: sky_cua_platform::config::resolved_agent_surface_policy()?,
         model_supports_images_override,
         diagnostics,
@@ -338,7 +367,9 @@ fn parse_bool_runtime(value: &str) -> Option<bool> {
     }
 }
 
-fn parse_browser_eval_runtime(value: &str) -> Option<bool> {
+/// Strict on/off parser for browser feature switches (`SKY_CUA_BROWSER_EVAL`,
+/// `SKY_CUA_BROWSER_RANKING`); anything else is reported as invalid.
+fn parse_feature_switch(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "on" => Some(true),
         "0" | "false" | "off" => Some(false),
@@ -354,6 +385,7 @@ pub(crate) fn build_tool_registry(
     let (tools, validation_schemas) = build_tool_definitions_split(
         can_receive_images,
         process.browser_eval_enabled,
+        process.browser_ranking_enabled,
         process.surfaces,
     );
     let active_names = tool_names(&tools);
@@ -363,6 +395,10 @@ pub(crate) fn build_tool_registry(
         && !active_names.contains("browser_eval")
     {
         inactive_names.insert("browser_eval".to_string());
+    }
+
+    if process.surfaces.browser && !process.browser_ranking_enabled {
+        inactive_names.insert("browser_rank".to_string());
     }
 
     McpToolRegistry {
@@ -407,6 +443,7 @@ pub(crate) fn build_tool_definitions(
     build_tool_definitions_split(
         can_receive_images,
         browser_eval_enabled,
+        false,
         AgentSurfacePolicy::default(),
     )
     .0
@@ -423,6 +460,7 @@ pub(crate) fn validation_tool_definitions(
     let (mut tools, validation) = build_tool_definitions_split(
         can_receive_images,
         browser_eval_enabled,
+        false,
         AgentSurfacePolicy::default(),
     );
     for tool in tools
@@ -452,10 +490,15 @@ pub(crate) fn validation_tool_definitions(
 fn build_tool_definitions_split(
     can_receive_images: bool,
     browser_eval_enabled: bool,
+    browser_ranking_enabled: bool,
     surfaces: AgentSurfacePolicy,
 ) -> (Value, BTreeMap<String, Value>) {
-    let mut tools =
-        build_grouped_tool_definitions(can_receive_images, browser_eval_enabled, surfaces);
+    let mut tools = build_grouped_tool_definitions(
+        can_receive_images,
+        browser_eval_enabled,
+        browser_ranking_enabled,
+        surfaces,
+    );
     let mut validation_schemas = BTreeMap::new();
     for tool in tools
         .as_array_mut()
@@ -488,6 +531,7 @@ fn flatten_advertised_input_schema(schema: &mut Map<String, Value>) {
 fn build_grouped_tool_definitions(
     can_receive_images: bool,
     browser_eval_enabled: bool,
+    browser_ranking_enabled: bool,
     surfaces: AgentSurfacePolicy,
 ) -> Value {
     let mut tools = json!([
@@ -917,6 +961,16 @@ fn build_grouped_tool_definitions(
                 json!({"expression": non_empty_string_schema(), "appshot_id": non_blank_string_schema()})
             ),
             json!(["tab_id", "expression", "appshot_id"]),
+        ));
+    }
+    if surfaces.browser && browser_ranking_enabled {
+        tools.as_array_mut().expect("tool array").push(grouped_tool_with_constraints(
+            "browser_rank",
+            "Rank visible elements in a claimed browser tab for an intent. Returns advisory candidates and a fresh AppShot; verify the result before acting. Optional exact_name and exact_role select an exact semantic match.",
+            READ_ONLY_TOOL,
+            browser_rank_properties(),
+            json!(["tab_id", "intent"]),
+            json!({"allOf": [{"if": {"required": ["exact_role"]}, "then": {"required": ["exact_name"]}}]}),
         ));
     }
     tools.as_array_mut().expect("tool array").retain(|tool| {

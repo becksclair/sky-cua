@@ -14,6 +14,7 @@ qrcode.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sky-cua-platform = { path = "../sky-cua-platform" }
+sky-cua-model-client = { path = "../sky-cua-model-client" }
 tokio = { workspace = true, features = ["io-std"] }
 tracing.workspace = true
 tracing-log.workspace = true

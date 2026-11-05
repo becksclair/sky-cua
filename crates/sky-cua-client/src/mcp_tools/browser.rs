@@ -581,7 +581,7 @@ pub(super) fn handle_tool_call(
     }
 }
 
-fn browser_service_request(
+pub(super) fn browser_service_request(
     request: BrowserRequest,
     identity: Option<&sky_cua_platform::BrowserSessionIdentity>,
 ) -> ServiceRequest {

@@ -202,6 +202,7 @@ fn read_only_tools_never_mutate_per_their_own_hints() {
 pub(super) fn process_config(browser_eval_enabled: bool) -> McpProcessConfig {
     McpProcessConfig {
         browser_eval_enabled,
+        browser_ranking_enabled: false,
         surfaces: sky_cua_platform::config::AgentSurfacePolicy::default(),
         model_supports_images_override: None,
         diagnostics: Vec::new(),
@@ -250,6 +251,7 @@ pub(super) fn process_config_with_surfaces(
 ) -> McpProcessConfig {
     McpProcessConfig {
         browser_eval_enabled,
+        browser_ranking_enabled: false,
         surfaces: sky_cua_platform::config::AgentSurfacePolicy {
             desktop,
             browser,
@@ -1438,4 +1440,194 @@ fn fixture_path(name: &str) -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join(name)
+}
+
+#[test]
+fn browser_ranking_registry_requires_opt_in_and_browser_surface() {
+    let model = ModelSessionInfo::default();
+    for browser in [false, true] {
+        for enabled in [false, true] {
+            let mut process = process_config_with_surfaces(true, browser, false, false);
+            process.browser_ranking_enabled = enabled;
+            let registry = build_tool_registry(&process, &model);
+            assert_eq!(registry.contains("browser_rank"), browser && enabled);
+            assert_eq!(
+                registry.inactive_reason("browser_rank"),
+                (browser && !enabled).then_some(InactiveToolReason::BrowserRankingDisabled)
+            );
+            if browser && enabled {
+                let tools = registry.tools_list_result();
+                let tool = tools["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|tool| tool["name"] == "browser_rank")
+                    .unwrap();
+                assert_eq!(tool["annotations"]["readOnlyHint"], true);
+            }
+        }
+    }
+}
+
+#[test]
+fn browser_ranking_schema_accepts_only_bounded_advisory_inputs() {
+    let mut process = process_config(false);
+    process.browser_ranking_enabled = true;
+    let registry = build_tool_registry(&process, &ModelSessionInfo::default());
+    for arguments in [
+        json!({"tab_id": "tab-1", "intent": "save changes"}),
+        json!({"target": "user_chrome", "tab_id": "tab-1", "intent": "save changes", "exact_name": "Save"}),
+        json!({"tab_id": "tab-1", "intent": "save changes", "exact_name": "Save", "exact_role": "button"}),
+    ] {
+        assert!(
+            registry
+                .validate_arguments("browser_rank", &arguments)
+                .is_ok(),
+            "{arguments}"
+        );
+    }
+    for arguments in [
+        json!({"tab_id": "tab-1"}),
+        json!({"intent": "save changes"}),
+        json!({"tab_id": " ", "intent": "save changes"}),
+        json!({"tab_id": "tab-1", "intent": "\n "}),
+        json!({"tab_id": "tab-1", "intent": "save", "exact_name": ""}),
+        json!({"tab_id": "tab-1", "intent": "save", "exact_name": "Save", "exact_role": " "}),
+        json!({"tab_id": "tab-1", "intent": "save", "exact_role": "button"}),
+        json!({"tab_id": "tab-1", "intent": "save", "target": "other"}),
+        json!({"tab_id": "tab-1", "intent": "save", "x": 10}),
+    ] {
+        assert!(
+            registry
+                .validate_arguments("browser_rank", &arguments)
+                .is_err(),
+            "{arguments}"
+        );
+    }
+}
+
+#[test]
+fn browser_ranking_runtime_config_defaults_off_and_rejects_invalid_values() {
+    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    unsafe {
+        std::env::set_var("SKY_CUA_CONFIG_PATH", "");
+        std::env::remove_var("SKY_CUA_SURFACES");
+        std::env::remove_var("SKY_CUA_PHONE");
+        std::env::remove_var("SKY_CUA_BROWSER_RANKING");
+    }
+    assert!(
+        !mcp_process_config_from_env()
+            .unwrap()
+            .browser_ranking_enabled
+    );
+    for (value, enabled) in [
+        ("1", true),
+        ("true", true),
+        ("on", true),
+        ("0", false),
+        ("false", false),
+        ("off", false),
+        ("perhaps", false),
+    ] {
+        unsafe { std::env::set_var("SKY_CUA_BROWSER_RANKING", value) };
+        let config = mcp_process_config_from_env().unwrap();
+        assert_eq!(config.browser_ranking_enabled, enabled);
+        assert_eq!(
+            config.diagnostics.iter().any(|diagnostic| matches!(
+                diagnostic,
+                McpConfigDiagnostic::BrowserRankingValueInvalid { .. }
+            )),
+            value == "perhaps"
+        );
+    }
+    unsafe {
+        std::env::remove_var("SKY_CUA_BROWSER_RANKING");
+        std::env::remove_var("SKY_CUA_CONFIG_PATH");
+    }
+}
+
+#[test]
+fn browser_ranking_runtime_config_resolves_env_then_machine() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let path = std::env::temp_dir().join(format!(
+        "sky-cua-browser-ranking-config-{}.toml",
+        std::process::id()
+    ));
+    let path_text = path.to_string_lossy();
+    let _env = EnvGuard::set(&[
+        ("SKY_CUA_CONFIG_PATH", Some(&path_text)),
+        ("SKY_CUA_BROWSER_RANKING", None),
+        ("SKY_CUA_SURFACES", None),
+        ("SKY_CUA_PHONE", None),
+    ]);
+
+    for enabled in [false, true] {
+        fs::write(&path, format!("browser_ranking = {enabled}\n")).expect("write config");
+        let config = mcp_process_config_from_env().expect("machine config resolves");
+        assert_eq!(config.browser_ranking_enabled, enabled);
+        assert!(!config.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic,
+            McpConfigDiagnostic::BrowserRankingValueInvalid { .. }
+        )));
+
+        let override_value = if enabled { "0" } else { "1" };
+        let _override = EnvGuard::set(&[("SKY_CUA_BROWSER_RANKING", Some(override_value))]);
+        assert_eq!(
+            mcp_process_config_from_env()
+                .expect("environment override resolves")
+                .browser_ranking_enabled,
+            !enabled
+        );
+    }
+
+    let _override = EnvGuard::set(&[("SKY_CUA_BROWSER_RANKING", Some("perhaps"))]);
+    let config = mcp_process_config_from_env().expect("invalid override resolves disabled");
+    assert!(!config.browser_ranking_enabled);
+    assert!(
+        config
+            .diagnostics
+            .contains(&McpConfigDiagnostic::BrowserRankingValueInvalid {
+                value: "perhaps".to_string(),
+            })
+    );
+    fs::remove_file(path).expect("remove config fixture");
+}
+
+struct EnvGuard {
+    saved: Vec<(String, Option<std::ffi::OsString>)>,
+}
+
+impl EnvGuard {
+    fn set(pairs: &[(&str, Option<&str>)]) -> Self {
+        let saved = pairs
+            .iter()
+            .map(|(key, value)| {
+                let prior = std::env::var_os(key);
+                // SAFETY: env-mutating tests run in separate nextest processes;
+                // ENV_LOCK also serializes these tests within this module.
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+                ((*key).to_string(), prior)
+            })
+            .collect();
+        Self { saved }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for (key, prior) in &self.saved {
+            // SAFETY: same process isolation and module lock as Self::set.
+            unsafe {
+                match prior {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
 }

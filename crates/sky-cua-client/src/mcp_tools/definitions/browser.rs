@@ -208,3 +208,15 @@ pub(super) fn browser_url_schema() -> Value {
         "pattern": "^(https?://[^\\s]+|about:blank)$"
     })
 }
+
+/// Ranking inputs deliberately keep action fields out of the advisory tool.
+pub(super) fn browser_rank_properties() -> Value {
+    merge_properties(
+        browser_tab_properties(),
+        json!({
+            "intent": non_blank_string_schema(),
+            "exact_name": non_blank_string_schema(),
+            "exact_role": non_blank_string_schema()
+        }),
+    )
+}

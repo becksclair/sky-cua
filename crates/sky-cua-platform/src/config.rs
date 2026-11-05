@@ -96,6 +96,8 @@ pub struct MachineConfig {
     /// Chrome-family browser selection: `brave`, `chrome`, `chromium`, or
     /// `all`. Unset means probe every Chrome-family browser.
     pub browser: Option<String>,
+    /// Opt in to advisory browser target ranking. Absent means disabled.
+    pub browser_ranking: Option<bool>,
     /// Agent-facing MCP surfaces. Absent means all three are enabled.
     #[serde(default)]
     pub surfaces: AgentSurfaceConfig,
@@ -881,6 +883,21 @@ mod tests {
     fn parses_browser_selection() {
         let config = parse_machine_config("browser = \"brave\"\n").expect("valid config");
         assert_eq!(config.browser.as_deref(), Some("brave"));
+    }
+
+    #[test]
+    fn parses_optional_browser_ranking() {
+        assert_eq!(
+            parse_machine_config("")
+                .expect("empty config")
+                .browser_ranking,
+            None
+        );
+        for enabled in [false, true] {
+            let config = parse_machine_config(&format!("browser_ranking = {enabled}\n"))
+                .expect("valid config");
+            assert_eq!(config.browser_ranking, Some(enabled));
+        }
     }
 
     #[test]

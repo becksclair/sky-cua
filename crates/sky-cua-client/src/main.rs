@@ -1,4 +1,5 @@
 mod app_state;
+mod browser_rank_models;
 mod daemon_log;
 #[cfg(unix)]
 mod daemon_singleton;

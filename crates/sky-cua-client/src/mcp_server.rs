@@ -1708,6 +1708,7 @@ mod tests {
     fn browser_open_without_arguments_still_prepares_browser_context() {
         let process = McpProcessConfig {
             browser_eval_enabled: true,
+            browser_ranking_enabled: false,
             surfaces: AgentSurfacePolicy::default(),
             model_supports_images_override: None,
             diagnostics: Vec::new(),
