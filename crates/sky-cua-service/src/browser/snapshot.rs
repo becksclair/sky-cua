@@ -71,6 +71,9 @@ pub(super) const BROWSER_SNAPSHOT_EXPRESSION_TEMPLATE: &str = r#"
       value: safeValue(el),
       href,
       disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true'),
+      // Transparent native inputs can be hit targets for custom-drawn controls.
+      // Null when the API is unavailable; consumers requiring visibility fail closed.
+      visible: typeof el.checkVisibility === 'function' ? el.checkVisibility({ checkVisibilityCSS: true }) : null,
       bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
       ref
     };
