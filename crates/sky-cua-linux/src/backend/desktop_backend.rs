@@ -52,9 +52,16 @@ impl DesktopBackend for LinuxDesktopBackend {
         // and pure inheritance is the leak-safety guarantee: do NOT set or mutate
         // any display/session variable here, or a launched toolkit app could
         // escape onto the user's live session.
+        //
+        // The two accessibility toggles below are not display/session identity:
+        // they make Chromium/Electron expose AT-SPI regardless of when session
+        // accessibility was enabled, and undo a `NO_AT_BRIDGE=1` inherited from
+        // an Electron agent host that would otherwise disable GTK's bridge.
         let mut process = tokio::process::Command::new(command);
         process
             .args(args)
+            .env("ACCESSIBILITY_ENABLED", "1")
+            .env_remove("NO_AT_BRIDGE")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -591,6 +598,17 @@ impl DesktopBackend for LinuxDesktopBackend {
                         "No exact AT-SPI window correlation was available.",
                         Some(reason.to_string()),
                     );
+                    if reason == NO_ROOT_FOR_PID_REASON
+                        && let Some(pid) = current_window.pid
+                    {
+                        let (message, details) =
+                            crate::atspi::status::app_not_registered_diagnostic(pid).await;
+                        diagnostics.push_code(
+                            crate::atspi::status::APP_NOT_REGISTERED_CODE,
+                            message,
+                            Some(details),
+                        );
+                    }
                     Vec::new()
                 }
                 WindowAccessibilityMatch::Ambiguous {

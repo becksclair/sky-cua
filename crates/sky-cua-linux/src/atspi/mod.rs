@@ -1,6 +1,7 @@
 pub mod actions;
 mod repair;
 pub mod snapshot;
+pub(crate) mod status;
 pub mod tree;
 
 use std::time::Duration;

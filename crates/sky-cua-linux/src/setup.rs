@@ -37,10 +37,19 @@ where
     let accessibility_command = if was_ready {
         SetupCommandReport {
             ok: true,
-            detail: "GNOME accessibility is already enabled".to_string(),
+            detail: "Session accessibility is already enabled".to_string(),
         }
     } else {
-        run_gsettings_toolkit_accessibility()
+        // gsettings persists the GNOME preference; IsEnabled is the runtime
+        // switch every toolkit actually reads (and the only one on KDE).
+        let gsettings = run_gsettings_toolkit_accessibility();
+        let session = enable_session_accessibility().await;
+        // Only the IsEnabled write makes trees appear; a gsetting write alone
+        // can succeed on a key nothing reads (KDE), so it never sets `ok`.
+        SetupCommandReport {
+            ok: session.ok,
+            detail: format!("{}; {}", session.detail, gsettings.detail),
+        }
     };
     let after = doctor_fn().await?;
     let after_accessibility = after.accessibility.as_ref();
@@ -165,6 +174,29 @@ fn setup_window_targeting_message(
         "GNOME Shell extension files were installed, but enabling the extension failed.".to_string()
     } else {
         "GNOME Shell extension files were installed and enable was requested, but GNOME Shell may need a reload or login restart before serving the DBus API.".to_string()
+    }
+}
+
+async fn enable_session_accessibility() -> SetupCommandReport {
+    if cfg!(test) {
+        return SetupCommandReport {
+            ok: false,
+            detail: "org.a11y.Status.IsEnabled assertion skipped in tests".to_string(),
+        };
+    }
+    match crate::atspi::status::assert_enabled().await {
+        Ok(true) => SetupCommandReport {
+            ok: true,
+            detail: "org.a11y.Status.IsEnabled set to true".to_string(),
+        },
+        Ok(false) => SetupCommandReport {
+            ok: false,
+            detail: "org.a11y.Status.IsEnabled is false and could not be set".to_string(),
+        },
+        Err(error) => SetupCommandReport {
+            ok: false,
+            detail: error,
+        },
     }
 }
 
@@ -518,7 +550,7 @@ mod tests {
         );
         assert_eq!(
             report.accessibility_command.detail,
-            "GNOME accessibility is already enabled"
+            "Session accessibility is already enabled"
         );
         assert!(!report.changed);
         assert!(!report.requires_restart);
@@ -535,7 +567,7 @@ mod tests {
         // In a non-GNOME test environment, gsettings set will likely fail.
         // The important thing is that we attempted it rather than skipping.
         assert!(
-            report.accessibility_command.detail != "GNOME accessibility is already enabled",
+            report.accessibility_command.detail != "Session accessibility is already enabled",
             "should attempt gsettings when not already enabled"
         );
     }

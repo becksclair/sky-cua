@@ -4,6 +4,10 @@ use super::discovery::{AccessibleTopLevel, DiscoveredApp};
 use crate::backend::{dimensions_approximately_match, near_zero};
 
 const MIN_BOUNDS_IOU: f64 = 0.80;
+/// `Unavailable` reason when no AT-SPI application root carries the window's
+/// client PID: the process never registered with the accessibility bus.
+pub(crate) const NO_ROOT_FOR_PID_REASON: &str =
+    "no AT-SPI application root had the compositor client PID";
 const MIN_BOUNDS_IOU_MARGIN: f64 = 0.50;
 
 #[derive(Debug)]
@@ -46,7 +50,7 @@ pub(crate) fn match_window_accessibility<'a>(
         [app] => *app,
         [] => {
             return WindowAccessibilityMatch::Unavailable {
-                reason: "no AT-SPI application root had the compositor client PID",
+                reason: NO_ROOT_FOR_PID_REASON,
             };
         }
         candidates => {

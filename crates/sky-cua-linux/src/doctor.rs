@@ -322,7 +322,16 @@ fn at_spi_enabled_check() -> DoctorCheck {
             "IsEnabled",
         ])
         .output();
-    command_check("at_spi_enabled", output, "AT-SPI is enabled")
+    at_spi_enabled_from_output(output)
+}
+
+/// `ok` reflects the property value, not merely that `gdbus` ran: Qt and
+/// Chromium key AT-SPI registration off `IsEnabled`, so `(<false>,)` means no
+/// tree will be exposed regardless of the GNOME `toolkit-accessibility` key.
+fn at_spi_enabled_from_output(output: std::io::Result<std::process::Output>) -> DoctorCheck {
+    let mut check = command_check("at_spi_enabled", output, "AT-SPI is enabled");
+    check.ok = check.ok && check.detail.contains("<true>");
+    check
 }
 
 fn screen_reader_check() -> DoctorCheck {
@@ -558,14 +567,11 @@ pub(crate) fn format_command_output(stdout: &[u8], stderr: &[u8], fallback: &str
     fallback.to_string()
 }
 
+/// Requires session `IsEnabled`; the GNOME `toolkit-accessibility` key alone
+/// is not enough (on GNOME the bus launcher mirrors it into `IsEnabled`, and
+/// elsewhere nothing reads it once the D-Bus property is readable).
 pub(crate) fn can_build_accessibility_tree(accessibility: &DoctorAccessibilityReport) -> bool {
-    accessibility.atspi_bus.ok
-        && (check_detail_contains_true(&accessibility.at_spi_enabled)
-            || check_detail_contains_true(&accessibility.toolkit_accessibility))
-}
-
-fn check_detail_contains_true(check: &DoctorCheck) -> bool {
-    check.ok && check.detail.to_ascii_lowercase().contains("true")
+    accessibility.atspi_bus.ok && accessibility.at_spi_enabled.ok
 }
 
 fn ydotool_socket_candidates() -> Vec<PathBuf> {
@@ -758,7 +764,7 @@ mod tests {
     }
 
     #[test]
-    fn accessibility_tree_is_ready_when_bus_and_toolkit_are_ready() {
+    fn toolkit_accessibility_alone_does_not_make_the_tree_ready() {
         let report = accessibility_report(
             DoctorCheck {
                 name: "atspi_bus".to_string(),
@@ -777,7 +783,7 @@ mod tests {
             },
         );
 
-        assert!(can_build_accessibility_tree(&report));
+        assert!(!can_build_accessibility_tree(&report));
     }
 
     #[test]
@@ -801,6 +807,23 @@ mod tests {
         );
 
         assert!(can_build_accessibility_tree(&report));
+    }
+
+    #[test]
+    fn at_spi_enabled_check_reads_the_property_value() {
+        use std::os::unix::process::ExitStatusExt;
+        let output = |stdout: &str| {
+            Ok(std::process::Output {
+                status: std::process::ExitStatus::from_raw(0),
+                stdout: stdout.as_bytes().to_vec(),
+                stderr: Vec::new(),
+            })
+        };
+        let disabled = at_spi_enabled_from_output(output("(<false>,)\n"));
+        assert!(!disabled.ok);
+        assert_eq!(disabled.detail, "(<false>,)");
+        assert!(at_spi_enabled_from_output(output("(<true>,)\n")).ok);
+        assert!(!at_spi_enabled_from_output(Err(std::io::Error::other("no gdbus"))).ok);
     }
 
     #[test]
@@ -832,25 +855,5 @@ mod tests {
         let result = socket_connect_result(&missing);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("missing"));
-    }
-
-    #[test]
-    fn check_detail_contains_true_matches_lowercase_true() {
-        let check = DoctorCheck {
-            name: "test".to_string(),
-            ok: true,
-            detail: "(<true>,)".to_string(),
-        };
-        assert!(check_detail_contains_true(&check));
-    }
-
-    #[test]
-    fn check_detail_contains_true_rejects_false_detail() {
-        let check = DoctorCheck {
-            name: "test".to_string(),
-            ok: true,
-            detail: "(<false>,)".to_string(),
-        };
-        assert!(!check_detail_contains_true(&check));
     }
 }

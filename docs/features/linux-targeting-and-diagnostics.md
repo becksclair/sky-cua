@@ -35,6 +35,24 @@ setup messages that say exactly which state the extension install reached.
   GNOME Shell reload or re-login; exact targeting live now.
 - Windowing backend `list_note` strings state that terminal windows may
   include terminal process context when the process tree is readable.
+- Session accessibility enablement (2026-11-05): the Linux backend sets
+  `org.a11y.Status.IsEnabled=true` on the session bus at construction (daemon
+  start, which MCP clients trigger at session start) and before every fresh
+  AT-SPI connection. It never restores the previous value. `doctor`
+  `accessibility.at_spi_enabled.ok` reflects the property value, and
+  `readiness.can_build_accessibility_tree` requires it; the GNOME
+  `toolkit-accessibility` key alone no longer counts. `setup_accessibility`
+  asserts `IsEnabled` as well as the gsetting.
+- `AccessibilityAppNotRegistered` diagnostic: emitted next to
+  `AccessibilityCoverageLimited` when a window's client PID has no AT-SPI
+  application root. `details` is
+  `pid=; sandboxed=true|false; at_spi_enabled=true|false|unknown; enabled_by=sky-cua|other|unknown;
+  process_started_before_enablement=true|false|unknown;
+  cause=started_before_enablement|at_spi_disabled|no_at_spi_bridge|unknown;
+  remedy=relaunch_app|setup_accessibility|none|unknown`, comparing the
+  process start time (`/proc/<pid>/stat`) with the boot-relative time sky-cua
+  flipped `IsEnabled`. Sandboxed (Flatpak/Snap cgroup) processes register
+  through a proxy PID, so they always classify as `cause=unknown`.
 - Operator probes: `sky-cua-client doctor`, `list-windows`,
   `focused-window` (`crates/sky-cua-client/src/operator_cli.rs`); degraded
   states exit non-zero.
@@ -62,6 +80,15 @@ setup messages that say exactly which state the extension install reached.
   (`enrich_accessible_apps_from_windows`).
 - All-app discovery for `list_apps` is unchanged; prefiltering applies only
   to targeted snapshots.
+- Toolkits read `IsEnabled` differently: Qt and at-spi2-atk watch it and
+  register within seconds of a flip; Chromium/Electron check
+  `ACCESSIBILITY_ENABLED`/`GNOME_ACCESSIBILITY`/`QT_ACCESSIBILITY`, then
+  `IsEnabled`, once at startup (`ui/accessibility/platform/atk_util_auralinux.cc`).
+  A Chromium started while it was `false` stays absent from the registry until
+  relaunched, which is what `cause=started_before_enablement` reports. On KDE,
+  COSMIC, Hyprland and plain X11 nothing else sets `IsEnabled` after login.
+  `desktop_launch_app` children get `ACCESSIBILITY_ENABLED=1` and have an
+  inherited `NO_AT_BRIDGE` removed.
 - Window-title targeting (`crates/sky-cua-linux/src/windowing/target.rs`)
   treats an exact case-insensitive full-title match as window identity: when
   the title matches one or more windows exactly, the focused window wins ties
@@ -81,7 +108,10 @@ setup messages that say exactly which state the extension install reached.
 - `crates/sky-cua-linux/src/app_match.rs` — `select_app`,
   `selector_match_score`, window enrichment
 - `crates/sky-cua-linux/src/backend.rs` — targeted snapshot selection path
-- `crates/sky-cua-linux/src/setup.rs` — `setup_window_targeting_message`
+- `crates/sky-cua-linux/src/setup.rs` — `setup_window_targeting_message`,
+  `enable_session_accessibility`
+- `crates/sky-cua-linux/src/atspi/status.rs` — `IsEnabled` assertion,
+  enablement record, `AccessibilityAppNotRegistered` classification
 - `crates/sky-cua-linux/src/windowing/registry.rs` — backend `list_note`
   wording
 

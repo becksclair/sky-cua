@@ -14,7 +14,7 @@ use sky_cua_platform::model::{
 };
 use sky_cua_platform::{AppInfo, new_snapshot_id};
 use tokio::sync::Mutex;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::actions::runtime::{
     SemanticActionInvocation, SemanticAtspiAction, SemanticSetValueResult,
@@ -27,7 +27,9 @@ use crate::app_match::{
 };
 use crate::app_policy::{AppActionPolicies, ResolvedSetValueFallbackPolicy};
 use crate::apps::discovery::{DiscoveredApp, discover_apps};
-use crate::apps::window_correlation::{WindowAccessibilityMatch, match_window_accessibility};
+use crate::apps::window_correlation::{
+    NO_ROOT_FOR_PID_REASON, WindowAccessibilityMatch, match_window_accessibility,
+};
 use crate::atspi::{
     RepairCoordinator, actions as atspi_actions, connect_attempt, connect_with_repair,
     snapshot::{snapshot_for_app, snapshot_for_top_level},
@@ -96,6 +98,11 @@ impl LinuxDesktopBackend {
             || std::env::var_os("KDE_FULL_SESSION").is_some()
         {
             std::thread::spawn(crate::kwin::warm_scripting_probe);
+        }
+        // Turn session accessibility on as early as possible: Chromium and
+        // Electron apps decide once at startup whether to expose AT-SPI.
+        if !cfg!(test) {
+            crate::atspi::status::spawn_startup_assertion();
         }
         Self {
             portal: RemoteDesktopSessionManager::new(),
@@ -233,6 +240,13 @@ impl LinuxDesktopBackend {
             return Ok(connection.clone());
         }
 
+        // A fresh connection may follow an a11y bus restart, which resets
+        // IsEnabled; re-assert it before reconnecting.
+        if !cfg!(test)
+            && let Err(error) = crate::atspi::status::assert_enabled().await
+        {
+            debug!(%error, "could not re-assert session accessibility before AT-SPI connect");
+        }
         let connection =
             connect_with_repair(&self.atspi_repair, connect_attempt, connect_attempt).await?;
         *guard = Some(connection.clone());

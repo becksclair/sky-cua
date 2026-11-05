@@ -12,3 +12,4 @@ Load this reference only for Linux, KDE/KWin, XWayland, or native Wayland behavi
 - If semantic click wedges and the visible target is clear, click coordinates.
 - Treat `SessionEnvRepaired` as context, not error.
 - On Linux, check `doctor.session_env` before judging a thin app list or missing capture/input as desktop unavailable.
+- `AccessibilityAppNotRegistered` with `remedy=relaunch_app`: the app (typically Chromium/Electron) started before session accessibility was on; relaunch it, or launch GUI apps via `desktop_launch_app` or with `ACCESSIBILITY_ENABLED=1` from the shell.

@@ -140,6 +140,12 @@ and the idle auto-hide watchdog chain are documented in
 
 - Cache the AT-SPI connection in the Linux backend; reopening per request
   can wedge under portal-driven loops.
+- `org.a11y.Status.IsEnabled` is `false` after a KDE login and gates every
+  Qt/Chromium AT-SPI tree; sky-cua sets it at daemon start. A Chromium app
+  started while it was `false` never registers (no root for its PID) until
+  relaunched; `ACCESSIBILITY_ENABLED=1` at launch sidesteps the ordering.
+  Inherited `NO_AT_BRIDGE=1`/`CHROME_DESKTOP` from an Electron agent host do
+  not block Chromium AT-SPI, but `CHROME_DESKTOP` rewrites its KWin `app_id`.
 - Selector matching is score-based: PID dominates; class/instance/executable
   names, desktop-file stem, exact title, and focus all rank. Never
   title-only correlation — KDE service roots (`ksmserver`, `kaccess`) steal
