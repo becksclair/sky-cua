@@ -78,7 +78,11 @@ Current MCP browser entrypoints:
   with requested text, element, and image work. The returned browser AppShot
   carries `capture_outcome`; `deadline_exceeded` with `retryable=true` is safe
   to retry once, while bridge attachment failures are a separate non-retryable
-  state. The browser capture also carries `readiness`: `ready` means the
+  state. A screenshot that times out at its 1 s per-capture cap after page
+  semantics were captured returns `partial`, `retryable=false`, with a
+  `BrowserPixelsUnavailable` diagnostic: the window is likely minimized and
+  produced no frame, so retrying rarely helps; restore it first (for example
+  with `activate_window`). The browser capture also carries `readiness`: `ready` means the
   document had an interactive/complete readyState and a body at capture time,
   `loading` means it did not, and `unknown` means the metadata probe did not
   complete. Readiness does not claim network idle or SPA hydration stability.

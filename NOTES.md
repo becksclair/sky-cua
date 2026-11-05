@@ -80,8 +80,26 @@ dumps. Per-feature artifact paths live in
   (shipped in the same batch as the key, and cursor-safe for navigation keys).
 - KDE Screenshot portal returns a local `file://` URI; copy it into
   `/run/user/<uid>/sky-cua/captures/`.
-- KDE Screenshot portal returns a local `file://` URI; copy it into
-  `/run/user/<uid>/sky-cua/captures/`.
+- Browser screenshots of a minimized Chrome-family window can stall:
+  `Page.captureScreenshot` waits for a compositor frame that never comes. On
+  KWin 6.8 this is reliable when Chromium minimized itself (DevTools
+  `Browser.setWindowBounds`, as test harnesses do: ~10 of 12 hangs regardless
+  of `captureBeyondViewport`/`clip`), but rare when KWin minimized it (the user
+  clicking minimize: fresh frames after 10-30s, one transient hang ~1s after
+  minimizing). Windows fully covered by another window keep rendering (6/6
+  fresh captures). The capture is capped at 1s
+  (`SCREENSHOT_COMMAND_TIMEOUT_MS`, `browser/cdp.rs`); wedge recovery then
+  re-attaches and replays, so a hidden-window observe costs ~1.2s with an image,
+  or ~2.0s as a non-retryable `partial` with a `BrowserPixelsUnavailable`
+  diagnostic when the replay also times out, instead of ~6s.
+  `fromSurface: false` does not rescue it (hung in 3 of 4 minimized tries).
+  A KWin-script reveal (unminimize, raise, re-minimize; `opacity = 0` avoids a
+  visible flash) costs ~30ms and keeps focus, but is not wired in because real
+  hidden windows rarely stall. Disposable test Chromium has no WebGL, so
+  WebGL fixtures render blank there. Healthy visible captures take ~0.15-0.2s,
+  including under `--disable-gpu-compositing`. Occlusion flags (`--disable-backgrounding-occluded-windows`)
+  do not help. Daemon log signature: `recovering wedged browser debugger
+  session ... waiting for CDP command Page.captureScreenshot`.
 
 ## KWin cursor shim
 

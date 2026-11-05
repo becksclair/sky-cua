@@ -639,12 +639,18 @@ pub(crate) async fn observe_appshot_with_identity(
             }
             Ok(_) => unreachable!("screenshot action returns screenshot result"),
             Err(diagnostic) => {
+                // A consistency retry falls back to the first attempt's envelope,
+                // which already has pixels; only a pixel-less result gets the hint.
+                let semantics_without_pixels =
+                    progress.snapshot.is_some() && progress.last_envelope.is_none();
+                let (diagnostic, deadline_exceeded) =
+                    pixels_failure(diagnostic, semantics_without_pixels, deadline);
                 return progress_response(
                     progress,
                     deadline,
                     timeout_ms,
-                    diagnostic.clone(),
-                    is_capture_deadline(&diagnostic, deadline),
+                    diagnostic,
+                    deadline_exceeded,
                 );
             }
         };
@@ -938,6 +944,37 @@ fn is_capture_deadline(diagnostic: &DiagnosticEntry, deadline: TokioInstant) -> 
         || diagnostic.code == "BrowserBridgeRequestTimedOut"
         || (diagnostic.code == "BrowserBridgeRequestFailed"
             && diagnostic.message.contains("Timed out after"))
+}
+
+/// Classify a failed screenshot. A capture that hits its per-command cap while
+/// the aggregate budget remains, with page semantics captured and no pixels
+/// from an earlier attempt, means the page produced no compositor frame, which
+/// on KDE Wayland happens to a minimized browser window (covered windows keep
+/// rendering). Retrying immediately rarely helps, so this reports partial,
+/// non-retryable evidence with an actionable hint instead of claiming the
+/// aggregate deadline expired. Returns the diagnostic and whether the outcome
+/// is a deadline failure.
+fn pixels_failure(
+    diagnostic: DiagnosticEntry,
+    semantics_without_pixels: bool,
+    deadline: TokioInstant,
+) -> (DiagnosticEntry, bool) {
+    let timed_out = is_capture_deadline(&diagnostic, deadline);
+    if semantics_without_pixels && timed_out && TokioInstant::now() < deadline {
+        return (
+            DiagnosticEntry {
+                code: "BrowserPixelsUnavailable".into(),
+                message: "The page rendered no frame for the screenshot, so its browser window is \
+                          likely minimized. Page text and elements were captured. To capture \
+                          pixels, restore the browser window (for example with activate_window) \
+                          and observe again."
+                    .into(),
+                details: Some(diagnostic.message),
+            },
+            false,
+        );
+    }
+    (diagnostic, timed_out)
 }
 
 fn deadline_diagnostic(phase: &str, timeout_ms: u64) -> DiagnosticEntry {
@@ -1963,6 +2000,91 @@ mod appshot_capture_tests {
             artifact.file_name().and_then(|name| name.to_str())
         );
         let _ = std::fs::remove_file(artifact);
+    }
+
+    #[test]
+    fn capped_screenshot_timeout_with_semantics_reports_hidden_window_hint() {
+        let capped_timeout = || DiagnosticEntry {
+            code: "BrowserBridgeRequestFailed".into(),
+            message: "Timed out after 1000ms waiting for CDP command Page.captureScreenshot."
+                .into(),
+            details: None,
+        };
+        let budget_left = TokioInstant::now() + Duration::from_secs(5);
+
+        let (hint, deadline_exceeded) = pixels_failure(capped_timeout(), true, budget_left);
+        assert_eq!(hint.code, "BrowserPixelsUnavailable");
+        assert!(hint.message.contains("activate_window"));
+        assert_eq!(hint.details, Some(capped_timeout().message));
+        assert!(!deadline_exceeded);
+
+        let mut progress = CaptureProgress::new("tab-1".into(), false, None);
+        progress.phase = Some("pixels".into());
+        progress.snapshot = Some(BrowserSnapshotResponse {
+            target: BrowserTargetKind::UserChrome,
+            tab_id: "tab-1".into(),
+            title: Some("Page".into()),
+            url: Some("https://example.test/".into()),
+            snapshot: Some(serde_json::json!({"text": "Page", "elements": []})),
+            diagnostics: Vec::new(),
+        });
+        let response = progress_response(progress, budget_left, 6_000, hint, deadline_exceeded);
+        let AppShotCapture::Browser {
+            capture_outcome, ..
+        } = &response.appshot.capture
+        else {
+            panic!("expected browser AppShot");
+        };
+        assert_eq!(capture_outcome.status, AppShotBrowserCaptureStatus::Partial);
+        assert!(!capture_outcome.retryable);
+        assert_eq!(capture_outcome.timeout_ms, None);
+        assert!(response.appshot.coverage.semantics_complete);
+        assert!(!response.appshot.coverage.pixels_complete);
+        assert_eq!(
+            response
+                .appshot
+                .diagnostics
+                .first()
+                .map(|d| d.code.as_str()),
+            Some("BrowserPixelsUnavailable")
+        );
+        assert!(
+            !response
+                .appshot
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "BrowserCaptureDeadlineExceeded")
+        );
+    }
+
+    #[test]
+    fn screenshot_failures_without_the_hidden_window_signature_keep_their_outcome() {
+        let timeout = DiagnosticEntry {
+            code: "BrowserBridgeRequestTimedOut".into(),
+            message: "bridge read timed out".into(),
+            details: None,
+        };
+        let budget_left = TokioInstant::now() + Duration::from_secs(5);
+        let expired = TokioInstant::now();
+        // No semantics yet, or the aggregate deadline really expired: unchanged.
+        assert_eq!(
+            pixels_failure(timeout.clone(), false, budget_left),
+            (timeout.clone(), true)
+        );
+        assert_eq!(
+            pixels_failure(timeout.clone(), true, expired),
+            (timeout.clone(), true)
+        );
+        // Non-timeout failures are never relabelled as a hidden window.
+        let detached = DiagnosticEntry {
+            code: "BrowserBridgeRequestFailed".into(),
+            message: "The browser debugger is unattached.".into(),
+            details: None,
+        };
+        assert_eq!(
+            pixels_failure(detached.clone(), true, budget_left),
+            (detached, false)
+        );
     }
 
     #[test]
