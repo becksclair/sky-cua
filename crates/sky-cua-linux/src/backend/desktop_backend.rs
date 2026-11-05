@@ -713,6 +713,7 @@ impl DesktopBackend for LinuxDesktopBackend {
             let matched = linux_windowing::resolve_window_target(&windows, &target.into())?;
             linux_windowing::activate_window(matched).await?;
             let focused = linux_windowing::verify_window_focused(&environment, matched).await?;
+            linux_windowing::note_request_window_focused(&focused);
             diagnostics.push_code(
                 "WindowFocusVerified",
                 format!(

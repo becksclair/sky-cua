@@ -48,75 +48,83 @@ impl ServiceDaemon {
         );
         let deadline = tokio::time::Instant::now() + desktop_request_deadline();
         let capture_guard = Some(self.overlay.lock().await.prepare_for_capture());
+        // One request scope for the whole observe: target resolution, the
+        // targeted screenshot and AT-SPI correlation share one window listing
+        // per backend instead of relisting (~300 ms each on KWin).
         let capture = self
-            .with_desktop_deadline_until(deadline, async {
-                let resolved_window = if let Some(target) = target {
-                    let exact = self.backend.resolve_window_target(&target).await?;
-                    (
-                        WindowTarget {
-                            window_id: Some(exact.window_id.clone()),
-                            ..Default::default()
-                        },
-                        exact,
-                    )
-                } else {
-                    let window = self.backend.focused_window().await?.ok_or_else(|| {
+            .with_desktop_deadline_until(
+                deadline,
+                sky_cua_platform::request_scope::scope(async {
+                    let resolved_window = if let Some(target) = target {
+                        let exact = self.backend.resolve_window_target(&target).await?;
+                        (
+                            WindowTarget {
+                                window_id: Some(exact.window_id.clone()),
+                                ..Default::default()
+                            },
+                            exact,
+                        )
+                    } else {
+                        let window = self.backend.focused_window().await?.ok_or_else(|| {
+                            BackendError::new(
+                                BackendErrorCode::InvalidRequest,
+                                "frontmost AppShot capture could not resolve a focused window",
+                            )
+                        })?;
+                        (
+                            WindowTarget {
+                                window_id: Some(window.window_id.clone()),
+                                ..Default::default()
+                            },
+                            window,
+                        )
+                    };
+
+                    let mut snapshot = self
+                        .backend
+                        .screenshot(Some(resolved_window.0), None)
+                        .await?;
+                    let capture = snapshot.capture.as_ref().ok_or_else(|| {
                         BackendError::new(
-                            BackendErrorCode::InvalidRequest,
-                            "frontmost AppShot capture could not resolve a focused window",
+                            BackendErrorCode::Internal,
+                            "AppShot capture did not return capture metadata",
                         )
                     })?;
-                    (
-                        WindowTarget {
-                            window_id: Some(window.window_id.clone()),
-                            ..Default::default()
-                        },
-                        window,
-                    )
-                };
-
-                let mut snapshot = self
-                    .backend
-                    .screenshot(Some(resolved_window.0), None)
-                    .await?;
-                let capture = snapshot.capture.as_ref().ok_or_else(|| {
-                    BackendError::new(
-                        BackendErrorCode::Internal,
-                        "AppShot capture did not return capture metadata",
-                    )
-                })?;
-                if capture.capture_scope != CaptureScope::Window {
-                    return Err(BackendError::new(
-                        BackendErrorCode::CaptureBackendDowngraded,
-                        format!(
-                            "AppShot requires a target-window crop; backend returned {:?}",
-                            capture.capture_scope
-                        ),
-                    ));
-                }
-
-                let mut ax_read_succeeded = false;
-                if flags.include_ax_text {
-                    match self
-                        .backend
-                        .get_app_state_for_window(&resolved_window.1, CaptureScreenMode::Never)
-                        .await
-                    {
-                        Ok(ax_snapshot) => {
-                            ax_read_succeeded = !ax_snapshot.diagnostics.iter().any(|diagnostic| {
-                                matches!(
-                                    diagnostic.code.as_str(),
-                                    "AccessibilityUnavailable" | "AccessibilityCoverageLimited"
-                                )
-                            });
-                            snapshot.elements = ax_snapshot.elements;
-                            snapshot.diagnostics.extend(ax_snapshot.diagnostics);
-                        }
-                        Err(error) => snapshot.diagnostics.push(error.diagnostic()),
+                    if capture.capture_scope != CaptureScope::Window {
+                        return Err(BackendError::new(
+                            BackendErrorCode::CaptureBackendDowngraded,
+                            format!(
+                                "AppShot requires a target-window crop; backend returned {:?}",
+                                capture.capture_scope
+                            ),
+                        ));
                     }
-                }
-                Ok((snapshot, resolved_window.1, ax_read_succeeded))
-            })
+
+                    let mut ax_read_succeeded = false;
+                    if flags.include_ax_text {
+                        match self
+                            .backend
+                            .get_app_state_for_window(&resolved_window.1, CaptureScreenMode::Never)
+                            .await
+                        {
+                            Ok(ax_snapshot) => {
+                                ax_read_succeeded =
+                                    !ax_snapshot.diagnostics.iter().any(|diagnostic| {
+                                        matches!(
+                                            diagnostic.code.as_str(),
+                                            "AccessibilityUnavailable"
+                                                | "AccessibilityCoverageLimited"
+                                        )
+                                    });
+                                snapshot.elements = ax_snapshot.elements;
+                                snapshot.diagnostics.extend(ax_snapshot.diagnostics);
+                            }
+                            Err(error) => snapshot.diagnostics.push(error.diagnostic()),
+                        }
+                    }
+                    Ok((snapshot, resolved_window.1, ax_read_succeeded))
+                }),
+            )
             .await;
 
         let (mut snapshot, resolved_window, ax_read_succeeded) = match capture {

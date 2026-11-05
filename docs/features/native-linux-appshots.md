@@ -61,6 +61,15 @@ approval pending, denial, unsupported compositor, missing source geometry,
 and the shared desktop-request deadline preserve their existing stable
 service error codes.
 
+Target resolution, the targeted screenshot and the AT-SPI pass run inside one
+request scope (`sky_cua_platform::request_scope`): each window backend (KWin,
+X11, ...) is listed at most once per AppShot instead of three times (~300 ms per
+KWin listing), and the verified activation is written back into that listing
+(the target and its cross-backend alias focused, everything else unfocused).
+Focus verification and every request outside an AppShot still list fresh, and
+nothing is reused across requests; a window that closes between capture and
+the AT-SPI pass is therefore correlated against the capture-time listing.
+
 The whole operation runs in the serialized desktop lane under the existing
 server-side desktop deadline. The client may disconnect without leaving the
 lane permanently blocked; timeout recovery drops cached AT-SPI and portal
@@ -73,6 +82,9 @@ session state consistently with other desktop reads.
 - `crates/sky-cua-service/src/appshot.rs`
 - `crates/sky-cua-service/src/daemon/desktop.rs`
 - `crates/sky-cua-linux/src/backend/desktop_backend.rs`
+- `crates/sky-cua-platform/src/request_scope.rs`,
+  `crates/sky-cua-linux/src/windowing/request_memo.rs` — per-request window
+  listing reuse
 - `packages/sky-cua-js/src/targets/linux.ts`
 
 ## Verification

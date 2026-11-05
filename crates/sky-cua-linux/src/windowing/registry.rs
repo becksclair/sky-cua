@@ -7,6 +7,7 @@ use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::EnvironmentInfo;
 
 use super::probe::{BackendDescriptor, BackendProbe};
+use super::request_memo;
 use super::terminal::enrich_terminal_windows;
 use super::types::LinuxWindowInfo;
 use super::{cosmic, gnome_extension, gnome_introspect, hyprland, i3};
@@ -17,8 +18,8 @@ pub const KWIN_BACKEND: &str = "kwin";
 pub const X11_BACKEND: &str = "x11";
 pub const WINDOW_PERMISSION_HINT: &str = "Computer Use could not access a supported window list backend. Targeted window input requires session-bus access plus GNOME Shell Introspect, the GNOME Shell extension, the COSMIC Wayland helper, KWin/Plasma DBus scripting, Hyprland hyprctl, i3-msg, or X11 window metadata.";
 
-#[derive(Debug, Clone, Copy)]
-enum BackendKind {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BackendKind {
     GnomeExtension,
     GnomeIntrospect,
     Cosmic,
@@ -28,7 +29,7 @@ enum BackendKind {
     X11,
 }
 
-const BACKEND_ORDER: &[BackendKind] = &[
+pub(super) const BACKEND_ORDER: &[BackendKind] = &[
     BackendKind::GnomeExtension,
     BackendKind::GnomeIntrospect,
     BackendKind::Cosmic,
@@ -109,20 +110,43 @@ pub fn window_targeting_uses_gnome_extension(environment: &EnvironmentInfo) -> b
     backend_can_list_in_environment(BackendKind::GnomeExtension, environment)
 }
 
+/// Always lists fresh: callers poll this for state changes (focus
+/// verification) or report it directly (`list_windows`).
 pub async fn discover_windows(
     environment: &EnvironmentInfo,
 ) -> Result<Vec<LinuxWindowInfo>, BackendError> {
-    discover_all_windows(environment).await
+    discover_all_windows(environment, false).await
 }
 
+/// Reuses per-backend listings already made in the current
+/// [`request_scope`](sky_cua_platform::request_scope); fresh outside one.
 pub async fn discover_app_windows(
     environment: &EnvironmentInfo,
 ) -> Result<Vec<LinuxWindowInfo>, BackendError> {
-    discover_all_windows(environment).await
+    discover_all_windows(environment, true).await
+}
+
+/// One backend listing, served from the request memo when `reuse` is set and
+/// this request already listed the backend. Only successful listings are
+/// memoized, so a failed backend is retried by the next pass.
+async fn list_windows_for_request(
+    backend: BackendKind,
+    environment: &EnvironmentInfo,
+    reuse: bool,
+) -> Result<Vec<LinuxWindowInfo>, BackendError> {
+    if reuse && let Some(windows) = request_memo::cached(backend) {
+        return Ok(windows);
+    }
+    let windows = list_windows_for(backend, environment).await?;
+    if reuse {
+        request_memo::store(backend, &windows);
+    }
+    Ok(windows)
 }
 
 async fn discover_all_windows(
     environment: &EnvironmentInfo,
+    reuse: bool,
 ) -> Result<Vec<LinuxWindowInfo>, BackendError> {
     let mut errors = Vec::new();
     let mut windows = Vec::new();
@@ -134,7 +158,7 @@ async fn discover_all_windows(
             ));
             continue;
         }
-        match list_windows_for(*backend, environment).await {
+        match list_windows_for_request(*backend, environment, reuse).await {
             Ok(mut backend_windows) if !backend_windows.is_empty() => {
                 windows.append(&mut backend_windows);
             }
@@ -164,7 +188,7 @@ pub async fn discover_activation_windows(
         {
             continue;
         }
-        match list_windows_for(*backend, environment).await {
+        match list_windows_for_request(*backend, environment, true).await {
             Ok(mut backend_windows) if !backend_windows.is_empty() => {
                 windows.append(&mut backend_windows);
             }
