@@ -34,6 +34,7 @@ from pathlib import Path
 import _hermes_config
 import _install_shared
 from _install_shared import (
+    BROWSER_RANKING_ENV,
     BROWSER_SELECTION_ENV,
     DEFAULT_LOCAL_INSTALL_DIR,
     MCP_HOST_CHOICES,
@@ -85,6 +86,7 @@ INSTALLABLE_MCP_HOST_CHOICES = tuple(host for host in MCP_HOST_CHOICES if host !
 # runtime roots (repo/release/docs) on its own at startup, so the MCP host
 # config must not pin session environment keys.
 OPTIONAL_MCP_RUNTIME_ENV = (
+    BROWSER_RANKING_ENV,
     MCP_BROWSER_CONTROL_MODE_ENV,
     MCP_CODEX_BROWSER_SOCKET_PATH_ENV,
     "SKY_CUA_PHONE_DIRECT",
@@ -402,11 +404,15 @@ def generate_mcp_config(
                 # keys must be added here or exempted there.
                 "env_vars": [
                     "CODEX_COMPUTER_USE_COSMIC_HELPER",
+                    "CODEX_HOME",
+                    "OPENCODE_API_KEY",
+                    "OPENCODE_ZEN_API_KEY",
                     "DBUS_SESSION_BUS_ADDRESS",
                     "DESKTOP_SESSION",
                     "DISPLAY",
                     "SKY_CUA_AGENT_CURSOR",
                     BROWSER_SELECTION_ENV,
+                    BROWSER_RANKING_ENV,
                     MCP_BROWSER_EVAL_ENV,
                     "SKY_CUA_AT_SPI_WALK_TIMEOUT_MS",
                     "SKY_CUA_BROWSER_REQUEST_TIMEOUT_MS",

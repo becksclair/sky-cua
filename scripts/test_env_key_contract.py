@@ -290,3 +290,32 @@ def test_browser_control_env_contract_is_forwarded_without_removed_transport() -
         "SKY_CUA_CODEX_BROWSER_SOCKET_PATH",
     } <= forwarded
     assert "SKY_CUA_BROWSER_BRIDGE_TRANSPORT" not in forwarded
+
+
+def test_browser_ranking_configuration_and_model_auth_are_forwarded_by_name() -> None:
+    assert "SKY_CUA_BROWSER_RANKING" in installer_forwarded_keys()
+    config = json.loads((REPO_ROOT / MCP_JSON_PATH).read_text())
+    forwarded = config["mcpServers"]["computer-use"]["env_vars"]
+    assert {
+        "SKY_CUA_BROWSER_RANKING",
+        "CODEX_HOME",
+        "OPENCODE_API_KEY",
+        "OPENCODE_ZEN_API_KEY",
+    } <= set(forwarded)
+
+    from install_mcp_server import generate_mcp_config, optional_mcp_runtime_env
+
+    generated = generate_mcp_config(Path("/tmp/sky-cua-client"), Path("/tmp/sky-cua"))
+    servers = generated["mcpServers"]
+    assert isinstance(servers, dict)
+    server = servers["computer-use"]
+    assert isinstance(server, dict)
+    assert {
+        "SKY_CUA_BROWSER_RANKING",
+        "CODEX_HOME",
+        "OPENCODE_API_KEY",
+        "OPENCODE_ZEN_API_KEY",
+    } <= set(server["env_vars"])
+    assert optional_mcp_runtime_env(
+        {"SKY_CUA_BROWSER_RANKING": "true", "OPENCODE_API_KEY": "test-secret"}
+    ) == {"SKY_CUA_BROWSER_RANKING": "true"}
