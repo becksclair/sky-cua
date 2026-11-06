@@ -499,6 +499,9 @@ async fn attach_tab_once(
             browser_session_params(identity),
             json!({
                 "tabId": tab_id.clone(),
+                // Current extensions require this object. Empty constraints
+                // preserve Sky's existing unrestricted external-browser policy.
+                "networkPolicy": { "constraints": [] },
             }),
         ),
         deadline,

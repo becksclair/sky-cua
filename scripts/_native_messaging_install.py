@@ -17,6 +17,7 @@ MANIFEST_RELATIVE_DIRS = (
     Path(".config/google-chrome/NativeMessagingHosts"),
     Path(".config/chromium/NativeMessagingHosts"),
     Path(".config/BraveSoftware/Brave-Browser/NativeMessagingHosts"),
+    Path(".config/BraveSoftware/Brave-Browser-Nightly/NativeMessagingHosts"),
     Path(".config/BraveSoftware/Brave-Origin/NativeMessagingHosts"),
 )
 

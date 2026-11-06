@@ -1,0 +1,9 @@
+{
+  "build_flavor": "release",
+  "release_channel": "stable",
+  "sha": "52add2ca490bc0f277acb48337ab808a143436b6",
+  "target": "chrome-production",
+  "store": "chrome-web-store",
+  "store_id": "hehggadaopoacecdllhhajmbjkdcmajg",
+  "extension_id": "hehggadaopoacecdllhhajmbjkdcmajg"
+}

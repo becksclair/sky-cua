@@ -25,6 +25,22 @@ OpenCode and Pi. The browser capability is advertised by default, but
 `browser_eval` is independently enabled by default only when the browser surface
 exists, and is disabled by an explicit `SKY_CUA_BROWSER_EVAL=off`.
 
+Linux installation registers the native host for Chrome, Chromium, Brave,
+Brave Nightly, and Brave-Origin. The browser doctor reports registration for
+each detected browser data directory; another browser's manifest cannot hide a
+missing Nightly registration. This filesystem check does not prove a live
+extension connection; `status(component="browser")` supplies runtime readiness.
+The smoke harness pins the official ChatGPT extension `1.26.1102.11740` and
+the bundle builder stages that latest vendored version.
+Attach requests include its required `networkPolicy: { constraints: [] }`
+object, preserving the existing external-browser network behavior.
+
+Live-verified on 2026-11-05 against the existing Brave Nightly process through
+the installed native host: tab claim, navigation, AppShot-fenced button click,
+nonce readback, and complete browser capture passed. The disposable tab was
+closed and the browser remained running. Evidence:
+`artifacts/nightly-browser/verification.json` and `live-nightly-verified.webp`.
+
 ## Contract surface
 
 Current MCP browser entrypoints:

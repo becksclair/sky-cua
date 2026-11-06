@@ -354,6 +354,11 @@ async fn open_tab_creates_session_owned_tab_and_navigates_requested_url() {
         let attach = read_frame(&mut stream).await.unwrap().unwrap();
         assert_eq!(attach.get("method").and_then(Value::as_str), Some("attach"));
         assert_eq!(attach["params"]["tabId"], 515);
+        // The current extension rejects attach without this required object.
+        assert_eq!(
+            attach["params"]["networkPolicy"],
+            json!({"constraints": []})
+        );
         write_frame(
             &mut stream,
             &json!({"jsonrpc": "2.0", "id": attach["id"], "result": {}}),

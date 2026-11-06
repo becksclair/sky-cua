@@ -445,7 +445,17 @@ fn browser_report() -> BrowserIntegrationReport {
             ],
         ),
         chromium: binary_check_any("chromium", &["chromium", "chromium-browser"]),
-        brave: binary_check_any("brave", &["brave-browser", "brave", "brave-browser-stable"]),
+        brave: binary_check_any(
+            "brave",
+            &[
+                "brave-browser",
+                "brave",
+                "brave-browser-stable",
+                "brave-browser-nightly",
+                "brave-nightly",
+                "brave-origin",
+            ],
+        ),
         native_host_manifest: native_host_manifest_check(),
     }
 }
@@ -472,27 +482,52 @@ fn binary_check_any(name: &str, candidates: &[&str]) -> DoctorCheck {
 }
 
 fn native_host_manifest_check() -> DoctorCheck {
-    let home = env::var("HOME").unwrap_or_else(|_| String::new());
+    let Some(home) = env::var_os("HOME").filter(|home| !home.is_empty()) else {
+        return DoctorCheck {
+            name: "native_host_manifest".to_string(),
+            ok: false,
+            detail: "HOME is unavailable; native host registration could not be verified"
+                .to_string(),
+        };
+    };
+    native_host_manifest_check_for_home(Path::new(&home))
+}
+
+fn native_host_manifest_check_for_home(home: &Path) -> DoctorCheck {
     let candidates = [
-        ".config/google-chrome/NativeMessagingHosts/com.openai.codexextension.json",
-        ".config/chromium/NativeMessagingHosts/com.openai.codexextension.json",
-        ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.openai.codexextension.json",
+        ("Chrome", ".config/google-chrome"),
+        ("Chromium", ".config/chromium"),
+        ("Brave", ".config/BraveSoftware/Brave-Browser"),
+        (
+            "Brave Nightly",
+            ".config/BraveSoftware/Brave-Browser-Nightly",
+        ),
+        ("Brave-Origin", ".config/BraveSoftware/Brave-Origin"),
     ];
-    let hits = candidates
-        .iter()
-        .map(|path| PathBuf::from(&home).join(path))
-        .filter(|path| path.exists())
-        .collect::<Vec<_>>();
+    let mut details = Vec::new();
+    let mut all_registered = true;
+    for (browser, relative_dir) in candidates {
+        let browser_dir = home.join(relative_dir);
+        if !browser_dir.is_dir() {
+            continue;
+        }
+        let manifest = browser_dir.join("NativeMessagingHosts/com.openai.codexextension.json");
+        let registered = manifest.is_file();
+        all_registered &= registered;
+        details.push(format!(
+            "{browser}: {} ({})",
+            if registered { "registered" } else { "missing" },
+            manifest.display()
+        ));
+    }
     DoctorCheck {
         name: "native_host_manifest".to_string(),
-        ok: !hits.is_empty(),
-        detail: if hits.is_empty() {
-            "No Codex-compatible Chrome native host manifest found".to_string()
+        ok: !details.is_empty() && all_registered,
+        detail: if details.is_empty() {
+            "No supported browser data directories found; native host registration could not be verified"
+                .to_string()
         } else {
-            hits.iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
+            details.join("; ")
         },
     }
 }
@@ -706,6 +741,103 @@ fn run_command(name: &str, command: &str, args: &[&str], with_session_bus: bool)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct NativeHostTestHome(PathBuf);
+
+    impl NativeHostTestHome {
+        fn new() -> Self {
+            let path = env::temp_dir().join(format!(
+                "sky-cua-native-host-doctor-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&path).expect("create native host test home");
+            Self(path)
+        }
+
+        fn register(&self, browser_dir: &str) {
+            let directory = self.0.join(browser_dir).join("NativeMessagingHosts");
+            fs::create_dir_all(&directory).expect("create native host directory");
+            fs::write(directory.join("com.openai.codexextension.json"), "{}")
+                .expect("write native host manifest");
+        }
+    }
+
+    impl Drop for NativeHostTestHome {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn native_host_manifest_requires_nightly_registration_even_when_chrome_is_registered() {
+        let home = NativeHostTestHome::new();
+        home.register(".config/google-chrome");
+        let nightly = ".config/BraveSoftware/Brave-Browser-Nightly";
+        fs::create_dir_all(home.0.join(nightly)).expect("create Nightly data directory");
+
+        let missing = native_host_manifest_check_for_home(&home.0);
+        assert!(!missing.ok);
+        assert_eq!(missing.name, "native_host_manifest");
+        assert!(missing.detail.contains("Chrome: registered"));
+        assert!(missing.detail.contains("Brave Nightly: missing"));
+        assert!(missing.detail.contains(&format!(
+            "{nightly}/NativeMessagingHosts/com.openai.codexextension.json"
+        )));
+
+        home.register(nightly);
+        let registered = native_host_manifest_check_for_home(&home.0);
+        assert!(registered.ok, "{}", registered.detail);
+        assert!(registered.detail.contains("Chrome: registered"));
+        assert!(registered.detail.contains("Brave Nightly: registered"));
+        assert!(!registered.detail.contains("missing"));
+    }
+
+    #[test]
+    fn native_host_manifest_checks_each_supported_browser_directory() {
+        for (browser, directory) in [
+            ("Chrome", ".config/google-chrome"),
+            ("Chromium", ".config/chromium"),
+            ("Brave", ".config/BraveSoftware/Brave-Browser"),
+            (
+                "Brave Nightly",
+                ".config/BraveSoftware/Brave-Browser-Nightly",
+            ),
+            ("Brave-Origin", ".config/BraveSoftware/Brave-Origin"),
+        ] {
+            let home = NativeHostTestHome::new();
+            fs::create_dir_all(home.0.join(directory)).expect("create browser data directory");
+            let missing = native_host_manifest_check_for_home(&home.0);
+            assert!(!missing.ok, "{browser}");
+            assert!(missing.detail.contains(&format!("{browser}: missing")));
+
+            home.register(directory);
+            let registered = native_host_manifest_check_for_home(&home.0);
+            assert!(registered.ok, "{}", registered.detail);
+            assert!(
+                registered
+                    .detail
+                    .contains(&format!("{browser}: registered"))
+            );
+        }
+    }
+
+    #[test]
+    fn native_host_manifest_does_not_report_success_without_browser_directories() {
+        let home = NativeHostTestHome::new();
+        let check = native_host_manifest_check_for_home(&home.0);
+
+        assert!(!check.ok);
+        assert!(
+            check
+                .detail
+                .contains("No supported browser data directories")
+        );
+        assert!(check.detail.contains("could not be verified"));
+    }
 
     fn accessibility_report(
         at_spi_bus: DoctorCheck,

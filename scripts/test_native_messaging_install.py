@@ -31,7 +31,9 @@ def _manifest_paths(home: Path) -> tuple[Path, ...]:
     return tuple(home / relative / f"{HOST_NAME}.json" for relative in MANIFEST_RELATIVE_DIRS)
 
 
-def test_installs_four_owner_only_manifests_bound_to_exact_generation(tmp_path: Path) -> None:
+def test_installs_browser_manifests_including_nightly_bound_to_exact_generation(
+    tmp_path: Path,
+) -> None:
     release = _release(tmp_path)
     home = tmp_path / "home"
 
@@ -41,6 +43,11 @@ def test_installs_four_owner_only_manifests_bound_to_exact_generation(tmp_path: 
     assert report.host_path == release / HOST_RELATIVE_PATH
     assert report.manifest_paths == _manifest_paths(home)
     assert report.changed_paths == report.manifest_paths
+    assert (
+        home
+        / ".config/BraveSoftware/Brave-Browser-Nightly/NativeMessagingHosts"
+        / f"{HOST_NAME}.json"
+    ) in report.manifest_paths
     for path in report.manifest_paths:
         manifest = json.loads(path.read_bytes())
         assert manifest == {
@@ -101,9 +108,7 @@ def test_rollback_restores_exact_prior_bytes_modes_and_absence(tmp_path: Path) -
 
     assert paths[0].read_bytes() == previous
     assert stat.S_IMODE(paths[0].stat().st_mode) == 0o640
-    assert not paths[1].exists()
-    assert not paths[2].exists()
-    assert not paths[3].exists()
+    assert all(not path.exists() for path in paths[1:])
 
 
 def test_rollback_rejects_concurrent_manifest_change_without_retry(tmp_path: Path) -> None:
