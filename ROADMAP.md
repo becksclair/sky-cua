@@ -111,6 +111,19 @@ Open boxes link to the active ExecPlan that owns the work.
         projection and real model-turn MCP acceptance —
         [`docs/features/hermes-agent-integration.md`](docs/features/hermes-agent-integration.md)
 - [x] Codex Desktop compatibility (one active `computer-use` server, Browser Use companion, native-host preflight) — [`docs/features/codex-desktop-compat.md`](docs/features/codex-desktop-compat.md)
+- [x] Fixed-root ChatGPT/Claude/OpenCode installation and skill convergence,
+      including native plugin cache refresh, legacy router migration, and live
+      AppShot-bound desktop/Nightly actions —
+      [`complete CUA stack ownership`](docs/features/complete-cua-stack-ownership.md)
+- [x] Installer follow-ups: shared Claude config locking, Browser-disabled and
+      absent-package handling, self-contained development fallback, native API
+      compatibility checks, and extracted host projection modules —
+      [`Codex compatibility`](docs/features/codex-desktop-compat.md),
+      [`Claude host support`](docs/features/claude-code-host.md)
+  - [x] Consistent Chrome off/on reconciliation and source-less disabled
+        preflight preservation of marketplace/feature configuration
+  - [x] Keep native Browser baseline app-owned; activate the fixed-root
+        navigation helper through a focused supplemental Codex skill
 - [x] OpenCode/Pi MCP host smoke parity
 - [x] Claude Code host support (plugin manifest + marketplace, `--host claude-code` installer, `~/.claude/skills` sync, `~/.claude/settings.json` deny-built-in-computer-use + auto-approve sky-cua) — [`docs/features/claude-code-host.md`](docs/features/claude-code-host.md)
 - [x] Canonical MCP tool surface — [`docs/features/mcp-tool-surface.md`](docs/features/mcp-tool-surface.md)
@@ -164,25 +177,24 @@ Open boxes link to the active ExecPlan that owns the work.
         aggregate VM `all` profile can reach its browser members
   - [ ] Collect optional large-screenshot tail-latency/RSS evidence before
         changing actor width or transport framing
-- [ ] Codex Desktop compat materialization contract (decided 2026-06-11:
-      sky-cua owns behavior; the codex-desktop repo owns impersonation and
-      materialization of the OpenAI built-in plugin identities —
-      `computer-use@openai-bundled`, `browser@openai-bundled` — by
-      generating plugin cache roots that point at the packaged sky-cua
-      implementation)
-  - [x] sky-cua side: stable wrapper-friendly plugin assets (`.mcp.json`
-        server definitions, the Browser `scripts/browser-client.mjs` adapter,
-        IAB routing skill, assets/docs) and native-addon-free canonical client
-        projection into staged `browser-use` and `chrome` entrypoints
-  - [x] sky-cua side: MCP server runs from a copied/symlinked packaged
-        location, not only the dev checkout (symlink-safe `bin/` launchers,
-        exe-sibling service resolution, exe-ancestor app-instructions root)
-  - [x] sky-cua side: documented manifest/template contract for generating a
-        compat plugin from the sky-cua payload —
-        [`docs/runtime/compat-plugin-contract.md`](docs/runtime/compat-plugin-contract.md)
-  - [ ] codex-desktop side: cache-sync materialization of stock plugin roots,
-        config.toml enablement, and stock-layout smokes (tracked in the
-        codex-desktop repo, not here)
+- [x] Native Linux ChatGPT compatibility ownership —
+      [`docs/features/codex-desktop-compat.md`](docs/features/codex-desktop-compat.md)
+  - [x] Keep Sky's fixed-root `computer-use` projection and external Browser
+        native-pipe client; layer a strict `tab.sky.expectNavigation` helper on
+        the native app's complete maintained Browser client/service through its
+        public decorator hook, with isolated native connection/navigation proof
+  - [x] Disable the retired `browser-use@openai-bundled` identity during
+        companion reconciliation
+  - [x] Keep the native Browser version app-owned; deploy the helper and
+        supplemental activation skill outside the reserved plugin cache,
+        with live Nightly navigation and no-op rejection proof after an actual
+        ChatGPT restart, without reinstalling or repairing the deployment
+  - [ ] Verify a fresh chat's selected skill/client through a model turn
+  - [x] Register Brave Nightly's native host, report missing registration per
+        detected browser directory, and refresh the smoke extension to
+        `1.26.1102.11740`; live-prove its required attach policy, navigation,
+        fenced click and nonce readback in the original Nightly process —
+        [`docs/features/browser-mcp-tools.md`](docs/features/browser-mcp-tools.md)
 - [x] Remove the status-only `managed` browser target from contracts, tool
       rejection paths, status reporting, and docs (managed/isolated browser
       lifecycle was retired 2026-06-11: driving the user's real logged-in

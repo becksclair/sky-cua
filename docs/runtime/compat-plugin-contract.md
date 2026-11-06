@@ -1,29 +1,42 @@
 # Compat plugin materialization contract
 
-`sky-cua` is the canonical implementation of its computer-use and browser
-tool surfaces. Downstream packagers — primarily the codex-desktop repo — may
-materialize compatibility plugin roots that present sky-cua under other
-plugin identities (for example the OpenAI built-in IDs
-`computer-use@openai-bundled` and `browser@openai-bundled`). This
-document is the contract those wrappers can rely on.
+`sky-cua` owns its computer-use and external-browser tool surfaces. Packagers
+may materialize compatibility roots such as `computer-use@openai-bundled`.
+The native Linux ChatGPT app owns its in-app Browser plugin, client, service,
+bootstrap instructions, and runtime. Sky must not replace that plugin with
+its native-pipe Browser client. This document describes the payload and
+materialization boundary.
 
 The standalone fixed-root distribution owns ready-to-install roots for those
 two identities at
 `${XDG_DATA_HOME:-~/.local/share}/sky-cua/codex/openai-bundled/plugins/`.
 Its marketplace is
 `codex/openai-bundled/.agents/plugins/marketplace.json`. Consumers should
-project or install `plugins/browser/` exactly; `plugins/browser-use/` is not a
-compatibility alias.
+project `plugins/computer-use/`. When the native ChatGPT Browser is installed
+at `/usr/lib/chatgpt/resources/plugins/openai-bundled/plugins/browser`,
+standalone installation and browser preflight materialize that complete
+baseline for `browser@openai-bundled`, preserving its version and bytes.
+The separate Codex `sky-browser-enhancements` skill explicitly attaches
+`tab.sky.expectNavigation` to an existing native tab using the helper at
+`~/.local/share/sky-cua/browser/sky-enhancements.mjs`. Both remain outside
+the app-owned Browser cache. The Sky `plugins/browser/` root remains a
+fallback for hosts without that native plugin; `plugins/browser-use/` is not
+a compatibility alias. Existing `browser-use@openai-bundled` config entries
+are disabled rather than re-enabled by installation.
 
-Ownership split, decided 2026-06-11:
+Ownership split, corrected for the native Linux app on 2026-11-06:
 
 - sky-cua owns behavior and producer bytes: the MCP server, shared Browser
   client, tool surfaces, skills, runtime binaries, fixed-root
   `computer-use`/`browser` plugin directories, and this payload contract.
-- codex-desktop owns materialization: projecting those fixed-root plugin
-  directories into the active bundled marketplace/cache shape, enabling the
-  IDs in `~/.codex/config.toml`, and keeping materialized roots valid for an
-  unpatched Codex CLI.
+- Sky's standalone installer and preflight own their filesystem projections
+  and config reconciliation. The retired `codex-desktop` rebuild repository
+  is not the native app's consumer or installation mechanism.
+- The native app keeps its Browser client paired with its service RPC and
+  packaged `cua_node`; Sky adds a separate helper and supplemental skill.
+  Sky's external client keeps its trusted native-pipe
+  lane; changing trust hashes or forcing a different runtime is not part of
+  native Browser materialization.
 
 ## Payload layout
 
@@ -123,15 +136,17 @@ A materialized compat plugin is an ordinary Codex plugin directory:
 └── skills/                     # copied or symlinked from sky-cua skills/
 ```
 
-For `browser@openai-bundled`, the fixed-root producer directory also contains
+For the fallback `browser@openai-bundled`, the fixed-root producer directory contains
 `scripts/browser-client.mjs`. The adapter resolves the shared
 `RELEASE.json` `paths.browser_client` file and exports
 `setupBrowserRuntime`. Its routing skill selects only an entry with
 `type === "iab"` and `transport === "host_provided_iab"` for Codex Desktop.
-The same shared client retains its separate `extension_native_host` lane for
-OpenClaw and other external Chrome-family consumers.
+The shared client retains its `extension_native_host` lane for OpenClaw and
+other external Chrome-family consumers. These fallback instructions and the
+`transport` field are not the native app's Browser bootstrap contract; use
+the native plugin's own skill and returned documentation there.
 
-Rules for the generator (lives in codex-desktop, not here):
+Rules for materialization:
 
 - `plugin.json` `name` carries the impersonated identity; everything it
   points at resolves into the packaged sky-cua payload.
@@ -142,15 +157,18 @@ Rules for the generator (lives in codex-desktop, not here):
   carrier. Payload selection retargets the compat root's `.mcp.json` at the
   installed payload (see `docs/operations/plugin-release.md`).
 - The materialized root must remain a complete, CLI-readable plugin after
-  sync; repair belongs to the desktop-side cache-sync/resync flow.
+  sync. Native Browser projection preserves the entire installed plugin,
+  including its original manifest, client, service and docs. Sky's helper and
+  activation skill live outside that cache; ordinary native setup is unchanged.
 
 ## Verification
 
 - `uv run pytest scripts/test_plugin_bundle.py` — payload shape and
   relocatable launcher proof.
-- `cargo test -p sky-cua-platform app_instructions` — packaged resource-root
+- `cargo nextest run --workspace -p sky-cua-platform app_instructions` — packaged resource-root
   resolution.
 - `python3 scripts/build_plugin.py` then inspect `dist/plugin/sky-cua/` for
   the staged layout above.
-- Desktop-side materialization smokes (stock cache layout, config
-  enablement, Desktop settings visibility) live in the codex-desktop repo.
+- `uv run pytest scripts/test_standalone_release.py scripts/test_plugin_bundle.py`
+  — native Browser projection, retired identity reconciliation, and isolated
+  fallback fixtures. Native package updates remain owned by the distribution.

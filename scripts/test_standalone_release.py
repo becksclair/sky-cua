@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
 import tomllib
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -22,6 +23,20 @@ from standalone_release import (
     build_payload,
     install_payload,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolate_native_browser_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        standalone_release,
+        "NATIVE_BROWSER_PLUGIN_ROOT",
+        tmp_path / "no-native-package/plugins/browser",
+    )
+    monkeypatch.setattr(
+        standalone_release,
+        "NATIVE_CODEX_BINARY",
+        tmp_path / "no-native-package/codex",
+    )
 
 
 def _write(path: Path, content: str = "fixture\n", *, executable: bool = False) -> None:
@@ -46,6 +61,46 @@ def test_standalone_durable_surface_policy_selects_skills(tmp_path: Path) -> Non
     _write(config, "[surfaces]\nbrowesr = false\n")
     with pytest.raises(ValueError, match="browesr"):
         standalone_release._durable_skill_names(home, {"HOME": str(home)})
+
+
+@pytest.mark.parametrize("configure_hosts", [False, True])
+def test_skill_projection_includes_existing_opencode_config_directories(
+    tmp_path: Path, configure_hosts: bool
+) -> None:
+    home = tmp_path / "home"
+    default_config = home / ".config/opencode"
+    xdg_config = tmp_path / "xdg-config"
+    custom_config = tmp_path / "custom-opencode"
+    for config in (default_config, xdg_config / "opencode", custom_config):
+        config.mkdir(parents=True)
+    roots = standalone_release._skill_projection_roots(
+        home, env={}, configure_hosts=configure_hosts
+    )
+    assert default_config / "skills" in roots
+
+    roots = standalone_release._skill_projection_roots(
+        home,
+        env={"XDG_CONFIG_HOME": str(xdg_config), "OPENCODE_CONFIG_DIR": str(custom_config)},
+        configure_hosts=configure_hosts,
+    )
+    assert xdg_config / "opencode/skills" in roots
+    assert custom_config / "skills" in roots
+    assert default_config / "skills" not in roots
+    assert not (custom_config / "skills").exists()
+
+
+def test_skill_projection_skips_absent_and_deduplicates_opencode_roots(tmp_path: Path) -> None:
+    absent = tmp_path / ".config/opencode"
+    roots = standalone_release._skill_projection_roots(
+        tmp_path, env={"OPENCODE_CONFIG_DIR": str(absent)}, configure_hosts=False
+    )
+    assert absent / "skills" not in roots
+    assert not absent.exists()
+    absent.mkdir(parents=True)
+    roots = standalone_release._skill_projection_roots(
+        tmp_path, env={"OPENCODE_CONFIG_DIR": str(absent)}, configure_hosts=False
+    )
+    assert roots.count(absent / "skills") == 1
 
 
 def test_bundled_codex_mcp_servers_are_preapproved() -> None:
@@ -86,6 +141,7 @@ def test_bundled_computer_use_forwards_canonical_environment_allowlist() -> None
 def _fixture_repo(root: Path) -> tuple[Path, Path]:
     for relative in (
         "packages/browser-use/build/browser-client.mjs",
+        "packages/browser-use/build/sky-enhancements.mjs",
         "resources/codex-compat/openai-bundled/.agents/plugins/marketplace.json",
         "resources/codex-compat/openai-bundled/plugins/computer-use/.mcp.json",
         "resources/codex-compat/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json",
@@ -98,7 +154,10 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
         "resources/codex-compat/openai-bundled/plugins/browser/skills/control-in-app-browser/SKILL.md",
         "resources/model-documentation/README.md",
         "scripts/_codex_app_server.py",
+        "scripts/_standalone_codex.py",
+        "scripts/_standalone_hosts.py",
         "scripts/_hermes_config.py",
+        "scripts/_claude_config.py",
         "scripts/_opencode_config.py",
         "scripts/_plugin_bundle.py",
         "scripts/_portal_desktop_entry.py",
@@ -165,6 +224,34 @@ def _fixture_repo(root: Path) -> tuple[Path, Path]:
         root / "resources/codex-compat/openai-bundled/plugins/browser/scripts/browser-client.mjs",
         "const semanticPath = release?.paths?.browser_client;\nsetupBrowserRuntime;\n",
     )
+    _write(
+        root / "resources/codex-compat/openai-bundled/plugins/computer-use/.mcp.json",
+        json.dumps(
+            {
+                "mcpServers": {
+                    "computer-use": {
+                        "command": "sky-cua-client",
+                        "args": ["mcp"],
+                        "env_vars": ["DISPLAY"],
+                        "default_tools_approval_mode": "approve",
+                    }
+                }
+            }
+        ),
+    )
+    _write(
+        root / "resources/codex-compat/openai-bundled/plugins/browser/.mcp.json",
+        '{"mcpServers":{"node_repl":{"command":"node_repl"}}}',
+    )
+    _write(
+        root / "resources/sky-browser-enhancements/SKILL.md",
+        "Sky helper root: @SKY_CUA_ROOT_JSON@\n",
+    )
+    for resource in ("_native_browser_projection.py",):
+        source = Path(__file__).resolve().parents[1] / "resources" / resource
+        destination = root / "resources" / resource
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
     for name in standalone_release.SKILL_NAMES:
         _write(root / f"skills/{name}/SKILL.md", f"# {name}\n")
     _write(root / "out/components/model-documentation/README.md", "# model docs\n")
@@ -255,7 +342,13 @@ def test_build_owns_generated_inputs_and_emits_one_fixed_archive(
         "build_plugin.py",
     ]
     assert calls[-1][-1] == "--portable-x86-64-v3"
+    assert calls[-1][2:4] == ("--browser-runtime-mode", "standalone")
     assert (payload / "browser/browser-client.mjs").is_file()
+    assert (payload / "browser/sky-enhancements.mjs").is_file()
+    assert (payload / "resources/_native_browser_projection.py").is_file()
+    assert (payload / "resources/sky-browser-enhancements/SKILL.md").is_file()
+    release_manifest = json.loads((payload / "RELEASE.json").read_text())
+    assert release_manifest["paths"]["browser_enhancements"] == "browser/sky-enhancements.mjs"
     assert (payload / "scripts/_standalone_release_command.py").is_file()
     assert (payload / "docs/inventories/routing-inventory.json").is_file()
     assert not (payload / "resources/release").exists()
@@ -406,6 +499,11 @@ def test_install_replaces_one_tree_and_projects_stable_paths(
         ).read_text(encoding="utf-8")
     )
     assert native_manifest["path"] == str(home / ".local/bin/sky-cua-chrome-host")
+    nightly_manifest = home / (
+        ".config/BraveSoftware/Brave-Browser-Nightly/NativeMessagingHosts/"
+        "com.openai.codexextension.json"
+    )
+    assert json.loads(nightly_manifest.read_text(encoding="utf-8")) == native_manifest
     desktop_entry = tmp_path / "xdg-data/applications/com.heliasar.SkyCua.desktop"
     assert second_report["portal_desktop_entry"] == str(desktop_entry)
     entry_text = desktop_entry.read_text(encoding="utf-8")
@@ -625,7 +723,10 @@ def test_extracted_payload_install_imports_hermes_adapter(
     for relative in (
         "install.py",
         "scripts/_codex_app_server.py",
+        "scripts/_standalone_codex.py",
+        "scripts/_standalone_hosts.py",
         "scripts/_hermes_config.py",
+        "scripts/_claude_config.py",
         "scripts/_opencode_config.py",
         "scripts/_plugin_bundle.py",
         "scripts/_portal_desktop_entry.py",
@@ -967,6 +1068,47 @@ def test_install_migrates_projection_from_a_prior_live_checkout(
     assert computer.resolve() == home / ".local/share/sky-cua/skills/computer-use"
 
 
+def test_install_migrates_stale_opencode_router_and_removes_disabled_surface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    documentation = home / ".local/share/sky-cua/releases/deleted/components/documentation"
+    roots = (home / ".config/opencode/skills", tmp_path / "custom-opencode/skills")
+    for root in roots:
+        for name in standalone_release.SKILL_NAMES:
+            _write(root / name / "SKILL.md", "# Installed sky-cua routing\n")
+            _write(
+                root / name / "SKY_CUA_PROJECTION.json",
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "documentation_root": str(documentation),
+                        "canonical_skill": str(documentation / "skills" / name / "SKILL.md"),
+                    }
+                ),
+            )
+        _write(root / "user-skill/SKILL.md", "# user-owned\n")
+    _write(home / ".config/sky-cua/sky-cua.toml", "[surfaces]\nphone = false\n")
+
+    install_payload(
+        payload,
+        home=home,
+        env={"HOME": str(home), "OPENCODE_CONFIG_DIR": str(roots[1].parent)},
+        configure_hosts=False,
+    )
+
+    for root in roots:
+        for name in ("computer-use", "browser-use"):
+            link = root / name
+            assert link.is_symlink()
+            assert not link.readlink().is_absolute()
+            assert link.resolve() == home / ".local/share/sky-cua/skills" / name
+            assert not (link / "SKY_CUA_PROJECTION.json").exists()
+        assert not (root / "phone-use").exists()
+        assert (root / "user-skill/SKILL.md").read_text(encoding="utf-8") == "# user-owned\n"
+
+
 def test_agents_canonical_links_remain_byte_identical_when_sky_cua_installs_after_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1262,7 +1404,7 @@ def test_install_rewrites_existing_opencode_config_to_flat_root(
     assert new_parsed["agent"]["explore"]["permission"]["edit"] == "deny"
     assert new_parsed["mcp"]["context7"]["url"] == "https://mcp.context7.com/mcp"
 
-    sky_cua = new_parsed["mcp"]["sky_cua"]
+    sky_cua = new_parsed["mcp"]["servers"]["sky_cua"]
     assert sky_cua["type"] == "local"
     assert sky_cua["command"] == [str(public_root / "bin/sky-cua-client"), "mcp"]
     assert sky_cua["cwd"] == str(public_root)
@@ -1276,7 +1418,7 @@ def test_install_rewrites_existing_opencode_config_to_flat_root(
     assert "SKY_CUA_MCP_CALLER_PROVENANCE" not in sky_cua["environment"]
     assert "XDG_RUNTIME_DIR" not in sky_cua["environment"]
 
-    node_repl = new_parsed["mcp"]["node_repl"]
+    node_repl = new_parsed["mcp"]["servers"]["node_repl"]
     assert node_repl["command"] == [str(public_root / "bin/node_repl")]
     # node_repl derives its runtime paths (node binary, module root, Playwright
     # browsers, launcher path) from its own binary location at startup, so the
@@ -1367,17 +1509,17 @@ def test_install_opencode_drops_jsonc_comments_but_keeps_user_keys_on_first_writ
     new_parsed = json.loads(config_path.read_text(encoding="utf-8"))
     assert new_parsed["model"] == "opencode-go/minimax-m3"
     assert new_parsed["permission"] == {"*": "allow"}
-    assert set(new_parsed["mcp"]) == set(_opencode_config.OPENCODE_MANAGED_SERVERS)
+    assert set(new_parsed["mcp"]["servers"]) == set(_opencode_config.OPENCODE_MANAGED_SERVERS)
 
-    sky_cua = new_parsed["mcp"]["sky_cua"]
+    sky_cua = new_parsed["mcp"]["servers"]["sky_cua"]
     assert sky_cua["type"] == "local"
     assert sky_cua["command"] == [str(public_root / "bin/sky-cua-client"), "mcp"]
-    assert sky_cua["enabled"] is True
-    assert sky_cua["timeout"] == 30_000
-    node_repl = new_parsed["mcp"]["node_repl"]
+    assert sky_cua["disabled"] is False
+    assert sky_cua["timeout"] == dict.fromkeys(("startup", "catalog", "execution"), 30_000)
+    node_repl = new_parsed["mcp"]["servers"]["node_repl"]
     assert node_repl["type"] == "local"
-    assert node_repl["enabled"] is True
-    assert node_repl["timeout"] == 30_000
+    assert node_repl["disabled"] is False
+    assert node_repl["timeout"] == dict.fromkeys(("startup", "catalog", "execution"), 30_000)
     opencode = cast("dict[str, object]", report["opencode_config"])
     assert opencode["status"] == "updated"
 
@@ -1445,6 +1587,276 @@ def test_upsert_toml_key_inserts_rendered_values_literally() -> None:
         assert _toml_ok(out)["marketplaces"]["openai-bundled"]["source"] == raw, out
 
 
+def _native_browser_assets_fixture(install_root: Path) -> None:
+    _write(
+        install_root / "resources/sky-browser-enhancements/SKILL.md", "Sky @SKY_CUA_ROOT_JSON@\n"
+    )
+    for resource in ("_native_browser_projection.py",):
+        source = Path(__file__).resolve().parents[1] / "resources" / resource
+        target = install_root / "resources" / resource
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+    _write(
+        install_root / "browser/sky-enhancements.mjs",
+        "export const createSkyBrowserRuntime = setup => setup;\n",
+    )
+
+
+def _native_browser_fixture(root: Path) -> None:
+    _write(
+        root / ".codex-plugin/plugin.json",
+        json.dumps(
+            {
+                "name": "browser",
+                "version": "native",
+                "hooks": {"Stop": "native"},
+                "interface": {"displayName": "Browser"},
+            }
+        ),
+    )
+    for relative in (
+        "scripts/browser-client.mjs",
+        "scripts/browser-service.mjs",
+        "docs/api.json",
+        "skills/control-in-app-browser/SKILL.md",
+        "node_modules/native-dependency/index.js",
+        "assets/native-icon.svg",
+        "skills/control-in-app-browser/agents/openai.yaml",
+        "skills/another-native-skill/SKILL.md",
+    ):
+        _write(root / relative, f"native:{relative}\n")
+
+
+@pytest.mark.parametrize("existing_projection", [False, True])
+def test_bundled_projection_selects_complete_native_browser(
+    tmp_path: Path, existing_projection: bool
+) -> None:
+    install_root = tmp_path / "sky"
+    _native_browser_assets_fixture(install_root)
+    codex_home = tmp_path / "codex"
+    source_root = install_root / "codex/openai-bundled"
+    _write(source_root / ".agents/plugins/marketplace.json", json.dumps({"plugins": []}))
+    _write(
+        source_root / "plugins/computer-use/.mcp.json",
+        json.dumps({"mcpServers": {"computer-use": {"command": "sky-cua-client"}}}),
+    )
+    _write(source_root / "plugins/browser/scripts/browser-client.mjs", "sky-adapter\n")
+    _write(
+        source_root / "plugins/browser/.mcp.json",
+        '{"mcpServers":{"node_repl":{"command":"node_repl"}}}',
+    )
+    _write(install_root / "browser/browser-client.mjs", "sky-external-client\n")
+    native_root = tmp_path / "native/plugins/browser"
+    _native_browser_fixture(native_root)
+    projected = codex_home / ".tmp/bundled-marketplaces/openai-bundled/plugins/browser"
+    if existing_projection:
+        projected.parent.mkdir(parents=True)
+        projected.symlink_to(source_root / "plugins/browser")
+
+    standalone_release._sync_codex_bundled_marketplace(
+        install_root, codex_home, native_browser_root=native_root
+    )
+
+    assert projected.is_dir() and not projected.is_symlink()
+    assert not [path for path in projected.rglob("*") if path.is_symlink()]
+    assert (projected / "scripts/browser-client.mjs").read_bytes() == (
+        native_root / "scripts/browser-client.mjs"
+    ).read_bytes()
+    assert not (projected / ".mcp.json").exists()
+    manifest = json.loads((projected / ".codex-plugin/plugin.json").read_text())
+    assert manifest["version"] == "native"
+    assert manifest["hooks"] == {"Stop": "native"}
+    assert manifest["interface"] == {"displayName": "Browser"}
+    assert (native_root / ".codex-plugin/plugin.json").read_text().find("native-sky.") == -1
+    assert (projected / "skills/control-in-app-browser/SKILL.md").read_bytes() == (
+        native_root / "skills/control-in-app-browser/SKILL.md"
+    ).read_bytes()
+    assert (codex_home / "skills/sky-browser-enhancements/SKILL.md").read_text() == (
+        f"Sky {json.dumps(str(install_root))}\n"
+    )
+    for relative in (
+        "skills/control-in-app-browser/agents/openai.yaml",
+        "skills/another-native-skill/SKILL.md",
+        "scripts/browser-service.mjs",
+        "docs/api.json",
+        "node_modules/native-dependency/index.js",
+        "assets/native-icon.svg",
+    ):
+        assert (projected / relative).read_text() == f"native:{relative}\n"
+    computer_use = projected.parent / "computer-use"
+    assert computer_use.is_dir() and not computer_use.is_symlink()
+    assert json.loads((computer_use / ".mcp.json").read_text())["mcpServers"]["computer-use"][
+        "command"
+    ] == str(install_root / "bin/sky-cua-client")
+    assert (
+        source_root / "plugins/browser/scripts/browser-client.mjs"
+    ).read_text() == "sky-adapter\n"
+    assert (install_root / "browser/browser-client.mjs").read_text() == "sky-external-client\n"
+
+
+def test_native_projection_is_identical_when_sky_helper_changes(tmp_path: Path) -> None:
+    install_root = tmp_path / "sky"
+    _native_browser_assets_fixture(install_root)
+    module = standalone_release._native_browser_projection_module(install_root)
+    native_root = tmp_path / "native/plugins/browser"
+    _native_browser_fixture(native_root)
+    native_before = {
+        str(path.relative_to(native_root)): path.read_bytes()
+        for path in native_root.rglob("*")
+        if path.is_file()
+    }
+    projected = tmp_path / "projected/browser"
+    helper = install_root / "browser/sky-enhancements.mjs"
+
+    first = module.materialize_native_browser_plugin(native_root, projected)
+    inode = projected.stat().st_ino
+    assert module.materialize_native_browser_plugin(native_root, projected) == first
+    assert projected.stat().st_ino == inode
+    _write(helper, "export const createSkyBrowserRuntime = setup => setup; // changed\n")
+    second = module.materialize_native_browser_plugin(native_root, projected)
+
+    assert first == second == "native"
+    assert projected.stat().st_ino == inode
+    assert json.loads((projected / ".codex-plugin/plugin.json").read_text())["version"] == second
+    assert {
+        str(path.relative_to(native_root)): path.read_bytes()
+        for path in native_root.rglob("*")
+        if path.is_file()
+    } == native_before
+    assert (projected / "skills/control-in-app-browser/SKILL.md").read_bytes() == (
+        native_root / "skills/control-in-app-browser/SKILL.md"
+    ).read_bytes()
+
+
+@pytest.mark.parametrize(
+    "changed_asset",
+    [
+        ".codex-plugin/plugin.json",
+        "scripts/browser-client.mjs",
+        "scripts/browser-service.mjs",
+        "skills/control-in-app-browser/SKILL.md",
+    ],
+)
+def test_native_projection_copies_changed_native_bytes_with_original_version(
+    tmp_path: Path, changed_asset: str
+) -> None:
+    install_root = tmp_path / "sky"
+    _native_browser_assets_fixture(install_root)
+    module = standalone_release._native_browser_projection_module(install_root)
+    native_root = tmp_path / "native/plugins/browser"
+    _native_browser_fixture(native_root)
+    projected = tmp_path / "projected/browser"
+    first = module.materialize_native_browser_plugin(native_root, projected)
+    changed = native_root / changed_asset
+    if changed_asset.endswith("plugin.json"):
+        manifest = json.loads(changed.read_text())
+        manifest["description"] = "updated native baseline"
+        _write(changed, json.dumps(manifest))
+    else:
+        _write(changed, changed.read_text() + "updated native baseline\n")
+
+    second = module.materialize_native_browser_plugin(native_root, projected)
+
+    assert first == second == "native"
+    assert (projected / changed_asset).read_bytes() == changed.read_bytes()
+
+
+def test_native_projection_delegates_original_setup(tmp_path: Path) -> None:
+    bun = shutil.which("bun")
+    if bun is None:
+        pytest.skip("bun is unavailable")
+    install_root = tmp_path / "sky"
+    _native_browser_assets_fixture(install_root)
+    module = standalone_release._native_browser_projection_module(install_root)
+    native_root = tmp_path / "native/plugins/browser"
+    _native_browser_fixture(native_root)
+    _write(
+        native_root / "scripts/browser-client.mjs",
+        "export async function setupBrowserRuntime(options) { return {native: options.marker}; }\n",
+    )
+    helper = install_root / "browser/sky-enhancements.mjs"
+    _write(
+        helper,
+        "export const createSkyBrowserRuntime = nativeSetup => async options => ({...await nativeSetup(options), sky: true});\n",
+    )
+    projected = tmp_path / "projected/browser"
+    module.materialize_native_browser_plugin(native_root, projected)
+    program = (
+        f"import {{ setupBrowserRuntime }} from {json.dumps((projected / 'scripts/browser-client.mjs').as_uri())};\n"
+        "console.log(JSON.stringify(await setupBrowserRuntime({marker: 'passed-through'})));"
+    )
+
+    result = subprocess.run([bun, "-e", program], check=True, text=True, capture_output=True)
+
+    assert json.loads(result.stdout) == {"native": "passed-through"}
+
+
+def test_bundled_projection_retains_sky_browser_without_native_package(tmp_path: Path) -> None:
+    install_root = tmp_path / "sky"
+    _native_browser_assets_fixture(install_root)
+    source_root = install_root / "codex/openai-bundled"
+    _write(source_root / ".agents/plugins/marketplace.json", json.dumps({"plugins": []}))
+    _write(source_root / "plugins/browser/scripts/browser-client.mjs", "sky-adapter\n")
+    _write(
+        source_root / "plugins/browser/.mcp.json",
+        '{"mcpServers":{"node_repl":{"command":"node_repl"}}}',
+    )
+    codex_home = tmp_path / "codex"
+
+    standalone_release._sync_codex_bundled_marketplace(install_root, codex_home)
+
+    projected = codex_home / ".tmp/bundled-marketplaces/openai-bundled/plugins/browser"
+    assert not projected.is_symlink()
+    assert (projected / "scripts/browser-client.mjs").read_bytes() == (
+        source_root / "plugins/browser/scripts/browser-client.mjs"
+    ).read_bytes()
+    server = json.loads((projected / ".mcp.json").read_text())["mcpServers"]["node_repl"]
+    assert server["command"] == str(install_root / "bin/node_repl")
+    assert server["cwd"] == str(install_root)
+
+
+@pytest.mark.parametrize("defect", ["malformed", "wrong-name", "missing-service"])
+def test_bundled_projection_reports_broken_native_package_before_writing(
+    tmp_path: Path, defect: str
+) -> None:
+    install_root = tmp_path / "sky"
+    _native_browser_assets_fixture(install_root)
+    _write(install_root / "codex/openai-bundled/.agents/plugins/marketplace.json", "{}")
+    native_root = tmp_path / "native/plugins/browser"
+    _native_browser_fixture(native_root)
+    if defect == "malformed":
+        _write(native_root / ".codex-plugin/plugin.json", "{")
+    elif defect == "wrong-name":
+        _write(native_root / ".codex-plugin/plugin.json", '{"name":"browser-use"}')
+    else:
+        (native_root / "scripts/browser-service.mjs").unlink()
+    codex_home = tmp_path / "codex"
+
+    with pytest.raises(ValueError, match="native app Browser"):
+        standalone_release._sync_codex_bundled_marketplace(
+            install_root, codex_home, native_browser_root=native_root
+        )
+
+    assert not codex_home.exists()
+
+
+def test_update_bundled_config_retires_old_browser_identity(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    _write(
+        config,
+        '[plugins."browser-use@openai-bundled"]\nenabled = true\n\n'
+        '[plugins."browser@openai-bundled"]\nenabled = true\n',
+    )
+
+    standalone_release._update_codex_config_for_bundled(tmp_path)
+
+    parsed = tomllib.loads(config.read_text())
+    assert parsed["plugins"]["browser-use@openai-bundled"]["enabled"] is False
+    assert parsed["plugins"]["browser@openai-bundled"]["enabled"] is True
+    assert "mcp_servers" not in parsed
+    assert "SKY_CUA_REPO_ROOT" not in config.read_text()
+
+
 def _codex_config_after_install(tmp_path: Path, initial: str | None) -> tuple[Path, str]:
     home = tmp_path / "home"
     codex_home = home / ".codex"
@@ -1468,6 +1880,7 @@ def test_update_codex_config_for_bundled_creates_valid_config_from_nothing(tmp_p
     assert parsed["plugins"] == {
         "computer-use@openai-bundled": {"enabled": True},
         "browser@openai-bundled": {"enabled": True},
+        "sky-cua@local": {"enabled": False},
     }
 
 
@@ -1505,3 +1918,319 @@ def test_update_codex_config_for_bundled_writes_atomically_and_keeps_mode(tmp_pa
     assert config_path.stat().st_mode & 0o777 == 0o640
     assert config_path.stat().st_ino != inode_before  # os.replace of a temp file
     assert not list(config_path.parent.glob(".config.toml.tmp-*"))
+
+
+@pytest.mark.parametrize("missing", standalone_release.SKILL_NAMES)
+def test_payload_requires_each_bundled_computer_use_skill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    plugin_skills = payload / "codex/openai-bundled/plugins/computer-use/skills"
+    for name in standalone_release.SKILL_NAMES:
+        assert (plugin_skills / name / "SKILL.md").read_bytes() == (
+            payload / "skills" / name / "SKILL.md"
+        ).read_bytes()
+    (plugin_skills / missing / "SKILL.md").unlink()
+    with pytest.raises(FileNotFoundError, match=f"skills/{missing}/SKILL.md"):
+        standalone_release.validate_payload(payload)
+
+
+@pytest.mark.parametrize(
+    ("policy", "enabled"),
+    [
+        ("", standalone_release.SKILL_NAMES),
+        ("[surfaces]\nbrowser = false\nphone = false\n", ("computer-use",)),
+        ("[surfaces]\ndesktop = false\n", ("browser-use", "phone-use")),
+        ("[phone]\nenabled = false\n", ("computer-use", "browser-use")),
+    ],
+)
+def test_codex_plugin_install_and_reinstall_follow_durable_surface_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    policy: str,
+    enabled: tuple[str, ...],
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    config = codex_home / "config.toml"
+    _write(home / ".config/sky-cua/sky-cua.toml", policy)
+    _write(
+        config,
+        'model = "keep-model"\n'
+        '[plugins."unrelated@local"]\nenabled = false\n'
+        '[plugins."sky-cua@debug"]\nenabled = true\n'
+        '[plugins."sky-cua@Heliasar"]\nenabled = true\n'
+        '[plugins."browser-use@openai-bundled"]\nenabled = true\n'
+        '[[skills.config]]\npath = "/user/custom/SKILL.md"\nenabled = true\n'
+        "# BEGIN sky-cua managed shared-agent skill overrides\n"
+        '[[skills.config]]\npath = "/stale-managed/SKILL.md"\nenabled = false\n'
+        "# END sky-cua managed shared-agent skill overrides\n",
+    )
+    calls: list[str] = []
+    commands: list[list[str]] = []
+    closed: list[bool] = []
+
+    class FakeClient:
+        def __init__(self, command: list[str], *, env: dict[str, str], cwd: Path) -> None:
+            commands.append(command)
+            assert env["CODEX_HOME"] == str(codex_home)
+            assert env["HOME"] == str(home)
+            assert cwd == payload
+
+        def initialize(self, **kwargs: object) -> dict[str, object]:
+            assert kwargs["capabilities"] == {"experimentalApi": True}
+            return {}
+
+        def request(self, method: str, params: dict[str, str]) -> dict[str, object]:
+            assert method == "plugin/install"
+            assert params["marketplacePath"] == str(
+                codex_home
+                / ".tmp/bundled-marketplaces/openai-bundled/.agents/plugins/marketplace.json"
+            )
+            name = params["pluginName"]
+            calls.append(name)
+            source = codex_home / ".tmp/bundled-marketplaces/openai-bundled/plugins" / name
+            destination = codex_home / "plugins/cache/openai-bundled" / name / "test"
+            shutil.rmtree(destination, ignore_errors=True)
+            shutil.copytree(source, destination)
+            # Native installation may enable a companion: final policy must win.
+            config.write_text(
+                standalone_release._upsert_toml_key(
+                    config.read_text(), 'plugins."browser@openai-bundled"', "enabled", "true"
+                )
+            )
+            return {"authPolicy": "ON_INSTALL", "appsNeedingAuth": []}
+
+        def close(self) -> None:
+            closed.append(True)
+
+    native = tmp_path / "native-codex"
+    _write(native, executable=True)
+    monkeypatch.setattr(standalone_release, "NATIVE_CODEX_BINARY", native)
+    monkeypatch.setattr(standalone_release, "CodexAppServerClient", FakeClient)
+    expected = ("computer-use", "browser") if "browser-use" in enabled else ("computer-use",)
+    for revision in ("first", "second"):
+        source_skill = (
+            payload / "codex/openai-bundled/plugins/computer-use/skills/computer-use/SKILL.md"
+        )
+        source_skill.write_text(revision)
+        assert (
+            standalone_release._install_codex_plugins(
+                payload, home=home, env={}, which=lambda _name: "/fallback/codex"
+            )
+            == expected
+        )
+        latest = codex_home / "plugins/cache/openai-bundled/computer-use/latest"
+        assert latest.is_symlink()
+        assert (latest / "skills/computer-use/SKILL.md").read_text() == revision
+        mcp = json.loads((latest / ".mcp.json").read_text())["mcpServers"]["computer-use"]
+        assert mcp["command"] == str(payload / "bin/sky-cua-client")
+        assert mcp["args"] == ["mcp"]
+        assert mcp["cwd"] == str(payload)
+        assert mcp["env_vars"] == ["DISPLAY"]
+        assert mcp["default_tools_approval_mode"] == "approve"
+        parsed = tomllib.loads(config.read_text())
+        assert parsed["model"] == "keep-model"
+        plugins = parsed["plugins"]
+        assert plugins["unrelated@local"]["enabled"] is False
+        assert plugins["sky-cua@debug"]["enabled"] is False
+        assert plugins["sky-cua@Heliasar"]["enabled"] is False
+        assert plugins["browser-use@openai-bundled"]["enabled"] is False
+        assert plugins["browser@openai-bundled"]["enabled"] == ("browser-use" in enabled)
+        overrides = {item["path"]: item["enabled"] for item in parsed["skills"]["config"]}
+        assert overrides["/user/custom/SKILL.md"] is True
+        assert "/stale-managed/SKILL.md" not in overrides
+        for name in standalone_release.SKILL_NAMES:
+            assert overrides[str(home / ".agents/skills" / name / "SKILL.md")] is False
+            assert (str(latest / "skills" / name / "SKILL.md") in overrides) == (
+                name not in enabled
+            )
+    assert calls == list(expected) * 2
+    assert commands == [[str(native), "app-server"]] * 2
+    assert closed == [True, True]
+
+
+@pytest.mark.parametrize("configure_hosts", [False, True])
+def test_standalone_integrates_claude_skills_and_optional_host_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configure_hosts: bool
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setattr(standalone_release, "_install_codex_plugins", lambda *args, **kwargs: ())
+    report = install_payload(
+        payload,
+        home=home,
+        env={"HOME": str(home)},
+        which=lambda _name: None,
+        configure_hosts=configure_hosts,
+    )
+    public_root = Path(str(report["public_root"]))
+    for name in standalone_release.SKILL_NAMES:
+        assert (home / ".claude/skills" / name).resolve() == public_root / "skills" / name
+    if configure_hosts:
+        claude = json.loads((home / ".claude.json").read_text())
+        assert claude["mcpServers"]["sky-cua"]["command"] == str(public_root / "bin/sky-cua-client")
+        assert cast(dict[str, Any], report["claude_config"])["code"]["status"] == "created"
+    else:
+        assert not (home / ".claude.json").exists()
+        assert report["claude_config"] == {"status": "skipped"}
+
+
+def test_install_payload_passes_its_surface_selection_to_codex_plugin_installation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _assemble_payload(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    (home / ".codex").mkdir(parents=True)
+    policy = tmp_path / "policy/sky-cua.toml"
+    _write(policy, "[surfaces]\nbrowser = false\n")
+    env = {
+        "HOME": str(home),
+        "XDG_DATA_HOME": str(tmp_path / "xdg-data"),
+        "SKY_CUA_CONFIG_PATH": str(policy),
+    }
+    real_durable_skill_names = standalone_release._durable_skill_names
+    policy_reads: list[tuple[str, ...]] = []
+
+    def durable_skill_names_once(home: Path, env: Mapping[str, str]) -> tuple[str, ...]:
+        selected = real_durable_skill_names(home, env)
+        policy_reads.append(selected)
+        # A re-read after install_payload's selection would now enable Browser.
+        _write(policy, "[surfaces]\nbrowser = true\n")
+        return selected
+
+    installed: list[str] = []
+
+    class FakeClient:
+        def __init__(self, command: list[str], **_kwargs: object) -> None:
+            self.codex_home = home / ".codex"
+
+        def initialize(self, **_kwargs: object) -> dict[str, object]:
+            return {}
+
+        def request(self, method: str, params: dict[str, str]) -> dict[str, object]:
+            assert method == "plugin/install"
+            name = params["pluginName"]
+            installed.append(name)
+            source = self.codex_home / ".tmp/bundled-marketplaces/openai-bundled/plugins" / name
+            destination = self.codex_home / "plugins/cache/openai-bundled" / name
+            version = json.loads((source / ".codex-plugin/plugin.json").read_text())["version"]
+            shutil.copytree(source, destination / version, dirs_exist_ok=True)
+            return {}
+
+        def close(self) -> None:
+            pass
+
+    native = tmp_path / "native-codex"
+    _write(native, executable=True)
+    monkeypatch.setattr(standalone_release, "NATIVE_CODEX_BINARY", native)
+    monkeypatch.setattr(standalone_release, "NATIVE_BROWSER_PLUGIN_ROOT", tmp_path / "absent/x")
+    monkeypatch.setattr(standalone_release, "CodexAppServerClient", FakeClient)
+    monkeypatch.setattr(standalone_release, "_durable_skill_names", durable_skill_names_once)
+
+    report = install_payload(payload, home=home, env=env, which=lambda _name: None)
+
+    assert policy_reads == [("computer-use", "phone-use")]
+    assert installed == ["computer-use"]
+    assert report["codex_plugins"] == ["computer-use"]
+
+
+def _codex_plugin_install_copy(source: Path, destination: Path) -> None:
+    """Mirror Codex plugin/install: regular entries are copied, symlinks omitted."""
+    shutil.copytree(
+        source,
+        destination,
+        ignore=lambda directory, names: [
+            name for name in names if (Path(directory) / name).is_symlink()
+        ],
+    )
+
+
+def test_native_baseline_survives_codex_plugin_install_cache_copy(tmp_path: Path) -> None:
+    runtime = shutil.which("node") or shutil.which("bun")
+    if runtime is None:
+        pytest.skip("node and bun are unavailable")
+    install_root = tmp_path / "sky"
+    _native_browser_assets_fixture(install_root)
+    module = standalone_release._native_browser_projection_module(install_root)
+    native_root = tmp_path / "native/plugins/browser"
+    _native_browser_fixture(native_root)
+    # The native client depends on siblings, a packaged dependency and docs
+    # resolved from its own location, as the shipped client does.
+    _write(
+        native_root / "scripts/browser-client.mjs",
+        'import { readFile } from "node:fs/promises";\n'
+        'import { service } from "./browser-service.mjs";\n'
+        'import { dependency } from "native-dependency";\n'
+        "export async function setupBrowserRuntime(options) {\n"
+        '  const docs = JSON.parse(await readFile(new URL("../docs/api.json", import.meta.url)));\n'
+        "  return { marker: options.marker, service, dependency, docs: docs.ok };\n"
+        "}\n",
+    )
+    _write(native_root / "scripts/browser-service.mjs", 'export const service = "native";\n')
+    _write(
+        native_root / "node_modules/native-dependency/package.json",
+        json.dumps({"name": "native-dependency", "type": "module", "main": "index.js"}),
+    )
+    _write(
+        native_root / "node_modules/native-dependency/index.js",
+        'export const dependency = "packaged";\n',
+    )
+    _write(native_root / "docs/api.json", json.dumps({"ok": True}))
+    # Symlinks inside the native package itself must be dereferenced too.
+    (native_root / "assets/linked-icon.svg").symlink_to(native_root / "assets/native-icon.svg")
+    helper = install_root / "browser/sky-enhancements.mjs"
+    _write(
+        helper,
+        "export const createSkyBrowserRuntime = nativeSetup => async options =>"
+        " ({ ...(await nativeSetup(options)), sky: true });\n",
+    )
+    native_before = {
+        str(path.relative_to(native_root)): path.read_bytes()
+        for path in native_root.rglob("*")
+        if path.is_file()
+    }
+    projected = tmp_path / "codex/.tmp/bundled-marketplaces/openai-bundled/plugins/browser"
+    version = module.materialize_native_browser_plugin(native_root, projected)
+    cache = tmp_path / "codex/plugins/cache/openai-bundled/browser" / version
+
+    _codex_plugin_install_copy(projected, cache)
+
+    projected_files = sorted(
+        str(path.relative_to(projected)) for path in projected.rglob("*") if path.is_file()
+    )
+    cached_files = sorted(
+        str(path.relative_to(cache)) for path in cache.rglob("*") if path.is_file()
+    )
+    assert cached_files == projected_files
+    assert set(native_before) == set(cached_files)
+    for relative, content in native_before.items():
+        assert (cache / relative).read_bytes() == content, relative
+    assert json.loads((cache / ".codex-plugin/plugin.json").read_text())["version"] == version
+    assert {
+        str(path.relative_to(native_root)): path.read_bytes()
+        for path in native_root.rglob("*")
+        if path.is_file()
+    } == native_before
+
+    shutil.rmtree(projected)
+    program = (
+        "const { setupBrowserRuntime } = await import("
+        f"{json.dumps((cache / 'scripts/browser-client.mjs').as_uri())});\n"
+        "console.log(JSON.stringify(await setupBrowserRuntime({ marker: 'cached' })));\n"
+    )
+    command = (
+        [runtime, "--input-type=module", "-e", program]
+        if Path(runtime).name == "node"
+        else [runtime, "-e", program]
+    )
+    result = subprocess.run(command, check=True, text=True, capture_output=True, cwd=tmp_path)
+
+    assert json.loads(result.stdout) == {
+        "marker": "cached",
+        "service": "native",
+        "dependency": "packaged",
+        "docs": True,
+    }

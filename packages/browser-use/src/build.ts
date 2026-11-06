@@ -25,6 +25,20 @@ if (!result.success) {
   process.exit(1);
 }
 await writeFile(resolve(outputRoot, "index.d.ts"), generateDeclarations(API_MANIFEST));
+const nativeEnhancements = await Bun.build({
+  entrypoints: [resolve(packageRoot, "src/native-enhancements.ts")],
+  outdir: outputRoot,
+  naming: "sky-enhancements.mjs",
+  target: "node",
+  format: "esm",
+  minify: true,
+  sourcemap: "none",
+  packages: "bundle",
+});
+if (!nativeEnhancements.success) {
+  for (const log of nativeEnhancements.logs) console.error(log);
+  process.exit(1);
+}
 const projection = await Bun.build({
   entrypoints: [resolve(packageRoot, "src/projection.ts")],
   outdir: outputRoot,

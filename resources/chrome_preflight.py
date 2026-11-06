@@ -17,9 +17,18 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
+from _native_browser_projection import (
+    NATIVE_BROWSER_PLUGIN_ROOT,
+    ValidatedNativeBrowser,
+    materialize_native_browser_plugin,
+    sync_native_browser_skill,
+    validate_native_browser_plugin,
+)
+
 OPENAI_BUNDLED_MARKETPLACE = "openai-bundled"
 CHROME_PLUGIN_NAME = "chrome"
-BROWSER_USE_PLUGIN_NAME = "browser-use"
+BROWSER_PLUGIN_NAME = "browser"
+RETIRED_BROWSER_PLUGIN_NAME = "browser-use"
 COMPUTER_USE_PLUGIN_NAME = "computer-use"
 NODE_REPL_NAME = "node_repl"
 CHROME_EXTENSION_ID_RE = re.compile(r"^[a-p]{32}$")
@@ -248,14 +257,53 @@ def sync_marketplace(source_root: Path, codex_home: Path) -> None:
     ensure_marketplace_entries(codex_home)
 
 
-def sync_browser_use_plugin(source_root: Path, codex_home: Path) -> None:
-    source_plugin = source_root / "plugins" / BROWSER_USE_PLUGIN_NAME
+def bind_standalone_browser_mcp(plugin_root: Path) -> None:
+    """Bind standalone preflight projections to the runtime owning this preflight."""
+    install_root = Path(__file__).resolve().parent.parent
+    if not (install_root / "RELEASE.json").is_file():
+        return
+    mcp_path = plugin_root / ".mcp.json"
+    mcp = json.loads(mcp_path.read_text(encoding="utf-8"))
+    mcp["mcpServers"]["node_repl"].update(
+        command=str(install_root / "bin/node_repl"), cwd=str(install_root)
+    )
+    mcp_path.write_text(json.dumps(mcp, indent=2) + "\n", encoding="utf-8")
+
+
+def sync_browser_plugin(
+    source_root: Path,
+    codex_home: Path,
+    *,
+    native_browser_root: Path | None = None,
+    validated_native: ValidatedNativeBrowser | None = None,
+    native_checked: bool = False,
+) -> None:
+    native_browser = (
+        validated_native
+        if native_checked
+        else validate_native_browser_plugin(
+            NATIVE_BROWSER_PLUGIN_ROOT if native_browser_root is None else native_browser_root
+        )
+    )
+    resources = Path(__file__).resolve().parent
+    sync_native_browser_skill(
+        resources.parent,
+        codex_home,
+        enabled=native_browser is not None,
+        native_browser_root=native_browser.root if native_browser is not None else None,
+    )
+    if native_browser is not None:
+        materialize_native_browser_plugin(
+            native_browser,
+            codex_home / ".tmp/bundled-marketplaces/openai-bundled/plugins/browser",
+        )
+        ensure_marketplace_entries(codex_home, plugin_names=(BROWSER_PLUGIN_NAME,))
+        return
+    source_plugin = source_root / "plugins" / BROWSER_PLUGIN_NAME
     version = bundled_plugin_version(source_plugin)
     if version is None:
         return
-    cache_root = (
-        codex_home / "plugins" / "cache" / OPENAI_BUNDLED_MARKETPLACE / BROWSER_USE_PLUGIN_NAME
-    )
+    cache_root = codex_home / "plugins" / "cache" / OPENAI_BUNDLED_MARKETPLACE / BROWSER_PLUGIN_NAME
     cache_plugin = cache_root / version
     source_client = source_plugin / "scripts" / "browser-client.mjs"
     cache_client = cache_plugin / "scripts" / "browser-client.mjs"
@@ -264,12 +312,16 @@ def sync_browser_use_plugin(source_root: Path, codex_home: Path) -> None:
         and source_client.exists()
         and files_equal(source_client, cache_client)
     ):
+        bind_standalone_browser_mcp(cache_plugin)
         ensure_cached_plugin_link(cache_root, version)
-        ensure_marketplace_plugin_link(codex_home, BROWSER_USE_PLUGIN_NAME, cache_root / "latest")
+        ensure_marketplace_plugin_link(codex_home, BROWSER_PLUGIN_NAME, cache_root / "latest")
+        ensure_marketplace_entries(codex_home, plugin_names=(BROWSER_PLUGIN_NAME,))
         return
     copytree_replace(source_plugin, cache_plugin)
+    bind_standalone_browser_mcp(cache_plugin)
     ensure_cached_plugin_link(cache_root, version)
-    ensure_marketplace_plugin_link(codex_home, BROWSER_USE_PLUGIN_NAME, cache_root / "latest")
+    ensure_marketplace_plugin_link(codex_home, BROWSER_PLUGIN_NAME, cache_root / "latest")
+    ensure_marketplace_entries(codex_home, plugin_names=(BROWSER_PLUGIN_NAME,))
 
 
 def validate_browser_use_node_repl(source_root: Path) -> None:
@@ -437,7 +489,9 @@ def ensure_marketplace_plugin_link(codex_home: Path, plugin_name: str, target: P
     link_or_copy_directory(target, plugin_link)
 
 
-def ensure_marketplace_entries(codex_home: Path) -> None:
+def ensure_marketplace_entries(
+    codex_home: Path, *, plugin_names: tuple[str, ...] | None = None
+) -> None:
     marketplace_path = (
         codex_home
         / ".tmp"
@@ -449,21 +503,48 @@ def ensure_marketplace_entries(codex_home: Path) -> None:
     )
     try:
         manifest = json.loads(marketplace_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        if plugin_names is None:
+            return
+        manifest = {"name": OPENAI_BUNDLED_MARKETPLACE, "plugins": []}
     except (OSError, json.JSONDecodeError):
         return
 
     plugins = manifest.setdefault("plugins", [])
     if not isinstance(plugins, list):
         return
+    current_plugins = [
+        plugin
+        for plugin in plugins
+        if not isinstance(plugin, dict) or plugin.get("name") != RETIRED_BROWSER_PLUGIN_NAME
+    ]
+    changed = current_plugins != plugins
+    plugins = current_plugins
+    manifest["plugins"] = plugins
     existing_names = {plugin.get("name") for plugin in plugins if isinstance(plugin, dict)}
-    changed = False
-    for plugin_name in (CHROME_PLUGIN_NAME, BROWSER_USE_PLUGIN_NAME, COMPUTER_USE_PLUGIN_NAME):
+    for plugin_name in (
+        (CHROME_PLUGIN_NAME, BROWSER_PLUGIN_NAME, COMPUTER_USE_PLUGIN_NAME)
+        if plugin_names is None
+        else plugin_names
+    ):
+        if (
+            plugin_name == BROWSER_PLUGIN_NAME
+            and not (
+                marketplace_path.parents[2]
+                / "plugins"
+                / BROWSER_PLUGIN_NAME
+                / ".codex-plugin"
+                / "plugin.json"
+            ).is_file()
+        ):
+            continue
         if plugin_name in existing_names:
             continue
         plugins.append(local_marketplace_plugin_entry(plugin_name))
         changed = True
 
     if changed:
+        marketplace_path.parent.mkdir(parents=True, exist_ok=True)
         marketplace_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
@@ -717,6 +798,8 @@ def write_chrome_native_host_manifests(host_path: Path, plugin_root: Path) -> No
     for relative in (
         ".config/google-chrome/NativeMessagingHosts",
         ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts",
+        ".config/BraveSoftware/Brave-Browser-Nightly/NativeMessagingHosts",
+        ".config/BraveSoftware/Brave-Origin/NativeMessagingHosts",
         ".config/chromium/NativeMessagingHosts",
     ):
         destination = home / relative / f"{host_name}.json"
@@ -812,47 +895,60 @@ def durable_browser_surface_enabled() -> bool:
     return enabled
 
 
-def update_codex_config(codex_home: Path) -> None:
+def update_codex_config(
+    codex_home: Path, *, browser_only: bool = False, browser_surface_enabled: bool | None = None
+) -> None:
     config_path = codex_home / "config.toml"
     try:
         config_text = config_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         config_text = ""
 
+    original_config = config_text
+    if browser_surface_enabled is None:
+        browser_surface_enabled = durable_browser_surface_enabled()
+    materialize_plugins = not browser_only or browser_surface_enabled
     marketplace_root = codex_home / ".tmp" / "bundled-marketplaces" / OPENAI_BUNDLED_MARKETPLACE
-    config_text = upsert_toml_key(config_text, "features", "plugins", "true")
-    config_text = upsert_toml_key(
-        config_text,
-        f"marketplaces.{OPENAI_BUNDLED_MARKETPLACE}",
-        "last_updated",
-        toml_string(datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")),
-    )
-    config_text = upsert_toml_key(
-        config_text,
-        f"marketplaces.{OPENAI_BUNDLED_MARKETPLACE}",
-        "source_type",
-        '"local"',
-    )
-    config_text = upsert_toml_key(
-        config_text,
-        f"marketplaces.{OPENAI_BUNDLED_MARKETPLACE}",
-        "source",
-        toml_string(marketplace_root),
-    )
-    browser_surface_enabled = durable_browser_surface_enabled()
+    if materialize_plugins:
+        config_text = upsert_toml_key(config_text, "features", "plugins", "true")
+        config_text = upsert_toml_key(
+            config_text,
+            f"marketplaces.{OPENAI_BUNDLED_MARKETPLACE}",
+            "last_updated",
+            toml_string(
+                datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            ),
+        )
+        config_text = upsert_toml_key(
+            config_text,
+            f"marketplaces.{OPENAI_BUNDLED_MARKETPLACE}",
+            "source_type",
+            '"local"',
+        )
+        config_text = upsert_toml_key(
+            config_text,
+            f"marketplaces.{OPENAI_BUNDLED_MARKETPLACE}",
+            "source",
+            toml_string(marketplace_root),
+        )
     browser_enabled = "true" if browser_surface_enabled else "false"
-    config_text = upsert_toml_key(
-        config_text,
-        f'plugins."{CHROME_PLUGIN_NAME}@{OPENAI_BUNDLED_MARKETPLACE}"',
-        "enabled",
-        browser_enabled,
-    )
-    config_text = upsert_toml_key(
-        config_text,
-        f'plugins."{BROWSER_USE_PLUGIN_NAME}@{OPENAI_BUNDLED_MARKETPLACE}"',
-        "enabled",
-        browser_enabled,
-    )
+    chrome_header = f'plugins."{CHROME_PLUGIN_NAME}@{OPENAI_BUNDLED_MARKETPLACE}"'
+    if not browser_only or f"[{chrome_header}]" in config_text:
+        config_text = upsert_toml_key(
+            config_text,
+            chrome_header,
+            "enabled",
+            browser_enabled,
+        )
+    browser_header = f'plugins."{BROWSER_PLUGIN_NAME}@{OPENAI_BUNDLED_MARKETPLACE}"'
+    browser_ready = (
+        marketplace_root / "plugins" / BROWSER_PLUGIN_NAME / ".codex-plugin" / "plugin.json"
+    ).is_file()
+    if (materialize_plugins and browser_ready) or f"[{browser_header}]" in config_text:
+        config_text = upsert_toml_key(config_text, browser_header, "enabled", browser_enabled)
+    retired_header = f'plugins."{RETIRED_BROWSER_PLUGIN_NAME}@{OPENAI_BUNDLED_MARKETPLACE}"'
+    if f"[{retired_header}]" in config_text:
+        config_text = upsert_toml_key(config_text, retired_header, "enabled", "false")
     # Codex Desktop detects Computer Use plugins by the built-in plugin name
     # "computer-use", so the compat plugin id is the single enabled
     # computer-use plugin. The sky-cua channel ids stay disabled; the active
@@ -869,12 +965,15 @@ def update_codex_config(codex_home: Path) -> None:
         / "latest"
         / ".mcp.json"
     ).exists()
-    config_text = upsert_toml_key(
-        config_text,
-        f'plugins."{COMPUTER_USE_PLUGIN_NAME}@{OPENAI_BUNDLED_MARKETPLACE}"',
-        "enabled",
-        "true" if compat_ready else "false",
-    )
+    if not browser_only:
+        config_text = upsert_toml_key(
+            config_text,
+            f'plugins."{COMPUTER_USE_PLUGIN_NAME}@{OPENAI_BUNDLED_MARKETPLACE}"',
+            "enabled",
+            "true" if compat_ready else "false",
+        )
+    if config_text == original_config:
+        return
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(config_text, encoding="utf-8")
 
@@ -885,7 +984,7 @@ def default_source_root() -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Sync bundled OpenAI Chrome/browser-use plugins for sky-cua preflight."
+        description="Sync bundled OpenAI Chrome/Browser plugins for sky-cua preflight."
     )
     parser.add_argument(
         "--codex-home",
@@ -902,17 +1001,37 @@ def main() -> int:
     args = parser.parse_args()
 
     source_root = args.source_root.resolve()
-    if not (source_root / ".agents" / "plugins" / "marketplace.json").exists():
+    legacy_source = (source_root / ".agents" / "plugins" / "marketplace.json").exists()
+    browser_enabled = durable_browser_surface_enabled()
+    native_browser = (
+        validate_native_browser_plugin(NATIVE_BROWSER_PLUGIN_ROOT) if browser_enabled else None
+    )
+    if not browser_enabled or native_browser is None:
+        sync_native_browser_skill(
+            Path(__file__).resolve().parent.parent, args.codex_home, enabled=False
+        )
+    browser_fallback = (
+        source_root / "plugins" / BROWSER_PLUGIN_NAME / ".codex-plugin/plugin.json"
+    ).is_file()
+    if browser_enabled and not legacy_source and native_browser is None and not browser_fallback:
         print(f"browser_preflight=skipped missing_source={source_root}")
         return 0
 
-    sync_marketplace(source_root, args.codex_home)
-    sync_browser_use_plugin(source_root, args.codex_home)
-    validate_browser_use_node_repl(source_root)
-    sync_chrome_plugin(source_root, args.codex_home)
-    sync_computer_use_compat_plugin(source_root, args.codex_home)
-    update_codex_config(args.codex_home)
-    if fallback := fallback_extension_path(source_root):
+    if legacy_source:
+        sync_marketplace(source_root, args.codex_home)
+    if browser_enabled:
+        sync_browser_plugin(
+            source_root, args.codex_home, validated_native=native_browser, native_checked=True
+        )
+    if legacy_source:
+        if browser_enabled:
+            validate_browser_use_node_repl(source_root)
+        sync_chrome_plugin(source_root, args.codex_home)
+        sync_computer_use_compat_plugin(source_root, args.codex_home)
+    update_codex_config(
+        args.codex_home, browser_only=not legacy_source, browser_surface_enabled=browser_enabled
+    )
+    if legacy_source and (fallback := fallback_extension_path(source_root)):
         print(f"browser_extension_fallback={fallback}")
         print(
             "browser_extension_fallback_hint="

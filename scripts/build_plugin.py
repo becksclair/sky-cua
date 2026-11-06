@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -52,6 +53,8 @@ WORKTREE_BUNDLE_FILES = (
     Path(".claude-plugin") / "plugin.json",
     Path(".claude-plugin") / "marketplace.json",
     Path("resources") / "chrome_preflight.py",
+    Path("resources") / "_native_browser_projection.py",
+    Path("resources") / "sky-browser-enhancements" / "SKILL.md",
     Path("resources") / "systemd" / "sky-cua-input-helper.service",
     Path("docs") / "operations" / "isolated-daemon-smokes.md",
     Path("docs") / "operations" / "plugin-release.md",
@@ -715,6 +718,85 @@ def build_canonical_browser_client() -> Path:
     return client
 
 
+def build_development_browser_runtime() -> Path:
+    """Refresh the complete owned runtime; never depend on an installed release."""
+    runtime = REPO_ROOT / "out/components/cua-node-linux-x64-glibc"
+    subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/assemble_cua_node.py"),
+            "--output-root",
+            str(runtime),
+            "--allow-development-dirty",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    return runtime
+
+
+def stage_development_browser_fallback(destination: Path, runtime: Path) -> Path:
+    """Keep the plugin relocatable while loading Browser from its trusted package."""
+    source = REPO_ROOT / "resources/codex-compat/openai-bundled/plugins/browser"
+    shutil.copytree(source, destination, dirs_exist_ok=True)
+    shutil.copytree(runtime, destination / "cua-node", dirs_exist_ok=True)
+    (destination / "scripts/browser-client.mjs").write_text(
+        "// Development bundle: the adjacent complete runtime owns this package.\n"
+        "export async function setupBrowserRuntime(options) {\n"
+        '  const client = await import("@heliasar/browser-use");\n'
+        "  return client.setupBrowserRuntime(options);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (destination / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "node_repl": {
+                        "command": "./cua-node/bin/node_repl",
+                        "cwd": ".",
+                        "default_tools_approval_mode": "approve",
+                    }
+                }
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest_path = destination / ".codex-plugin/plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["version"] = (
+        f"{manifest['version']}-dev.{development_browser_fallback_digest(destination)[:16]}"
+    )
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return runtime / "lib/node_modules/@heliasar/browser-use/build/browser-client.mjs"
+
+
+def development_browser_fallback_digest(root: Path) -> str:
+    """Version small plugin inputs plus the runtime's existing complete checksums."""
+    digest = hashlib.sha256()
+    inputs = [root / "cua-node/manifest.json"]
+    for directory, dirnames, filenames in os.walk(root):
+        if Path(directory) == root:
+            dirnames[:] = [name for name in dirnames if name != "cua-node"]
+        dirnames.sort()
+        inputs.extend(Path(directory) / name for name in sorted(filenames))
+    for path in sorted(inputs):
+        relative = path.relative_to(root).as_posix()
+        content = path.read_bytes()
+        if relative == ".codex-plugin/plugin.json":
+            manifest = json.loads(content)
+            manifest.pop("version", None)
+            content = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+        executable = b"x" if path.stat().st_mode & 0o111 else b"-"
+        digest.update(relative.encode() + b"\0" + executable + str(len(content)).encode() + b"\0")
+        digest.update(content)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def project_canonical_browser_client(client: Path, projection_root: Path) -> None:
     projection = REPO_ROOT / CANONICAL_BROWSER_PROJECTION
     if not projection.is_file():
@@ -727,7 +809,30 @@ def project_canonical_browser_client(client: Path, projection_root: Path) -> Non
     )
 
 
-def stage_openai_bundled_plugins(temp_root: Path) -> None:
+def stage_openai_bundled_plugins(
+    temp_root: Path, *, browser_runtime_mode: str = "development"
+) -> None:
+    fallback_destination = temp_root / "resources/plugins/openai-bundled/plugins/browser"
+    if browser_runtime_mode == "development":
+        # Assembly builds the canonical Browser package and complete Node REPL
+        # once. Development owns its runtime independently of installed releases.
+        runtime = build_development_browser_runtime()
+        canonical_browser_client = stage_development_browser_fallback(fallback_destination, runtime)
+    elif browser_runtime_mode == "standalone":
+        # The standalone assembler flattens its single runtime into the release
+        # root. Preserve that fixed-root adapter and avoid a second runtime copy.
+        canonical_browser_client = build_canonical_browser_client()
+        fallback_source = REPO_ROOT / "resources/codex-compat/openai-bundled/plugins/browser"
+        shutil.copytree(fallback_source, fallback_destination, dirs_exist_ok=True)
+    else:
+        raise ValueError(f"unsupported Browser runtime mode: {browser_runtime_mode}")
+    enhancements = canonical_browser_client.with_name("sky-enhancements.mjs")
+    if not enhancements.is_file():
+        raise FileNotFoundError(f"canonical Browser enhancement build is missing: {enhancements}")
+    enhancement_destination = temp_root / "browser/sky-enhancements.mjs"
+    enhancement_destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(enhancements, enhancement_destination)
+
     source_root = bundled_resource_root()
     source_marketplace = source_root / ".agents" / "plugins" / "marketplace.json"
     if not source_marketplace.exists():
@@ -746,7 +851,6 @@ def stage_openai_bundled_plugins(temp_root: Path) -> None:
 
     plugins_destination = destination_root / "plugins"
     plugins_destination.mkdir(parents=True, exist_ok=True)
-    canonical_browser_client = build_canonical_browser_client()
     staged_plugins: set[str] = set()
     for plugin_name in OPENAI_BUNDLED_PLUGIN_NAMES:
         source_plugin = source_root / "plugins" / plugin_name
@@ -855,7 +959,12 @@ def install_bundled_chrome_host(destination_root: Path) -> None:
     ensure_executable(destination_host)
 
 
-def stage_bundle(bundle_root: Path, *, release_core_commit: str | None = None) -> None:
+def stage_bundle(
+    bundle_root: Path,
+    *,
+    release_core_commit: str | None = None,
+    browser_runtime_mode: str = "development",
+) -> None:
     temp_root = bundle_root.parent / f".{bundle_root.name}.tmp"
     remove_path(temp_root)
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -865,7 +974,7 @@ def stage_bundle(bundle_root: Path, *, release_core_commit: str | None = None) -
         copy_worktree_bundle_files(temp_root)
         copy_worktree_bundle_dirs(temp_root)
         copy_companion_apk_if_present(temp_root)
-        stage_openai_bundled_plugins(temp_root)
+        stage_openai_bundled_plugins(temp_root, browser_runtime_mode=browser_runtime_mode)
         shutil.copy2(mcp_config_source(), temp_root / ".mcp.json")
     else:
         copy_commit_bundle_sources(temp_root, release_core_commit)
@@ -940,6 +1049,12 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--browser-runtime-mode",
+        choices=("development", "standalone"),
+        default="development",
+        help="Use a self-contained development Browser runtime or the standalone release root.",
+    )
+    parser.add_argument(
         "--release-core-commit",
         help=(
             "build an isolated complete-release core from exactly this clean Git commit, "
@@ -977,7 +1092,11 @@ def main() -> int:
         configure_portable_x86_64_v3_build()
     build_release_binaries(validate_portable_x86_64_v3=args.portable_x86_64_v3)
     args.dist_root.parent.mkdir(parents=True, exist_ok=True)
-    stage_bundle(args.dist_root, release_core_commit=args.release_core_commit)
+    stage_bundle(
+        args.dist_root,
+        release_core_commit=args.release_core_commit,
+        browser_runtime_mode=args.browser_runtime_mode,
+    )
     print(args.dist_root)
     return 0
 

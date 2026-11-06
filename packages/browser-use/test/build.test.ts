@@ -37,6 +37,11 @@ test("Bun builds deterministic canonical bytes and projections are byte-identica
     const first = await buildAt(join(root, "first"));
     const second = await buildAt(join(root, "second"));
     assert.deepEqual(first, second);
+    const nativeLayer = await readFile(join(root, "first", "sky-enhancements.mjs"));
+    assert.deepEqual(nativeLayer, await readFile(join(root, "second", "sky-enhancements.mjs")));
+    const { createSkyBrowserRuntime } = await import(pathToFileURL(join(root, "first", "sky-enhancements.mjs")).href);
+    const nativeAgent = { browsers: {} };
+    assert.equal(await createSkyBrowserRuntime(async () => nativeAgent)(), nativeAgent);
     const canonical = join(root, "first", "browser-client.mjs");
     const projectionRoot = join(root, "projection");
     const projected = await materializeCodexProjections(canonical, projectionRoot);

@@ -44,14 +44,36 @@ from _test_support import (
 )
 
 
-def load_chrome_preflight() -> ModuleType:
+def load_chrome_preflight(tmp_path: Path | None = None) -> ModuleType:
     module_path = Path(__file__).resolve().parents[1] / "resources" / "chrome_preflight.py"
     spec = importlib.util.spec_from_file_location("chrome_preflight", module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"failed to load {module_path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.path.insert(0, str(module_path.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    if tmp_path is not None:
+        module.__dict__["NATIVE_BROWSER_PLUGIN_ROOT"] = (
+            tmp_path / "no-native-package/plugins/browser"
+        )
     return module
+
+
+def canonical_browser_build_fixture(root: Path) -> Path:
+    (root / "bin").mkdir(parents=True, exist_ok=True)
+    (root / "bin/node_repl").write_text("runtime launcher", encoding="utf-8")
+    (root / "manifest.json").write_text('{"fixture":"canonical-runtime"}\n', encoding="utf-8")
+    root = root / "lib/node_modules/@heliasar/browser-use/build"
+    root.mkdir(parents=True, exist_ok=True)
+    client = root / "browser-client.mjs"
+    client.write_text("export async function setupBrowserRuntime() {}\n", encoding="utf-8")
+    (root / "sky-enhancements.mjs").write_text(
+        "export const createSkyBrowserRuntime = nativeSetup => nativeSetup;\n", encoding="utf-8"
+    )
+    return client
 
 
 def project_browser_client_fixture(client: Path, projection_root: Path) -> None:
@@ -66,6 +88,24 @@ def project_browser_client_fixture(client: Path, projection_root: Path) -> None:
         )
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(client, destination)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_browser_companion_enablement_retires_old_identity(enabled: bool) -> None:
+    config = (
+        '[plugins."browser-use@openai-bundled"]\nenabled = true\n\n'
+        '[plugins."browser@openai-bundled"]\nenabled = true\n\n'
+        '[plugins."chrome@openai-bundled"]\nenabled = true\n'
+    )
+
+    updated = plugin_bundle.apply_browser_companion_enablement(config, enabled=enabled)
+    parsed = tomllib.loads(updated)
+
+    assert parsed["plugins"]["browser-use@openai-bundled"]["enabled"] is False
+    assert parsed["plugins"]["browser@openai-bundled"]["enabled"] is enabled
+    assert parsed["plugins"]["chrome@openai-bundled"]["enabled"] is enabled
+    assert plugin_bundle.apply_browser_companion_enablement(updated, enabled=enabled) == updated
+    assert plugin_bundle.apply_browser_companion_enablement("", enabled=enabled) == ""
 
 
 def test_codex_config_helpers_update_existing_sections() -> None:
@@ -405,6 +445,8 @@ def test_worktree_bundle_dirs_include_untracked_runtime_resources() -> None:
     assert (
         Path("docs/operations/testing-vm-desktop-smokes.md") in build_plugin.WORKTREE_BUNDLE_FILES
     )
+    assert Path("resources/_native_browser_projection.py") in build_plugin.WORKTREE_BUNDLE_FILES
+    assert Path("resources/sky-browser-enhancements/SKILL.md") in build_plugin.WORKTREE_BUNDLE_FILES
     assert Path(".claude-plugin/plugin.json") in build_plugin.WORKTREE_BUNDLE_FILES
     assert Path(".claude-plugin/marketplace.json") in build_plugin.WORKTREE_BUNDLE_FILES
     assert Path("resources/chrome-extension") in build_plugin.WORKTREE_BUNDLE_DIRS
@@ -575,6 +617,12 @@ def test_stage_bundle_preserves_existing_other_platform_binaries(
                 encoding="utf-8",
             )
     write_minimal_bundle_sources(tmp_path)
+    shutil.copytree(
+        Path(__file__).resolve().parents[1]
+        / "resources/codex-compat/openai-bundled/plugins/browser",
+        tmp_path / "resources/codex-compat/openai-bundled/plugins/browser",
+        dirs_exist_ok=True,
+    )
     target_release = tmp_path / "target" / "release"
     target_release.mkdir(parents=True)
     for binary_name in current_binaries:
@@ -593,6 +641,10 @@ def test_stage_bundle_preserves_existing_other_platform_binaries(
         tracked_minimal_bundle_files,
     )
 
+    canonical_client = canonical_browser_build_fixture(tmp_path / "canonical-build")
+    monkeypatch.setattr(
+        build_plugin, "build_development_browser_runtime", lambda: canonical_client.parents[5]
+    )
     build_plugin.stage_bundle(bundle_root)
 
     for binary_name, runtime_path in zip(current_binaries, current_runtime_paths, strict=True):
@@ -657,6 +709,12 @@ def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(
     ]
     write_minimal_bundle(bundle_root, binaries=[])
     write_minimal_bundle_sources(tmp_path)
+    shutil.copytree(
+        Path(__file__).resolve().parents[1]
+        / "resources/codex-compat/openai-bundled/plugins/browser",
+        tmp_path / "resources/codex-compat/openai-bundled/plugins/browser",
+        dirs_exist_ok=True,
+    )
     (tmp_path / "target" / "release").mkdir(parents=True)
     for binary_name in current_binaries:
         (tmp_path / "target" / "release" / binary_name).write_text(
@@ -681,6 +739,10 @@ def test_stage_bundle_uses_repo_bins_for_other_platform_on_clean_bundle(
         tracked_minimal_bundle_files,
     )
 
+    canonical_client = canonical_browser_build_fixture(tmp_path / "canonical-build")
+    monkeypatch.setattr(
+        build_plugin, "build_development_browser_runtime", lambda: canonical_client.parents[5]
+    )
     build_plugin.stage_bundle(bundle_root)
 
     for binary_name, runtime_path in zip(current_binaries, current_runtime_paths, strict=True):
@@ -726,9 +788,9 @@ def test_merge_runtime_artifacts_copies_build_stamp_sidecars(tmp_path: Path) -> 
         )
 
 
-def test_browser_preflight_links_browser_use_into_bundled_marketplace(tmp_path: Path) -> None:
-    chrome_preflight = load_chrome_preflight()
-    source_plugin = tmp_path / "source" / "plugins" / "openai-bundled" / "plugins" / "browser-use"
+def test_browser_preflight_links_browser_into_bundled_marketplace(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight(tmp_path)
+    source_plugin = tmp_path / "source" / "plugins" / "openai-bundled" / "plugins" / "browser"
     (source_plugin / ".codex-plugin").mkdir(parents=True)
     (source_plugin / ".codex-plugin" / "plugin.json").write_text(
         json.dumps({"version": "1.2.3"}),
@@ -741,18 +803,98 @@ def test_browser_preflight_links_browser_use_into_bundled_marketplace(tmp_path: 
     )
     codex_home = tmp_path / "codex-home"
 
-    chrome_preflight.sync_browser_use_plugin(source_plugin.parents[1], codex_home)
+    chrome_preflight.sync_browser_plugin(source_plugin.parents[1], codex_home)
 
-    cache_root = codex_home / "plugins" / "cache" / "openai-bundled" / "browser-use"
+    cache_root = codex_home / "plugins" / "cache" / "openai-bundled" / "browser"
     assert (cache_root / "latest").readlink() == Path("1.2.3")
     plugin_link = (
-        codex_home / ".tmp" / "bundled-marketplaces" / "openai-bundled" / "plugins" / "browser-use"
+        codex_home / ".tmp" / "bundled-marketplaces" / "openai-bundled" / "plugins" / "browser"
     )
     assert plugin_link.readlink() == cache_root / "latest"
 
 
+@pytest.mark.parametrize("existing_projection", [False, True])
+def test_preflight_selects_complete_native_browser_over_sky(
+    tmp_path: Path, existing_projection: bool
+) -> None:
+    chrome_preflight = load_chrome_preflight(tmp_path)
+    native_root = tmp_path / "native/plugins/browser"
+    (native_root / ".codex-plugin").mkdir(parents=True)
+    (native_root / ".codex-plugin/plugin.json").write_text(
+        json.dumps({"name": "browser", "version": "native"}), encoding="utf-8"
+    )
+    for relative in (
+        "scripts/browser-client.mjs",
+        "scripts/browser-service.mjs",
+        "docs/api.json",
+        "skills/control-in-app-browser/SKILL.md",
+        "node_modules/native-dependency/index.js",
+    ):
+        target = native_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"native:{relative}\n", encoding="utf-8")
+    source_root = tmp_path / "sky/openai-bundled"
+    sky_browser = source_root / "plugins/browser"
+    sky_browser.mkdir(parents=True)
+    (sky_browser / "sky-only").write_text("sky", encoding="utf-8")
+    codex_home = tmp_path / "codex"
+    projected = codex_home / ".tmp/bundled-marketplaces/openai-bundled/plugins/browser"
+    if existing_projection:
+        projected.parent.mkdir(parents=True)
+        projected.symlink_to(sky_browser)
+
+    chrome_preflight.sync_browser_plugin(source_root, codex_home, native_browser_root=native_root)
+
+    assert projected.is_dir() and not projected.is_symlink()
+    assert not [path for path in projected.rglob("*") if path.is_symlink()]
+    for relative in (
+        "scripts/browser-client.mjs",
+        ".codex-plugin/plugin.json",
+        "skills/control-in-app-browser/SKILL.md",
+    ):
+        assert (projected / relative).read_bytes() == (native_root / relative).read_bytes()
+    assert not (projected / "scripts/sky-enhancements.mjs").exists()
+    assert (
+        projected / "scripts/browser-service.mjs"
+    ).read_text() == "native:scripts/browser-service.mjs\n"
+    assert (projected / "docs/api.json").read_text() == "native:docs/api.json\n"
+    assert (projected / "node_modules/native-dependency/index.js").is_file()
+    assert (sky_browser / "sky-only").read_text() == "sky"
+    assert not (codex_home / "plugins/cache/openai-bundled/browser").exists()
+
+
+def test_preflight_reports_incomplete_native_browser_before_reprojection(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight(tmp_path)
+    native_root = tmp_path / "native/plugins/browser"
+    (native_root / ".codex-plugin").mkdir(parents=True)
+    (native_root / ".codex-plugin/plugin.json").write_text(
+        '{"name":"browser","version":"native"}', encoding="utf-8"
+    )
+    codex_home = tmp_path / "codex"
+
+    with pytest.raises(ValueError, match="native app Browser plugin is incomplete"):
+        chrome_preflight.sync_browser_plugin(
+            tmp_path / "sky", codex_home, native_browser_root=native_root
+        )
+
+    assert not codex_home.exists()
+
+
+def test_browser_preflight_does_not_project_retired_browser_use_root(tmp_path: Path) -> None:
+    chrome_preflight = load_chrome_preflight(tmp_path)
+    source_root = tmp_path / "source"
+    retired = source_root / "plugins" / "browser-use" / ".codex-plugin" / "plugin.json"
+    retired.parent.mkdir(parents=True)
+    retired.write_text(json.dumps({"name": "browser-use", "version": "1.2.3"}), encoding="utf-8")
+    codex_home = tmp_path / "codex-home"
+
+    chrome_preflight.sync_browser_plugin(source_root, codex_home)
+
+    assert not codex_home.exists()
+
+
 def test_browser_preflight_replaces_read_only_cached_plugin_tree(tmp_path: Path) -> None:
-    chrome_preflight = load_chrome_preflight()
+    chrome_preflight = load_chrome_preflight(tmp_path)
     source = tmp_path / "source"
     destination = tmp_path / "destination"
     source.mkdir()
@@ -768,6 +910,162 @@ def test_browser_preflight_replaces_read_only_cached_plugin_tree(tmp_path: Path)
 
     assert (destination / "fresh.txt").read_text(encoding="utf-8") == "fresh"
     assert not (destination / "stale.txt").exists()
+
+
+def test_dev_bundle_stages_native_enhancement_without_legacy_marketplace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    canonical_client = canonical_browser_build_fixture(tmp_path / "canonical-build")
+    builds: list[Path] = []
+
+    def build() -> Path:
+        builds.append(canonical_client)
+        return canonical_client.parents[5]
+
+    monkeypatch.setattr(build_plugin, "build_development_browser_runtime", build)
+    monkeypatch.setattr(build_plugin, "bundled_resource_root", lambda: tmp_path / "absent-legacy")
+    staged = tmp_path / "bundle"
+
+    build_plugin.stage_openai_bundled_plugins(staged)
+
+    # The supplemental native Browser skill uses this fixed-root helper path.
+    expected_helper = staged / "browser/sky-enhancements.mjs"
+    assert (
+        expected_helper.read_bytes()
+        == canonical_client.with_name("sky-enhancements.mjs").read_bytes()
+    )
+    assert builds == [canonical_client]
+    assert not (
+        staged / "resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
+    ).exists()
+    assert (staged / "resources/plugins/openai-bundled/plugins/browser/.mcp.json").is_file()
+    assert not (staged / "resources/plugins/openai-bundled/plugins/browser-use").exists()
+
+
+def test_dev_bundle_fallback_reaches_preflight_without_native_or_legacy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    canonical = canonical_browser_build_fixture(tmp_path / "canonical")
+    monkeypatch.setattr(
+        build_plugin, "build_development_browser_runtime", lambda: canonical.parents[5]
+    )
+    monkeypatch.setattr(build_plugin, "bundled_resource_root", lambda: tmp_path / "absent-legacy")
+    staged = tmp_path / "bundle"
+    build_plugin.stage_openai_bundled_plugins(staged)
+    preflight = load_chrome_preflight(tmp_path)
+    monkeypatch.setattr(preflight, "__file__", str(staged / "resources/chrome_preflight.py"))
+    monkeypatch.setenv("SKY_CUA_CONFIG_PATH", "")
+    home = tmp_path / "codex"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        '[plugins."browser-use@openai-bundled"]\nenabled = true\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(sys, "argv", ["chrome_preflight.py", "--codex-home", str(home)])
+
+    assert preflight.main() == 0
+
+    marketplace = home / ".tmp/bundled-marketplaces/openai-bundled"
+    browser = marketplace / "plugins/browser"
+    fallback = staged / "resources/plugins/openai-bundled/plugins/browser"
+    for relative in (
+        ".codex-plugin/plugin.json",
+        ".mcp.json",
+        "scripts/browser-client.mjs",
+        "skills/control-in-app-browser/SKILL.md",
+        "assets/browser.png",
+    ):
+        assert (browser / relative).read_bytes() == (fallback / relative).read_bytes()
+    assert json.loads((browser / ".codex-plugin/plugin.json").read_text())["name"] == "browser"
+    plugins = json.loads((marketplace / ".agents/plugins/marketplace.json").read_text())["plugins"]
+    assert [plugin["name"] for plugin in plugins] == ["browser"]
+    config = tomllib.loads((home / "config.toml").read_text())
+    assert config["plugins"]["browser@openai-bundled"]["enabled"] is True
+    assert config["plugins"]["browser-use@openai-bundled"]["enabled"] is False
+
+
+@pytest.mark.parametrize("existing_marketplace", [False, True])
+@pytest.mark.parametrize("browser_enabled", [False, True])
+@pytest.mark.parametrize("chrome_enabled", [False, True, None])
+def test_native_only_preflight_reaches_baseline_and_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    existing_marketplace: bool,
+    browser_enabled: bool,
+    chrome_enabled: bool | None,
+) -> None:
+    preflight = load_chrome_preflight(tmp_path)
+    resources = tmp_path / "bundle/resources"
+    resources.mkdir(parents=True)
+    canonical = canonical_browser_build_fixture(tmp_path / "canonical")
+    helper = resources.parent / "browser/sky-enhancements.mjs"
+    helper.parent.mkdir()
+    shutil.copy2(canonical.with_name("sky-enhancements.mjs"), helper)
+    (resources / "sky-browser-enhancements").mkdir()
+    (resources / "sky-browser-enhancements/SKILL.md").write_text("Sky @SKY_CUA_ROOT_JSON@\n")
+    monkeypatch.setattr(preflight, "__file__", str(resources / "chrome_preflight.py"))
+    native = tmp_path / "native/plugins/browser"
+    for relative, content in {
+        ".codex-plugin/plugin.json": '{"name":"browser","version":"native"}',
+        "scripts/browser-client.mjs": "native client",
+        "scripts/browser-service.mjs": "native service",
+        "docs/api.json": "{}",
+        "skills/control-in-app-browser/SKILL.md": "native instructions",
+    }.items():
+        target = native / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(preflight, "NATIVE_BROWSER_PLUGIN_ROOT", native)
+    policy = tmp_path / "sky-cua.toml"
+    policy.write_text(f"[surfaces]\nbrowser = {str(browser_enabled).lower()}\n", encoding="utf-8")
+    monkeypatch.setenv("SKY_CUA_CONFIG_PATH", str(policy))
+    home = tmp_path / "codex"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        '[plugins."browser-use@openai-bundled"]\nenabled = true\n'
+        + (
+            f'[plugins."chrome@openai-bundled"]\nenabled = {str(chrome_enabled).lower()}\n'
+            if chrome_enabled is not None
+            else ""
+        )
+        + '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
+        encoding="utf-8",
+    )
+    marketplace_root = home / ".tmp/bundled-marketplaces/openai-bundled"
+    manifest = marketplace_root / ".agents/plugins/marketplace.json"
+    if existing_marketplace:
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(
+            json.dumps({"name": "openai-bundled", "plugins": [{"name": "browser-use"}]}),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(sys, "argv", ["chrome_preflight.py", "--codex-home", str(home)])
+
+    assert preflight.main() == 0
+
+    projected = marketplace_root / "plugins/browser"
+    if browser_enabled:
+        assert not [path for path in projected.rglob("*") if path.is_symlink()]
+        assert not (projected / "scripts/sky-enhancements.mjs").exists()
+        assert (projected / "scripts/browser-client.mjs").read_bytes() == (
+            native / "scripts/browser-client.mjs"
+        ).read_bytes()
+        assert (home / "skills/sky-browser-enhancements/SKILL.md").is_file()
+        assert (projected / "scripts/browser-service.mjs").read_text() == "native service"
+        plugins = json.loads(manifest.read_text())["plugins"]
+        assert [plugin["name"] for plugin in plugins] == ["browser"]
+        assert plugins[0]["source"]["path"] == "./plugins/browser"
+    else:
+        assert not projected.exists()
+    config = tomllib.loads((home / "config.toml").read_text())
+    assert config["plugins"].get("browser@openai-bundled", {"enabled": False})["enabled"] is (
+        browser_enabled
+    )
+    assert config["plugins"]["browser-use@openai-bundled"]["enabled"] is False
+    if chrome_enabled is None:
+        assert "chrome@openai-bundled" not in config["plugins"]
+    else:
+        assert config["plugins"]["chrome@openai-bundled"]["enabled"] is browser_enabled
+    assert config["plugins"]["computer-use@openai-bundled"]["enabled"] is True
 
 
 def test_browser_use_node_repl_is_staged_from_upstream_resources(
@@ -792,13 +1090,12 @@ def test_browser_use_node_repl_is_staged_from_upstream_resources(
         (plugin / "scripts" / "browser-client.mjs").write_text("client", encoding="utf-8")
     shutil.copy2(true_binary, source_root.parents[1] / "node_repl")
 
-    canonical_client = tmp_path / "canonical-browser-client.mjs"
-    canonical_client.write_text(
-        "export async function setupBrowserRuntime() {}\n", encoding="utf-8"
-    )
+    canonical_client = canonical_browser_build_fixture(tmp_path / "canonical-build")
 
     monkeypatch.setattr(build_plugin, "bundled_resource_root", lambda: source_root)
-    monkeypatch.setattr(build_plugin, "build_canonical_browser_client", lambda: canonical_client)
+    monkeypatch.setattr(
+        build_plugin, "build_development_browser_runtime", lambda: canonical_client.parents[5]
+    )
     monkeypatch.setattr(
         build_plugin, "project_canonical_browser_client", project_browser_client_fixture
     )
@@ -807,6 +1104,9 @@ def test_browser_use_node_repl_is_staged_from_upstream_resources(
 
     build_plugin.stage_openai_bundled_plugins(temp_root)
 
+    assert (temp_root / "browser/sky-enhancements.mjs").read_bytes() == canonical_client.with_name(
+        "sky-enhancements.mjs"
+    ).read_bytes()
     staged = temp_root / "resources" / "node_repl"
     assert staged.exists()
     assert staged.stat().st_mode & 0o111
@@ -842,13 +1142,12 @@ def test_staging_drops_upstream_chrome_native_dependencies(
             json.dumps({"name": "classic-level", "version": "3.0.0"}), encoding="utf-8"
         )
 
-    canonical_client = tmp_path / "canonical-browser-client.mjs"
-    canonical_client.write_text(
-        "export async function setupBrowserRuntime() {}\n", encoding="utf-8"
-    )
+    canonical_client = canonical_browser_build_fixture(tmp_path / "canonical-build")
 
     monkeypatch.setattr(build_plugin, "bundled_resource_root", lambda: source_root)
-    monkeypatch.setattr(build_plugin, "build_canonical_browser_client", lambda: canonical_client)
+    monkeypatch.setattr(
+        build_plugin, "build_development_browser_runtime", lambda: canonical_client.parents[5]
+    )
     monkeypatch.setattr(
         build_plugin, "project_canonical_browser_client", project_browser_client_fixture
     )
@@ -885,7 +1184,7 @@ def test_browser_use_node_repl_installer_rejects_incompatible_ldd(
 
 
 def test_browser_use_node_repl_non_elf_patch_is_noop(tmp_path: Path) -> None:
-    chrome_preflight = load_chrome_preflight()
+    chrome_preflight = load_chrome_preflight(tmp_path)
     node_repl = tmp_path / "node_repl"
     node_repl.write_bytes(b"not an elf")
 
@@ -896,7 +1195,7 @@ def test_browser_use_node_repl_non_elf_patch_is_noop(tmp_path: Path) -> None:
 def test_browser_preflight_validates_node_repl_without_installing_to_codex_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    chrome_preflight = load_chrome_preflight()
+    chrome_preflight = load_chrome_preflight(tmp_path)
     source_root = tmp_path / "upstream" / "resources" / "plugins" / "openai-bundled"
     source_root.mkdir(parents=True)
     source_node_repl = source_root.parents[1] / "node_repl"
@@ -917,7 +1216,7 @@ def test_browser_preflight_validates_node_repl_without_installing_to_codex_home(
 
 
 def test_browser_preflight_adds_coupled_plugins_to_marketplace(tmp_path: Path) -> None:
-    chrome_preflight = load_chrome_preflight()
+    chrome_preflight = load_chrome_preflight(tmp_path)
     marketplace_path = (
         tmp_path
         / "codex-home"
@@ -930,15 +1229,21 @@ def test_browser_preflight_adds_coupled_plugins_to_marketplace(tmp_path: Path) -
     )
     marketplace_path.parent.mkdir(parents=True)
     marketplace_path.write_text(
-        json.dumps({"name": "openai-bundled", "plugins": [{"name": "chrome"}]}),
+        json.dumps(
+            {"name": "openai-bundled", "plugins": [{"name": "chrome"}, {"name": "browser-use"}]}
+        ),
         encoding="utf-8",
     )
+
+    browser_manifest = marketplace_path.parents[2] / "plugins/browser/.codex-plugin/plugin.json"
+    browser_manifest.parent.mkdir(parents=True)
+    browser_manifest.write_text("{}", encoding="utf-8")
 
     chrome_preflight.ensure_marketplace_entries(tmp_path / "codex-home")
 
     manifest = json.loads(marketplace_path.read_text(encoding="utf-8"))
     names = {plugin["name"] for plugin in manifest["plugins"]}
-    assert {"chrome", "browser-use", "computer-use"} <= names
+    assert names == {"chrome", "browser", "computer-use"}
     computer_use = next(
         plugin for plugin in manifest["plugins"] if plugin["name"] == "computer-use"
     )
@@ -946,7 +1251,7 @@ def test_browser_preflight_adds_coupled_plugins_to_marketplace(tmp_path: Path) -
 
 
 def test_browser_preflight_update_config_enables_bundled_plugins(tmp_path: Path) -> None:
-    chrome_preflight = load_chrome_preflight()
+    chrome_preflight = load_chrome_preflight(tmp_path)
     codex_home = tmp_path / "codex-home"
 
     # Without a materialized compat root the compat id must stay disabled, or
@@ -956,8 +1261,22 @@ def test_browser_preflight_update_config_enables_bundled_plugins(tmp_path: Path)
     parsed = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
     assert parsed["features"]["plugins"] is True
     assert parsed["plugins"]["chrome@openai-bundled"]["enabled"] is True
-    assert parsed["plugins"]["browser-use@openai-bundled"]["enabled"] is True
+    assert "browser@openai-bundled" not in parsed["plugins"]
+    assert "browser-use@openai-bundled" not in parsed["plugins"]
     assert parsed["plugins"]["computer-use@openai-bundled"]["enabled"] is False
+
+    browser_manifest = (
+        codex_home
+        / ".tmp/bundled-marketplaces/openai-bundled/plugins/browser/.codex-plugin/plugin.json"
+    )
+    browser_manifest.parent.mkdir(parents=True)
+    browser_manifest.write_text("{}", encoding="utf-8")
+    with (codex_home / "config.toml").open("a", encoding="utf-8") as config:
+        config.write('[plugins."browser-use@openai-bundled"]\nenabled = true\n')
+    chrome_preflight.update_codex_config(codex_home)
+    parsed = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
+    assert parsed["plugins"]["browser@openai-bundled"]["enabled"] is True
+    assert parsed["plugins"]["browser-use@openai-bundled"]["enabled"] is False
 
     # Compat-first: Codex Desktop detects Computer Use plugins by the
     # built-in plugin name, so once the compat root is materialized the
@@ -971,21 +1290,47 @@ def test_browser_preflight_update_config_enables_bundled_plugins(tmp_path: Path)
     assert parsed["plugins"]["computer-use@openai-bundled"]["enabled"] is True
 
 
+def test_browser_preflight_preserves_existing_current_browser_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chrome_preflight = load_chrome_preflight(tmp_path)
+    monkeypatch.setenv("SKY_CUA_CONFIG_PATH", "")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[plugins."browser-use@openai-bundled"]\nenabled = true\n\n'
+        '[plugins."browser@openai-bundled"]\nenabled = true\n',
+        encoding="utf-8",
+    )
+
+    chrome_preflight.update_codex_config(tmp_path)
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["plugins"]["browser@openai-bundled"]["enabled"] is True
+    assert parsed["plugins"]["browser-use@openai-bundled"]["enabled"] is False
+
+
 def test_browser_preflight_respects_durable_browser_surface(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    chrome_preflight = load_chrome_preflight()
+    chrome_preflight = load_chrome_preflight(tmp_path)
     config_path = tmp_path / "sky-cua.toml"
     config_path.write_text("[surfaces]\nbrowser = false\n", encoding="utf-8")
     monkeypatch.setenv("SKY_CUA_CONFIG_PATH", str(config_path))
     monkeypatch.setenv("SKY_CUA_SURFACES", "browser")
     codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        '[plugins."browser@openai-bundled"]\nenabled = true\n\n'
+        '[plugins."browser-use@openai-bundled"]\nenabled = true\n',
+        encoding="utf-8",
+    )
 
     chrome_preflight.update_codex_config(codex_home)
 
     parsed = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
-    assert parsed["plugins"]["chrome@openai-bundled"]["enabled"] is False
     assert parsed["plugins"]["browser-use@openai-bundled"]["enabled"] is False
+    assert parsed["plugins"]["chrome@openai-bundled"]["enabled"] is False
+    assert parsed["plugins"]["browser@openai-bundled"]["enabled"] is False
 
     config_path.write_text("[surfaces]\nbrowesr = false\n", encoding="utf-8")
     with pytest.raises(ValueError, match="browesr"):
@@ -993,7 +1338,7 @@ def test_browser_preflight_respects_durable_browser_surface(
 
 
 def test_browser_preflight_rejects_uppercase_native_host_name(tmp_path: Path) -> None:
-    chrome_preflight = load_chrome_preflight()
+    chrome_preflight = load_chrome_preflight(tmp_path)
     plugin_root = tmp_path / "chrome"
     scripts = plugin_root / "scripts"
     scripts.mkdir(parents=True)
@@ -1012,7 +1357,7 @@ def test_browser_preflight_rejects_uppercase_native_host_name(tmp_path: Path) ->
 
 
 def test_browser_preflight_selects_latest_keyed_chatgpt_fallback(tmp_path: Path) -> None:
-    chrome_preflight = load_chrome_preflight()
+    chrome_preflight = load_chrome_preflight(tmp_path)
     source_root = tmp_path / "resources" / "plugins" / "openai-bundled"
     source_root.mkdir(parents=True)
     fallback_root = tmp_path / "resources" / "chrome-extension" / "codex"
@@ -1034,7 +1379,7 @@ def test_browser_preflight_selects_latest_keyed_chatgpt_fallback(tmp_path: Path)
 def test_browser_preflight_computer_use_compat_plugin_preserves_env_allowlist(
     tmp_path: Path,
 ) -> None:
-    chrome_preflight = load_chrome_preflight()
+    chrome_preflight = load_chrome_preflight(tmp_path)
     sky_root = tmp_path / "sky-cua"
     source_root = sky_root / "resources" / "plugins" / "openai-bundled"
     source_root.mkdir(parents=True)
@@ -1459,6 +1804,41 @@ def test_chrome_preflight_default_env_allowlist_matches_primary_mcp_config() -> 
     env_vars = mcp_config["mcpServers"]["computer-use"]["env_vars"]
 
     assert env_vars == chrome_preflight.DEFAULT_COMPUTER_USE_ENV_VARS
+
+
+def test_chrome_preflight_registers_nightly_native_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    preflight = load_chrome_preflight(tmp_path)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    plugin = tmp_path / "chrome"
+    metadata = plugin / "scripts/extension-id.json"
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text(
+        json.dumps(
+            {
+                "extensionId": _chrome_bridge.DEFAULT_EXTENSION_ID,
+                "extensionHostName": _chrome_bridge.HOST_NAME,
+            }
+        ),
+        encoding="utf-8",
+    )
+    host = home / ".local/bin/sky-cua-chrome-host"
+
+    preflight.write_chrome_native_host_manifests(host, plugin)
+
+    manifest = home / (
+        ".config/BraveSoftware/Brave-Browser-Nightly/NativeMessagingHosts/"
+        "com.openai.codexextension.json"
+    )
+    assert json.loads(manifest.read_text(encoding="utf-8")) == {
+        "name": _chrome_bridge.HOST_NAME,
+        "description": "Codex chrome native messaging host",
+        "type": "stdio",
+        "path": str(host),
+        "allowed_origins": [f"chrome-extension://{_chrome_bridge.DEFAULT_EXTENSION_ID}/"],
+    }
 
 
 def test_bundled_chrome_extension_cursor_overlay_contract() -> None:

@@ -24,7 +24,8 @@ PLUGIN_ID = f"{PLUGIN_NAME}@{PLUGIN_CHANNEL}"
 # active payload is selected by retargeting the compat plugin root's .mcp.json
 # at the local cache payload (see docs/operations/plugin-release.md).
 COMPUTER_USE_COMPAT_PLUGIN_ID = "computer-use@openai-bundled"
-BROWSER_COMPAT_PLUGIN_IDS = ("browser-use@openai-bundled", "chrome@openai-bundled")
+BROWSER_COMPAT_PLUGIN_IDS = ("browser@openai-bundled", "chrome@openai-bundled")
+RETIRED_BROWSER_PLUGIN_ID = "browser-use@openai-bundled"
 SKY_CUA_SKILLS = ("computer-use", "browser-use", "phone-use")
 SHARED_AGENT_SKILL_OVERRIDES_BEGIN = "# BEGIN sky-cua managed shared-agent skill overrides"
 SHARED_AGENT_SKILL_OVERRIDES_END = "# END sky-cua managed shared-agent skill overrides"
@@ -745,10 +746,13 @@ def apply_shared_agent_skill_deduplication(
 def apply_browser_companion_enablement(config_text: str, *, enabled: bool) -> str:
     """Project the browser surface onto already-materialized Codex browser plugins.
 
-    Chrome preflight owns creating these plugin stanzas. Do not synthesize ghost
-    plugins on hosts where preflight did not materialize them; only converge
-    existing stanzas when the sky-cua browser surface is enabled or disabled.
+    The standalone producer exposes Browser as browser@openai-bundled. Do not
+    synthesize plugin stanzas here; only converge existing stanzas when the
+    sky-cua browser surface is enabled or disabled. The retired browser-use
+    plugin stays disabled regardless of surface policy.
     """
+    if f'[plugins."{RETIRED_BROWSER_PLUGIN_ID}"]' in config_text:
+        config_text = set_plugin_enabled(config_text, RETIRED_BROWSER_PLUGIN_ID, enabled=False)
     for plugin_id in BROWSER_COMPAT_PLUGIN_IDS:
         if f'[plugins."{plugin_id}"]' in config_text:
             config_text = set_plugin_enabled(config_text, plugin_id, enabled=enabled)

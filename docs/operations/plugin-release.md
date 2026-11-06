@@ -3,7 +3,9 @@
 Use this runbook for Codex plugin lifecycle work. There are two producer lanes
 and one release pipeline; there is no marketplace publish step:
 
-- `python3 scripts/deploy_plugin.py` — fast local development deploy.
+- `python3 scripts/deploy_plugin.py` — legacy fast deploy for older packaged
+  consumer resources; current native ChatGPT installations use the fixed-root
+  install command below.
 - `python3 install.py build` and `python3 install.py install` — standalone
   distribution and fixed-root machine install.
 - `python3 install.py release` — guarded standalone version commit and tag push.
@@ -16,32 +18,52 @@ Keep exactly one active `computer-use` MCP server. Local development retains
 the compat-first `computer-use@openai-bundled` projection with
 `sky-cua@local` as its disabled payload carrier. Standalone distribution ships
 native `computer-use@openai-bundled` and `browser@openai-bundled` plugins and
-lets consumer repositories own their final enablement and convergence. The
+enables the selected surfaces in detected hosts. The
 Browser plugin source is the fixed-root
 `codex/openai-bundled/plugins/browser/` directory; do not add or project a
-`browser-use` plugin alias.
+`browser-use` plugin alias. When the native ChatGPT Browser is present, its
+unchanged package takes precedence over that fallback source.
 
 Keep one enabled copy of each bundled sky-cua skill. The standalone installer
 projects `computer-use`, `browser-use`, and `phone-use` from the fixed installed
-payload rather than from a versioned generation.
+payload rather than from a versioned generation. ChatGPT loads the three skills
+from the installed `computer-use` plugin; duplicate shared skill entries are
+disabled. The installer uses the native Codex `plugin/install` API to refresh the
+cache, including same-version skill changes. Other hosts receive relative links
+to the fixed payload; old installer-owned copied skills and generation routers
+are migrated without replacing unowned skills.
+
+With native Browser enabled, Codex also receives the focused
+`sky-browser-enhancements` skill under its own skill root. It loads the helper
+from the fixed install tree and decorates an existing native tab explicitly.
+It does not replace native Browser instructions, fork the reserved plugin
+version, or rewrite the app's trusted-service mappings. Native startup
+reconciliation can therefore retain its packaged baseline.
 
 ## Local iteration
 
 When changing runtime code, scripts, guidance, skills, or plugin metadata, use:
 
 ```bash
-python3 scripts/deploy_plugin.py
+python3 install.py install
 ```
 
-This builds `dist/plugin/sky-cua`, installs it as `sky-cua@local`, retargets the
-local `computer-use@openai-bundled` compat plugin, and refreshes the installed
-MCP runtime. It is a development deploy, not the distributable install path.
+This incrementally refreshes the durable build outputs and installs the fixed
+tree, host configuration and skills. The native `plugin/install` API owns
+Browser cache materialization. Native Browser keeps its original identity;
+Sky's helper and supplemental skill remain outside the app-owned cache.
 
-Use `--no-build` only when `dist/plugin/sky-cua` is already current:
+The development fallback includes its own assembled runtime when the native
+Browser is absent. Its cache identity covers that runtime and the generated
+adapter/configuration. Standalone production selects
+`--browser-runtime-mode standalone` internally, and carries one runtime at the
+fixed root.
 
-```bash
-python3 scripts/deploy_plugin.py --no-build
-```
+Codex registration stages its source under
+`CODEX_HOME/.tmp/bundled-marketplaces/openai-bundled` before `plugin/install`.
+The official 0.149 client and the current native client both accept this layout;
+there is no version gate or silent filesystem fallback. A registration failure
+reports its phase and completed/unfinished plugins while preserving the error.
 
 ## Build the standalone artifact
 
@@ -95,8 +117,24 @@ ${XDG_DATA_HOME:-~/.local/share}/sky-cua
 There is no generation id, manifest hash, rollback command, or selectable
 install-root argument. Installation replaces the root, projects stable
 launchers and native-host manifests, links packaged skills, and configures
-detected Codex/OpenClaw integration. Repeating the command converges to the
+detected host integration. ChatGPT gets the bundled plugins, Claude Code and
+existing Claude Desktop configuration get `sky-cua` and `node_repl`, and OpenCode
+gets native `mcp.servers` entries. Existing host settings and permissions are
+preserved. OpenCode uses phase-specific startup/catalog/execution timeouts;
+its tool catalog becomes available asynchronously after startup. Repeating the
+command converges to the
 same layout and removes stale files from the previous payload.
+
+Existing host processes may retain their MCP catalog. Validate in a fresh host
+session after installation. Claude Desktop Chat can cache its configuration; on
+builds that expose it, `Developer > Reload MCP Configuration` forces a reread.
+If that menu is unavailable, its next normal app restart is the reload boundary.
+The embedded Claude Code engine reads user-scope MCP settings independently.
+
+Every state-changing desktop/browser call must carry the current observation's
+`appshot_id`; a `snapshot_id` alone is insufficient. An action rejection with a
+recovery AppShot requires inspecting that state before retrying. Browser open or
+navigation can itself return the AppShot for the next action.
 
 ## Producer-safe validation
 

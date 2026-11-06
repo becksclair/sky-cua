@@ -1,6 +1,8 @@
 # `@heliasar/browser-use`
 
-Canonical first-party Browser JavaScript client for the sky-cua release. Bun
+Browser components for the sky-cua release. The external client remains a
+first-party native-pipe implementation; the native Linux Browser layer delegates
+to the maintained OpenAI client and service. Bun
 builds the package and Node 24 runs the resulting `browser-client.mjs`. The
 client installs `agent` and `display` through:
 
@@ -37,3 +39,42 @@ one atomic `finalizeTabs` request carrying exact tab/status dispositions.
 materializes `browser-use@openai-bundled` and `chrome@openai-bundled` by writing
 that exact stream to each projection path, then records the single SHA-256.
 There is no alternate implementation or Skynet projection.
+
+
+## Native Linux enhancement layer
+
+`bun run build` also emits `build/sky-enhancements.mjs`, separately from the
+external `browser-client.mjs`. Standalone installation keeps this artifact at
+`~/.local/share/sky-cua/browser/sky-enhancements.mjs` and installs the Codex
+`sky-browser-enhancements` skill separately. Native Browser keeps its original
+client, service, instructions and version. Activate the helper explicitly on
+each tab that needs it; ordinary native setup remains unchanged.
+
+```js
+const { setupBrowserRuntime } = await import("<native plugin>/scripts/browser-client.mjs");
+const agent = await setupBrowserRuntime();
+const browser = await agent.browsers.get("iab");
+nodeRepl.write(await browser.documentation());
+const tab = await browser.tabs.new();
+const { decorateSkyTab } = await import("<fixed install root>/browser/sky-enhancements.mjs");
+decorateSkyTab(tab);
+await tab.goto("http://localhost:3000/");
+nodeRepl.write(await agent.documentation.get("capabilities/tab/cdp"));
+await tab.sky.expectNavigation(
+  () => tab.goto("http://localhost:3000/next"),
+  { timeoutMs: 5000, url: "http://localhost:3000/next" },
+);
+```
+
+This additive helper requires a fresh top-level navigation after its pre-action
+event cursor and successful callback completion, then optional URL and load
+readiness. One deadline covers the whole wait. It does not change native
+`tab.playwright.expectNavigation`, cancel an expired callback, retry actions,
+or bypass native capability/origin restrictions. Navigate a fresh tab to its
+intended HTTP(S) page before CDP use. Lost/truncated history rejects the wait;
+same-origin navigation is the verified scope.
+
+Native clipboard, dialogs, downloads, assets, auth, screenshot and AX behavior
+remain upstream. Sky ranking, cursor, scheduling and stale-session recovery
+remain on their existing external-browser path; native ranking is not provided
+by this layer. See the [evidence-backed inventory](../../docs/research/2026-11-native-browser-enhancement-baseline.md).

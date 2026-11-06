@@ -2,227 +2,201 @@
 
 ## Status
 
-Shipped on Linux. The producer distribution uses the fixed-root standalone
-contract as of 2026-07-22. Historical live bridge and Codex Desktop Settings
-proof remains recorded below; consumer convergence is owned by the
-codex-desktop repository.
+Shipped on Linux. The fixed-root navigation helper passed live Brave Nightly
+navigation, callback-result preservation, and no-op rejection after an actual
+ChatGPT restart on 2026-11-06.
+The native ChatGPT app owns its Browser package and startup reconciliation.
 
 ## Summary
 
-`sky-cua` presents to Codex Desktop as the bundled `computer-use`
-plugin while keeping `sky-cua-client mcp` as the actual runtime
-boundary. Browser Use and Chrome remain companion OpenAI-bundled
-plugins; the build and preflight steps stage them beside the
-`computer-use` compatibility entry, write Chromium-family native-host
-manifests, and embed the Linux native messaging host so the official
-Codex Chrome extension can reach `sky-cua` directly.
-
-Codex Desktop itself is patched separately (in `CodexDesktop-Rebuild`)
-to widen Linux `computerUse` feature availability and to keep Browser
-Use and Chrome companion descriptors visible when `computerUse` is
-enabled. Other MCP hosts do not need any of the bundled-plugin cache
-steps.
+Sky CUA supplies `computer-use@openai-bundled` through its fixed-root payload.
+The native Linux ChatGPT app supplies its in-app Browser client, service,
+bootstrap instructions, and Node runtime. Sky layers a strict navigation helper
+on that maintained baseline through a Sky-owned supplemental skill and tab
+decorator. Its separate
+Browser client continues to serve external Chrome-family consumers through
+trusted native pipes.
 
 ## Contract surface
 
-The portable runtime entrypoint remains:
-
-```bash
-./bin/sky-cua-client mcp
-```
-
-Codex-specific compatibility files:
-
-- `.codex-plugin/plugin.json` — plugin manifest.
-- `.mcp.json` — single cross-platform MCP server config; names the
-  server `computer-use` and uses absolute paths plus the desktop env
-  allowlist.
-- `bin/sky-cua-browser-preflight` — plugin-local browser preflight
-  wrapper.
-
-Bundled-marketplace cache layout (output of preflight, not committed
-state):
-
-```
-~/.codex/plugins/openai-bundled/marketplace.json   # adjusted in place
-~/.codex/plugins/openai-bundled/plugins/chrome/...
-~/.codex/plugins/openai-bundled/plugins/browser-use/...
-~/.codex/plugins/openai-bundled/plugins/computer-use/...   # disabled
-```
-
-`config.toml` post-deploy shape:
-
-```toml
-[plugins."chrome@openai-bundled"]
-enabled = true
-
-[plugins."browser-use@openai-bundled"]
-enabled = true
-
-[plugins."computer-use@openai-bundled"]
-enabled = true    # the single enabled computer-use plugin id
-
-[plugins."sky-cua@local"]
-enabled = false   # payload carrier; the compat root points at its cache payload
-```
-
-Codex Desktop detects Computer Use plugins by the built-in plugin name
-`computer-use`, so the `computer-use@openai-bundled` compat entry is the
-single enabled computer-use plugin; the `sky-cua@local` channel id stays
-disabled so Codex never sees two active `computer-use` MCP servers.
+- `bin/sky-cua-client mcp` is the portable computer-use MCP entrypoint.
+- `codex/openai-bundled/plugins/computer-use` is Sky's compatibility root.
+- Native Browser comes from the complete installed plugin directory at
+  `/usr/lib/chatgpt/resources/plugins/openai-bundled/plugins/browser`.
+- `browser/sky-enhancements.mjs` exports `decorateSkyTab(tab)` and
+  `createSkyBrowserRuntime(nativeSetup)`. These add
+  `tab.sky.expectNavigation(action, options)` while preserving native methods.
+  `RELEASE.json` exposes the helper at `paths.browser_enhancements`.
+- The Codex supplemental `sky-browser-enhancements` skill activates the helper
+  explicitly. Ordinary native `setupBrowserRuntime()` remains unmodified.
+- `browser@openai-bundled` is the current Browser identity. Existing retired
+  `browser-use@openai-bundled` entries are disabled during reconciliation.
+- Sky's `browser/browser-client.mjs` and bundled `cua-node` retain the external
+  Browser/native-pipe contract. Native Browser uses the app's packaged runtime.
 
 ## Behavior
 
-Build-time (`scripts/build_plugin.py`):
+Standalone installation projects Sky's computer-use plugin into the local
+bundled marketplace. When the native app's Browser plugin is present, both
+standalone installation and preflight materialize its complete baseline as
+regular files, retaining its original manifest version, client, service and
+instructions. Native `plugin/install` omits symlinks, so the projection must be
+self-contained. ChatGPT owns the desired contents of its reserved marketplace
+and can restore packaged Browser content at startup.
 
-- Stages OpenAI-bundled `chrome` and `browser-use` resources from
-  `SKY_CUA_UPSTREAM_CODEX_RESOURCES`,
-  `SKY_CUA_OPENAI_BUNDLED_RESOURCE_ROOT`, or the sibling
-  `codex-desktop-linux` resource path.
-- Removes macOS sidecars from copied bundles.
-- Builds the self-contained canonical sky-cua Browser client and projects the
-  same bytes into both bundled plugin entrypoints. Upstream `scripts/node_modules`
-  trees are removed, so Chrome initialization cannot depend on unshipped native
-  addons such as `classic-level`.
-- Ensures marketplace entries for `chrome`, `browser-use`, and
-  `computer-use` (the last as a disabled compatibility entry).
-- Embeds `sky-cua-chrome-host` under
-  `resources/plugins/openai-bundled/plugins/chrome/extension-host/linux/<arch>/extension-host`.
+Sky's helper stays in the fixed install root. Installation projects a focused
+supplemental skill into `CODEX_HOME/skills/sky-browser-enhancements`; that skill
+imports the fixed-root helper and applies `decorateSkyTab` to an existing native
+tab. Native setup, selection, ownership and transport instructions remain
+canonical. Browser disablement or native-package absence removes only the
+installer-owned supplemental skill. Installation does not replace an unowned
+skill, alter native service mappings, or fork the reserved Browser version.
 
-Standalone install-time (`python3 install.py install`):
+`tab.sky.expectNavigation` requires the action to succeed and a fresh top-level
+navigation event after its pre-action cursor, then optional URL and load
+readiness. A single deadline covers the whole wait. No-op and child-frame
+navigation do not satisfy it. It does not replace native
+`tab.playwright.expectNavigation`, retry mutations, or cancel an expired action.
+Use the advertised CDP capability and its required documentation; navigate a
+fresh tab to its intended HTTP(S) page before CDP use. Same-origin navigation
+is verified. Native origin/session changes or eviction can invalidate the event
+stream; truncated history rejects the wait rather than dropping the guarantee.
 
-- Replaces `${XDG_DATA_HOME:-~/.local/share}/sky-cua` with the complete
-  standalone payload.
-- Projects stable launchers and exact Chromium-family native-host manifests.
-- Installs native Codex compatibility plugins through the detected Codex
-  app-server integration without a Browser client trust-hash contract.
-- Uses only the latest bundled Chrome extension carried at
-  `browser/extension` in the standalone payload.
+Browser disablement bypasses native Browser discovery, validation, and
+projection while retaining Computer Use. With Browser enabled, a missing native
+plugin selects the complete fallback even when the app's other plugins exist.
+A present but malformed native package still produces its specific error.
+Discovery validates once and passes that result through materialization.
 
-Fast local development (`scripts/install_plugin.py`,
-`scripts/deploy_plugin.py`):
+Without a native Browser plugin, standalone installation retains the bundled
+Sky Browser fallback. Its skill and `host_provided_iab` transport field belong
+to that fallback, not to the native app's Browser API. Malformed native plugin
+inputs fail before replacing the Browser projection.
 
-- Installs the bundle and runs browser preflight on Linux when the
-  built bundle contains `resources/chrome_preflight.py`.
-- The compat root's `.mcp.json` is retargeted at the installed
-  `sky-cua@local` payload, which stays disabled so Codex never sees
-  duplicate computer-use servers.
-- Deploys preserve already-staged binaries for other platforms:
-  rebuilding on Linux does not delete Windows `.exe` binaries from
-  the local payload and vice versa.
+Config reconciliation enables the current Browser companion when the Browser
+surface is enabled and disables an existing retired `browser-use` identity.
+Surface disablement disables current Browser and Chrome companions. The direct
+`sky-cua@local` carrier remains disabled when the computer-use compatibility
+plugin supplies the active server.
 
-Preflight (`resources/chrome_preflight.py`,
-`bin/sky-cua-browser-preflight`):
+Preflight and standalone installation converge existing Chrome companion flags
+on both disablement and re-enablement. Browser-only preflight does not create a
+Chrome stanza. When Browser is disabled and no legacy marketplace source is
+available, preflight only disables existing companion stanzas: it preserves
+marketplace and feature configuration, and a fresh home remains untouched.
 
-- Syncs `chrome`, `browser-use`, and the `computer-use` compatibility
-  plugin into the local Codex bundled marketplace cache.
-- Writes exact native-host manifests for Google Chrome, Brave, and
-  Chromium under `com.openai.codexextension`.
-- Enables `chrome@openai-bundled`, `browser-use@openai-bundled`, and the
-  `computer-use@openai-bundled` compat plugin (compat-first enablement).
+Native preflight stages the marketplace projection; deployment uses
+`python3 install.py install` and the native `plugin/install` API to refresh the
+installed Browser cache. Marketplace staging alone is not cache activation.
 
-The Linux native messaging host (`crates/sky-cua-chrome-host`) bridges
-the upstream ChatGPT Chrome extension and the sky-cua runtime. It handles
-`codexRuntime/hello`, `codexRuntime/ensure`, and `codexRuntime/restart`, selects
-a compatible local Codex app-server entry, and owns the loopback WebSocket
-proxy that validates the extension origin. The legacy `ensureCodexAppServer`
-response remains compatible. The host also round-trips `getInfo` and `getTabs`,
-forwards extension heartbeat `ping` messages, and emits `turnEnded` from a
-task-complete session log so the extension's session lifecycle is honored.
+The development Browser fallback carries the assembled runtime and resolves its
+canonical `@heliasar/browser-use` package through the existing trusted module
+path. It does not require a native app or standalone installation. The standalone
+adapter instead validates its release metadata at the injected runtime root and
+loads that same trusted package. Neither mode broadens trust to copied client
+files. The standalone producer explicitly selects its staging mode to avoid
+packing a second runtime. Native Browser retains precedence when present.
+The retired `codex-desktop` rebuild repository is not an installation or update
+dependency of the current native app.
 
 ## Source paths
 
-- `scripts/build_plugin.py` — release bundle builder (stages
-  bundled-plugin cache, embeds Chrome host).
-- `scripts/install_plugin.py` — local install path.
-- `scripts/deploy_plugin.py` - fast local deploy (`sky-cua@local`,
-  compat root retargeted at it).
-- `install.py` / `scripts/standalone_release.py` - one standalone build command,
-  one fixed-root install command, and the
-  `dist/sky-cua-linux-x64-glibc.tar.gz` artifact.
-- `resources/chrome_preflight.py` - preflight that syncs bundled
-  cache, writes native-host manifests, enables companion plugins.
-- `crates/sky-cua-chrome-host/` — Linux native messaging host.
-- `resources/chrome-extension/codex/` — versioned extracted upstream ChatGPT
-  Chrome extension sources. The standalone builder selects the highest manifest
-  version and copies exactly one tree into `browser/extension`; historical
-  source versions are not carried in the release artifact.
-- `bin/sky-cua-browser-preflight` — preflight wrapper.
-- `.codex-plugin/plugin.json`, `.mcp.json` — plugin manifest and MCP
-  server config.
+- `scripts/standalone_release.py` — fixed-root assembly and installation.
+- `scripts/_standalone_codex.py` — Codex registration and marketplace projection.
+- `scripts/_standalone_hosts.py` — Pi/OpenClaw registrations and shared config helpers.
+- `resources/chrome_preflight.py` — companion cache/projection reconciliation
+  and Chrome-family native-host preflight.
+- `scripts/_plugin_bundle.py` — current and retired companion enablement.
+- `resources/codex-compat/openai-bundled/` — Sky compatibility roots.
+- `resources/_native_browser_projection.py` — validated native baseline
+  materialization.
+- `resources/sky-browser-enhancements/SKILL.md` — focused native helper
+  activation, rendered for the fixed install root.
+- `packages/browser-use/src/native-enhancements.ts` — additive native helper.
+- `packages/browser-use/` and `runtime/cua-node/` — external Browser client
+  and trusted native-pipe runtime; their existing external path is unchanged.
 
 ## Verification
 
-Focused tests:
+- The restart-safe helper change passed 1,269 Python tests, the separate
+  23-test module including official Codex 0.149 API acceptance, and 13 focused
+  helper tests. The fixed-root helper passed live Nightly same-origin
+  navigation, callback-result preservation, button readback and no-op
+  rejection. Evidence: `artifacts/review-closeout/nightly-helper-live.json`.
+  After canonical deployment, a fresh validation kernel followed the installed
+  supplemental skill on an initially undecorated native tab and passed the
+  same checks. Fresh native session discovery retained the enabled global
+  skill through simulated reserved-source reconciliation; all 378 cached
+  baseline files matched native bytes. Evidence:
+  `artifacts/review-closeout/installed-skill-live.json` and
+  `artifacts/review-closeout/restart-safe-discovery.json`.
+  An actual ChatGPT restart then replaced the main process and app-server.
+  Skill/helper hashes remained unchanged, fresh skill discovery passed, and
+  live Nightly navigation, callback preservation, button interaction and no-op
+  rejection passed without reinstalling or repairing the deployment. Evidence:
+  `artifacts/review-closeout/actual-app-restart.json` and
+  `artifacts/review-closeout/actual-restart-live.json`.
 
-```bash
-uv run ruff format --check resources/chrome_preflight.py scripts/test_plugin_bundle.py
-uv run ruff check resources/chrome_preflight.py scripts/test_plugin_bundle.py
-uv run basedpyright resources/chrome_preflight.py scripts/test_plugin_bundle.py
-uv run pytest scripts/test_plugin_bundle.py -k 'browser_preflight or update_codex_config'
-cargo nextest run -p sky-cua-chrome-host
-cd packages/browser-use && bun test test/build.test.ts
-```
+- The earlier review closeout passed 1,264 Python tests and the separate 18-test module
+  including official Codex 0.149 API acceptance. Two helper-only fixture
+  versions passed native installation and fresh-session cache selection,
+  with 380 matching regular files and no symlinks in each cache. Canonical
+  installation and an AppShot-bound button click passed in the original
+  Nightly session. Evidence: `artifacts/review-closeout/`.
 
-The Browser build regression imports and initializes the canonical projection
-with Linux Node 24 ABI 137 without requiring a live Chrome session.
+- Prioritized installer follow-ups passed 1,260 Python tests plus the separate
+  opt-in Codex 0.149 API acceptance, and 51 Browser tests. Real app-server
+  installs and MCP calls verified both development and installed standalone
+  fallback paths after removing their original source. Live IAB navigation and
+  changed-state readback passed; the original Nightly session remained ready.
+  Evidence: `artifacts/install-followups/verification.json`.
 
-Live host smoke:
+- `uv run pytest scripts/test_standalone_release.py scripts/test_plugin_bundle.py
+  scripts/test_deploy_plugin.py` covers native complete-directory selection,
+  existing Sky-link replacement, unchanged native baseline projection,
+  supplemental skill ownership/removal, retired identity disablement, and
+  no-native fallbacks.
+- `cd packages/browser-use && bun run build && bun test` covers the external
+  Browser client, including the real `cua-node` fixed-path trust integration.
+- `python3 scripts/build_plugin.py` stages the development bundle; inspect
+  its included preflight and resources before rollout.
+- `packages/browser-use/test/native-enhancements.test.ts` covers strict
+  event evidence, main-frame filtering, callback failures, deadlines and native
+  setup/decorator preservation.
+- The former materialized wrapper connected in the existing native runtime. Isolated
+  local fixture tabs passed cross-document and same-document waits; no-op waits
+  were rejected. Evidence: `artifacts/native-browser-layer/`.
 
-```bash
-python3 scripts/live_chrome_host_client_smoke.py --browser brave --install-temp-native-manifest --host-path target/debug/sky-cua-chrome-host
-```
-
-Latest accepted artifacts:
-
-- Live Chrome native-host bridge: `artifacts/chrome-host-smoke/20260514T154125Z/result.json`
-  proves the official Codex extension can reach the sky-cua native host
-  binary through a temporary Brave native-host manifest, bridge
-  client-to-extension `getInfo` and `getTabs`, bridge extension-to-client
-  heartbeat `ping`, observe a session/turn request, emit `turnEnded`
-  from a task-complete session log, receive the official extension's
-  `turnEnded` response, and restore the original Brave manifest.
-- Patched Codex Desktop Settings proof:
-  `artifacts/desktop-ui-proof/20260513T100515Z-browser-settings-patched-profile/`
-  shows `Computer Use` with Google Chrome management and `Browser Use`
-  with the Chrome plugin rather than pruning the browser companions.
+- The 2026-11-05 Claude review found that native `plugin/install` omitted
+  symlinked overlay entries. The corrected cache contains 380 regular files,
+  preserves all 378 native files, and imports independently of its source
+  projection. That exact cache passed live IAB page navigation, a changed button
+  readback, and no-op navigation rejection. Evidence:
+  `artifacts/claude-code-review/primary-verification.json`.
 
 ## Known limitations
 
-- **Codex Desktop side patches live in a separate repository**
-  (`/home/bex/projects/sky/CodexDesktop-Rebuild`) and are not part of
-  the `sky-cua` source tree. The patches are intentionally small
-  (widen Linux `computerUse` availability, strip external Browser Use
-  build-flavor gates, keep Browser Use / Chrome companion descriptors
-  available when `computerUse` is enabled).
-- **Codex Desktop still presents the upstream Browser Use plugin as its
-  browser surface.** The full first-class `browser_*` MCP action surface is
-  shipped, but Codex Desktop's adoption of it goes through compat
-  materialization owned by the codex-desktop repo: that repo generates
-  plugin cache roots under the OpenAI built-in IDs that point at the
-  packaged sky-cua implementation. The sky-cua side of that contract is
-  documented in
-  [`docs/runtime/compat-plugin-contract.md`](../runtime/compat-plugin-contract.md).
-- **No standalone Chrome extension smoke fixture.** The current payload carries
-  the latest extracted upstream ChatGPT extension selected from
-  `resources/chrome-extension/codex/`. A
-  `scripts/install_chrome_extension.py` automated temporary-profile
-  loader does not exist yet.
-- **Codex Desktop UI proof is release-bound.** Release
-  `a1b86ed8c07f88e09e3607065f26ee7583c1faa394f3d809b173a095f7a2891d`
-  was installed through the normal Codex Desktop installer on 2026-07-21.
-  Fresh task `019f8499-1bcd-7f13-8966-a392574a81d5` selected
-  `host_provided_iab`, navigated, captured a screenshot, emitted it back to
-  Codex for inspection, and returned the page marker without generation or
-  module-path environment overrides. Repeat this proof after an upstream
-  Desktop refresh changes the plugin descriptor, Settings, or Browser runtime.
+The old versioned overlay and appended native skill were superseded after the
+2026-11-06 restart restored the app-owned baseline. Historical cache-selection
+proof above does not prove restart persistence of that former deployment.
+Current activation is explicit through the supplemental skill; it does not
+attach helpers to every ordinary native bootstrap automatically. An existing
+chat's initial skill catalog remains a snapshot of its old selection.
+Native Browser checks use disposable local fixture tabs; no compositor smoke
+or fresh model turn is implied.
+
+Yesterday's working Browser state was reported by the user. The native package
+was installed before that report; today's projection/cache timestamps do not
+prove the exact change that selected the stale client. See the bounded
+[regression investigation](../research/2026-11-native-browser-plugin-regression.md).
+
+The prior bypass-only repair plan is superseded. The
+[evidence-backed enhancement inventory](../research/2026-11-native-browser-enhancement-baseline.md)
+distinguishes native additions from upstream parity and external-only features.
 
 ## Related
 
-- Runtime contract: [`docs/runtime/mcp-boundary.md`](../runtime/mcp-boundary.md)
-  describes the host-portable MCP entrypoint and the desktop env
-  allowlist.
-- Companion feature: [`docs/features/session-env-repair.md`](session-env-repair.md)
-- ROADMAP entries: [`ROADMAP.md`](../../ROADMAP.md) under "Host
-  portability".
-- Originating ExecPlan (retired into this feature doc; see git history for `plans/1778463694899-nimble-knight.md`).
+- [Compatibility payload contract](../runtime/compat-plugin-contract.md)
+- [Browser MCP tools](browser-mcp-tools.md)
+- [Unified browser bridge control plane](unified-browser-bridge-control-plane.md)
+- [Roadmap](../../ROADMAP.md)

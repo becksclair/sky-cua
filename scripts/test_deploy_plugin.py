@@ -238,6 +238,7 @@ def test_update_codex_config_disables_plugin_skills_for_disabled_surfaces(
     skills_root = tmp_path / ".agents" / "skills"
     config_path.write_text(
         '[plugins."browser-use@openai-bundled"]\nenabled = true\n\n'
+        '[plugins."browser@openai-bundled"]\nenabled = true\n\n'
         '[plugins."chrome@openai-bundled"]\nenabled = true\n',
         encoding="utf-8",
     )
@@ -248,6 +249,7 @@ def test_update_codex_config_disables_plugin_skills_for_disabled_surfaces(
     )
     parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
     assert parsed["plugins"]["browser-use@openai-bundled"]["enabled"] is False
+    assert parsed["plugins"]["browser@openai-bundled"]["enabled"] is False
     assert parsed["plugins"]["chrome@openai-bundled"]["enabled"] is False
     entries = parsed["skills"]["config"]
     disabled_paths = {entry["path"] for entry in entries if entry.get("enabled") is False}
@@ -268,7 +270,8 @@ def test_update_codex_config_disables_plugin_skills_for_disabled_surfaces(
         enabled_skill_names=SKY_CUA_SKILLS,
     )
     reparsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
-    assert reparsed["plugins"]["browser-use@openai-bundled"]["enabled"] is True
+    assert reparsed["plugins"]["browser-use@openai-bundled"]["enabled"] is False
+    assert reparsed["plugins"]["browser@openai-bundled"]["enabled"] is True
     assert reparsed["plugins"]["chrome@openai-bundled"]["enabled"] is True
     plugin_disabled = [
         entry

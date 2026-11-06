@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import sys
@@ -14,15 +13,44 @@ import tarfile
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
 
+import _claude_config
 import _hermes_config
 import _opencode_config
 import _plugin_bundle
 import _portal_desktop_entry
 import _session_accessibility_env
+import _standalone_codex
 import _standalone_release_command
+from _codex_app_server import CodexAppServerClient
 from _skill_projection import apply_skill_link_plan, plan_skill_links
+from _standalone_hosts import (
+    _configure_openclaw_no_prompt_permissions as _configure_openclaw_no_prompt_permissions,
+)
+from _standalone_hosts import (
+    _copy_tree as _copy_tree,
+)
+from _standalone_hosts import (
+    _install_openclaw_node_repl as _install_openclaw_node_repl,
+)
+from _standalone_hosts import (
+    _install_pi_mcp as _install_pi_mcp,
+)
+from _standalone_hosts import (
+    _remove_path as _remove_path,
+)
+from _standalone_hosts import (
+    _set_top_level_toml_string as _set_top_level_toml_string,
+)
+from _standalone_hosts import (
+    _toml_string as _toml_string,
+)
+from _standalone_hosts import (
+    _upsert_toml_key as _upsert_toml_key,
+)
+from _standalone_hosts import (
+    _write_text_atomically as _write_text_atomically,
+)
 from _standalone_release_command import (
     ReleaseError,
     parse_stable_version,
@@ -47,6 +75,10 @@ SURFACE_SKILL_MAP = {
 }
 SKILL_NAMES = tuple(SURFACE_SKILL_MAP.values())
 PLUGIN_NAMES = ("computer-use", "browser")
+NATIVE_CODEX_BINARY = Path("/usr/lib/chatgpt/resources/codex")
+NATIVE_BROWSER_PLUGIN_ROOT = _standalone_codex._native_browser_projection_module(
+    REPO_ROOT
+).NATIVE_BROWSER_PLUGIN_ROOT
 LAUNCHER_NAMES = (
     "sky-cua-client",
     "sky-cua-service",
@@ -62,28 +94,8 @@ NATIVE_MANIFEST_DIRS = (
     Path(".config/google-chrome/NativeMessagingHosts"),
     Path(".config/chromium/NativeMessagingHosts"),
     Path(".config/BraveSoftware/Brave-Browser/NativeMessagingHosts"),
+    Path(".config/BraveSoftware/Brave-Browser-Nightly/NativeMessagingHosts"),
     Path(".config/BraveSoftware/Brave-Origin/NativeMessagingHosts"),
-)
-PI_MCP_RUNTIME_ENV = (
-    "PATH",
-    "SKY_CUA_BROWSER_EVAL",
-    "SKY_CUA_MODEL_SUPPORTS_IMAGES",
-    "SKY_CUA_PRESENCE_ENABLED",
-    "SKY_CUA_BROWSER_CONTROL_MODE",
-    "SKY_CUA_CODEX_BROWSER_SOCKET_PATH",
-    "SKY_CUA_PHONE_DIRECT",
-    "SKY_CUA_PHONE_DIRECT_ADVERTISED_ENDPOINT",
-    "SKY_CUA_PHONE_DIRECT_ENROLLMENT_TTL_MS",
-    "SKY_CUA_PHONE_DIRECT_LISTEN_ADDR",
-    "SKY_CUA_PHONE_DIRECT_STATE_PATH",
-    "DBUS_SESSION_BUS_ADDRESS",
-    "DESKTOP_SESSION",
-    "DISPLAY",
-    "WAYLAND_DISPLAY",
-    "XDG_CURRENT_DESKTOP",
-    "XDG_RUNTIME_DIR",
-    "XDG_SESSION_TYPE",
-    "XAUTHORITY",
 )
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -92,19 +104,6 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 def _run(command: Sequence[str], *, cwd: Path = REPO_ROOT) -> None:
     print(f"+ {' '.join(command)}")
     subprocess.run(command, cwd=cwd, check=True, text=True)
-
-
-def _remove_path(path: Path) -> None:
-    if path.is_symlink() or path.is_file():
-        path.unlink(missing_ok=True)
-    elif path.is_dir():
-        shutil.rmtree(path)
-
-
-def _copy_tree(source: Path, destination: Path) -> None:
-    if source.is_symlink() or not source.is_dir():
-        raise FileNotFoundError(f"required directory is missing: {source}")
-    shutil.copytree(source, destination, dirs_exist_ok=True, symlinks=False)
 
 
 def _copy_file(source: Path, destination: Path, *, executable: bool = False) -> None:
@@ -138,6 +137,7 @@ def _write_release_manifest(payload_root: Path) -> None:
             "node": "bin/node",
             "node_repl": "bin/node_repl",
             "browser_client": "browser/browser-client.mjs",
+            "browser_enhancements": "browser/sky-enhancements.mjs",
             "browser_extension": "browser/extension",
             "browser_native_host": "browser/native-host/sky-cua-chrome-host",
             "codex_marketplace": "codex/openai-bundled/.agents/plugins/marketplace.json",
@@ -168,6 +168,15 @@ def assemble_payload(payload_root: Path, *, core_root: Path, cua_node_root: Path
 
     browser_build = REPO_ROOT / "packages/browser-use/build"
     _copy_file(browser_build / "browser-client.mjs", payload_root / "browser/browser-client.mjs")
+    _copy_file(
+        browser_build / "sky-enhancements.mjs", payload_root / "browser/sky-enhancements.mjs"
+    )
+    for resource in ("_native_browser_projection.py",):
+        _copy_file(REPO_ROOT / "resources" / resource, payload_root / "resources" / resource)
+    _copy_tree(
+        REPO_ROOT / "resources/sky-browser-enhancements",
+        payload_root / "resources/sky-browser-enhancements",
+    )
     _copy_tree(_single_extension_root(core_root), payload_root / "browser/extension")
     _remove_path(payload_root / "resources/chrome-extension")
     native_host = core_root / "bin/runtimes/linux-x64/sky-cua-chrome-host"
@@ -180,6 +189,11 @@ def assemble_payload(payload_root: Path, *, core_root: Path, cua_node_root: Path
     compat = REPO_ROOT / "resources/codex-compat/openai-bundled"
     _copy_tree(compat, payload_root / "codex/openai-bundled")
     _copy_tree(REPO_ROOT / "skills", payload_root / "skills")
+    for skill_name in SKILL_NAMES:
+        _copy_tree(
+            REPO_ROOT / "skills" / skill_name,
+            payload_root / "codex/openai-bundled/plugins/computer-use/skills" / skill_name,
+        )
     _copy_tree(REPO_ROOT / "out/components/model-documentation", payload_root / "docs")
 
     artifact_scripts = payload_root / "scripts"
@@ -193,8 +207,11 @@ def assemble_payload(payload_root: Path, *, core_root: Path, cua_node_root: Path
     _copy_file(
         REPO_ROOT / "scripts/_codex_app_server.py", artifact_scripts / "_codex_app_server.py"
     )
+    for helper in ("_standalone_codex.py", "_standalone_hosts.py"):
+        _copy_file(REPO_ROOT / "scripts" / helper, artifact_scripts / helper)
     _copy_file(REPO_ROOT / "scripts/_opencode_config.py", artifact_scripts / "_opencode_config.py")
     _copy_file(REPO_ROOT / "scripts/_hermes_config.py", artifact_scripts / "_hermes_config.py")
+    _copy_file(REPO_ROOT / "scripts/_claude_config.py", artifact_scripts / "_claude_config.py")
     _copy_file(REPO_ROOT / "scripts/_plugin_bundle.py", artifact_scripts / "_plugin_bundle.py")
     _copy_file(
         REPO_ROOT / "scripts/_portal_desktop_entry.py",
@@ -227,6 +244,9 @@ def validate_payload(payload_root: Path) -> None:
         "bin/node",
         "bin/node_repl",
         "browser/browser-client.mjs",
+        "browser/sky-enhancements.mjs",
+        "resources/_native_browser_projection.py",
+        "resources/sky-browser-enhancements/SKILL.md",
         "browser/extension/manifest.json",
         "browser/native-host/sky-cua-chrome-host",
         "codex/openai-bundled/.agents/plugins/marketplace.json",
@@ -253,11 +273,18 @@ def validate_payload(payload_root: Path) -> None:
         "scripts/_standalone_release_command.py",
         "scripts/_opencode_config.py",
         "scripts/_hermes_config.py",
+        "scripts/_claude_config.py",
+        "scripts/_codex_app_server.py",
+        "scripts/_standalone_codex.py",
+        "scripts/_standalone_hosts.py",
         "scripts/_plugin_bundle.py",
         "scripts/_portal_desktop_entry.py",
         "scripts/_session_accessibility_env.py",
         "scripts/_skill_projection.py",
         "scripts/_standalone_topology.py",
+    )
+    required += tuple(
+        f"codex/openai-bundled/plugins/computer-use/skills/{name}/SKILL.md" for name in SKILL_NAMES
     )
     missing = [relative for relative in required if not (payload_root / relative).is_file()]
     if missing:
@@ -402,6 +429,8 @@ def build_payload(
     build_plugin_command = [
         sys.executable,
         str(REPO_ROOT / "scripts/build_plugin.py"),
+        "--browser-runtime-mode",
+        "standalone",
         "--dist-root",
         str(core),
     ]
@@ -538,153 +567,42 @@ def _skill_projection_roots(
     roots = [home / ".agents/skills"]
     if (home / ".codex").exists():
         roots.append(home / ".codex/skills")
+    if (home / ".claude").exists():
+        roots.append(home / ".claude/skills")
     if (home / ".openclaw").exists():
         roots.append(home / ".openclaw/skills")
+    opencode_roots = [_opencode_config._opencode_global_config_dir(env, home)]
+    custom_opencode = env.get("OPENCODE_CONFIG_DIR", "").strip()
+    if custom_opencode:
+        opencode_roots.append(Path(custom_opencode).expanduser())
+    for config_root in opencode_roots:
+        if config_root.is_dir():
+            roots.append(config_root / "skills")
     hermes_config = _hermes_config.hermes_home(home=home, env=env) / "config.yaml"
     if configure_hosts and hermes_config.exists():
         roots.append(hermes_config.parent / "skills")
-    return tuple(roots)
+    return tuple(dict.fromkeys(roots))
 
 
-def _link_or_copy_directory(target: Path, link_path: Path) -> None:
-    """Symlink ``link_path`` -> ``target``, falling back to a directory copy."""
-    if link_path.is_symlink():
-        try:
-            if link_path.readlink() == target:
-                return
-        except OSError:
-            pass
-        link_path.unlink()
-    elif link_path.exists():
-        _remove_path(link_path)
-    link_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        link_path.symlink_to(target, target_is_directory=target.is_dir())
-    except (OSError, NotImplementedError, FileExistsError):
-        _remove_path(link_path)
-        if not target.is_absolute():
-            target = (link_path.parent / target).resolve()
-        shutil.copytree(target, link_path, symlinks=False)
+_native_browser_projection_module = _standalone_codex._native_browser_projection_module
+_update_codex_config_for_bundled = _standalone_codex._update_codex_config_for_bundled
 
 
-def _toml_string(value: Path | str) -> str:
-    return json.dumps(str(value))
-
-
-def _upsert_toml_key(config_text: str, header: str, key: str, rendered_value: str) -> str:
-    import re
-
-    section_re = re.compile(
-        rf"(^\[{re.escape(header)}\][ \t]*(?:#[^\r\n]*)?\r?\n)(.*?)(?=^\[|\Z)",
-        re.MULTILINE | re.DOTALL,
+def _sync_codex_bundled_marketplace(
+    install_root: Path,
+    codex_home: Path,
+    *,
+    native_browser_root: Path | None = None,
+    plugin_names: tuple[str, ...] = PLUGIN_NAMES,
+) -> None:
+    _standalone_codex._sync_codex_bundled_marketplace(
+        install_root,
+        codex_home,
+        native_browser_root=NATIVE_BROWSER_PLUGIN_ROOT
+        if native_browser_root is None
+        else native_browser_root,
+        plugin_names=plugin_names,
     )
-    match = section_re.search(config_text)
-    line = f"{key} = {rendered_value}"
-    if match is None:
-        separator = "" if not config_text or config_text.endswith("\n") else "\n"
-        return f"{config_text}{separator}\n[{header}]\n{line}\n"
-    body = match.group(2)
-    key_re = re.compile(rf"^{re.escape(key)}\s*=.*$", re.MULTILINE)
-    if key_re.search(body):
-        new_body = key_re.sub(lambda _match: line, body, count=1)
-    else:
-        suffix = "" if body.endswith(("\n", "\r\n")) or body == "" else "\n"
-        new_body = f"{body}{suffix}{line}\n"
-    return config_text[: match.start(2)] + new_body + config_text[match.end(2) :]
-
-
-def _sync_codex_bundled_marketplace(install_root: Path, codex_home: Path) -> None:
-    """Project the standalone ``openai-bundled`` marketplace via the bundled-marketplace cache.
-
-    ``codex app-server`` now rejects ``plugin/install`` for the reserved
-    ``openai-bundled`` marketplace (0.149.0: ``reserved and cannot be loaded
-    from this source``). The supported override is the same filesystem
-    projection ``deploy_plugin.py``/``resources/chrome_preflight.py`` use:
-    copy the marketplace into
-    ``codex_home/.tmp/bundled-marketplaces/openai-bundled`` and link each
-    plugin directory there, then point ``config.toml`` at it. See
-    ``resources/chrome_preflight.py:sync_marketplace``.
-    """
-    source_root = install_root / "codex/openai-bundled"
-    source_marketplace = source_root / ".agents/plugins/marketplace.json"
-    if not source_marketplace.is_file():
-        return
-    dest_marketplace = (
-        codex_home / ".tmp/bundled-marketplaces/openai-bundled/.agents/plugins/marketplace.json"
-    )
-    dest_marketplace.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_marketplace, dest_marketplace)
-    try:
-        manifest = json.loads(dest_marketplace.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        manifest = None
-    if isinstance(manifest, dict):
-        plugins = manifest.get("plugins")
-        if isinstance(plugins, list):
-            existing = {p.get("name") for p in plugins if isinstance(p, dict)}
-            # Preserve chrome if the standalone marketplace does not ship it;
-            # Codex Desktop still expects chrome alongside our two plugins.
-            changed = False
-            for extra in ("chrome",):
-                if extra not in existing:
-                    plugins.append(
-                        {
-                            "name": extra,
-                            "source": {"source": "local", "path": f"./plugins/{extra}"},
-                            "policy": {
-                                "installation": "AVAILABLE",
-                                "authentication": "ON_INSTALL",
-                            },
-                            "category": "Engineering",
-                        }
-                    )
-                    changed = True
-            if changed:
-                dest_marketplace.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    for plugin_name in PLUGIN_NAMES:
-        source_plugin = source_root / "plugins" / plugin_name
-        if not source_plugin.is_dir():
-            continue
-        dest_link = codex_home / ".tmp/bundled-marketplaces/openai-bundled/plugins" / plugin_name
-        _link_or_copy_directory(source_plugin.resolve(), dest_link)
-
-
-def _update_codex_config_for_bundled(codex_home: Path) -> None:
-    from datetime import UTC, datetime
-
-    config_path = codex_home / "config.toml"
-    try:
-        config_text = config_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        config_text = ""
-    marketplace_root = codex_home / ".tmp/bundled-marketplaces/openai-bundled"
-    config_text = _upsert_toml_key(config_text, "features", "plugins", "true")
-    config_text = _upsert_toml_key(
-        config_text,
-        "marketplaces.openai-bundled",
-        "last_updated",
-        _toml_string(datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")),
-    )
-    config_text = _upsert_toml_key(
-        config_text,
-        "marketplaces.openai-bundled",
-        "source_type",
-        '"local"',
-    )
-    config_text = _upsert_toml_key(
-        config_text,
-        "marketplaces.openai-bundled",
-        "source",
-        _toml_string(marketplace_root),
-    )
-    for plugin_id in (f"{name}@openai-bundled" for name in PLUGIN_NAMES):
-        config_text = _upsert_toml_key(
-            config_text,
-            f'plugins."{plugin_id}"',
-            "enabled",
-            "true",
-        )
-    _write_text_atomically(config_path, config_text)
 
 
 def _install_codex_plugins(
@@ -693,262 +611,30 @@ def _install_codex_plugins(
     home: Path | None = None,
     env: Mapping[str, str] | None = None,
     which: Callable[[str], str | None],
+    enabled_skill_names: tuple[str, ...] | None = None,
+    report: dict[str, object] | None = None,
 ) -> tuple[str, ...]:
-    if env is None:
-        env = {}
-    codex = which("codex")
-    if codex is None:
-        return ()
-    # ``install_root`` is the physical fixed root (``XDG_DATA_HOME/sky-cua``);
-    # ``home`` is the user home that owns ``~/.codex``. Derive from ``env`` when
-    # not explicitly passed so tests that monkeypatch ``which`` keep working.
-    home_path = Path(env.get("HOME", str(Path.home()))).expanduser() if home is None else home
-    codex_home = home_path / ".codex"
-    # Filesystem projection replaces the 0.149.0-blocked ``plugin/install`` RPC.
-    _sync_codex_bundled_marketplace(install_root, codex_home)
-    _update_codex_config_for_bundled(codex_home)
-    return PLUGIN_NAMES
-
-
-def _install_openclaw_node_repl(
-    install_root: Path,
-    *,
-    home: Path,
-    env: Mapping[str, str],
-    which: Callable[[str], str | None],
-    runner: Runner,
-) -> bool:
-    openclaw = which("openclaw")
-    if openclaw is None:
-        return False
-    definition: dict[str, Any] = {
-        "enabled": True,
-        "command": str(install_root / "bin/node_repl"),
-        "args": [],
-        "cwd": str(install_root),
-        # node_repl derives its runtime paths (node binary, module root,
-        # Playwright browsers, launcher path) from its own binary location at
-        # startup, so the host config must not pin them. Keep an empty env so
-        # the process inherits the parent environment and auto-detects.
-        "env": {},
-        "connectionTimeoutMs": 120_000,
-        "requestTimeoutMs": 3_600_000,
-        "supportsParallelToolCalls": False,
-    }
-    command_env = os.environ.copy()
-    command_env.update(env)
-    command_env["HOME"] = str(home)
-    projected_bin = (home / ".local/bin").resolve()
-    command_env["PATH"] = os.pathsep.join(
-        entry
-        for entry in command_env.get("PATH", "").split(os.pathsep)
-        if entry and Path(entry).expanduser().resolve() != projected_bin
+    active_env = {} if env is None else env
+    home_path = (
+        Path(active_env.get("HOME", str(Path.home()))).expanduser() if home is None else home
     )
-    result = runner(
-        [
-            openclaw,
-            "mcp",
-            "set",
-            "node_repl",
-            json.dumps(definition, sort_keys=True, separators=(",", ":")),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=command_env,
+    selected = (
+        _durable_skill_names(home_path, active_env)
+        if enabled_skill_names is None
+        else enabled_skill_names
     )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(f"OpenClaw node_repl registration failed: {detail}")
-    return True
-
-
-def _set_top_level_toml_string(text: str, key: str, value: str) -> str:
-    """Set one top-level TOML string while preserving unrelated formatting."""
-    lines = text.splitlines(keepends=True)
-    first_table = next(
-        (index for index, line in enumerate(lines) if line.lstrip().startswith("[")),
-        len(lines),
+    return _standalone_codex._install_codex_plugins(
+        install_root,
+        home=home_path,
+        env=active_env,
+        which=which,
+        enabled_skill_names=selected,
+        native_codex_binary=NATIVE_CODEX_BINARY,
+        native_browser_root=NATIVE_BROWSER_PLUGIN_ROOT,
+        client_factory=CodexAppServerClient,
+        product_version=PRODUCT_VERSION,
+        report=report,
     )
-    replacement = f'{key} = "{value}"\n'
-    matches = [
-        index
-        for index, line in enumerate(lines[:first_table])
-        if line.split("=", 1)[0].strip() == key and "=" in line
-    ]
-    if len(matches) > 1:
-        raise ValueError(f"OpenClaw Codex config has duplicate top-level {key!r} entries")
-    if matches:
-        lines[matches[0]] = replacement
-    else:
-        lines.insert(first_table, replacement)
-    return "".join(lines)
-
-
-def _write_text_atomically(path: Path, text: str) -> None:
-    write_path = path.resolve(strict=False) if path.is_symlink() else path
-    write_path.parent.mkdir(parents=True, exist_ok=True)
-    mode = write_path.stat().st_mode if write_path.exists() else 0o600
-    temporary = write_path.with_name(f".{write_path.name}.tmp-{os.getpid()}")
-    _remove_path(temporary)
-    try:
-        temporary.write_text(text, encoding="utf-8")
-        temporary.chmod(mode)
-        os.replace(temporary, write_path)
-    finally:
-        _remove_path(temporary)
-
-
-def _install_pi_mcp(
-    install_root: Path,
-    *,
-    home: Path,
-    env: Mapping[str, str],
-) -> Path | None:
-    """Project the fixed-root MCP launcher into an existing Pi installation."""
-    wrapper = install_root / "pi_mcp_wrapper.sh"
-    forwarded = {
-        name: value.strip() for name in PI_MCP_RUNTIME_ENV if (value := env.get(name, "")).strip()
-    }
-    forwarded.setdefault("SKY_CUA_PRESENCE_ENABLED", "1")
-    exports = "".join(f"export {name}={shlex.quote(value)}\n" for name, value in forwarded.items())
-    wrapper.write_text(
-        "".join(
-            (
-                "#!/bin/bash\n",
-                f"export SKY_CUA_REPO_ROOT={shlex.quote(str(install_root))}\n",
-                exports,
-                "export SKY_CUA_MCP_CALLER_PROVENANCE=pi\n",
-                f'exec {shlex.quote(str(install_root / "bin/sky-cua-client"))} mcp "$@"\n',
-            )
-        ),
-        encoding="utf-8",
-    )
-    wrapper.chmod(0o755)
-
-    agent_dir = home / ".pi/agent"
-    if not agent_dir.is_dir():
-        return None
-    extension_source = install_root / "resources/pi/sky-cua-image-capability.ts"
-    extension_dir = agent_dir / "extensions"
-    extension_dir.mkdir(parents=True, exist_ok=True)
-    extension_path = extension_dir / "sky-cua-image-capability.ts"
-    if extension_path.exists() or extension_path.is_symlink():
-        if extension_path.is_symlink():
-            expected = extension_source.resolve(strict=False)
-            actual = extension_path.resolve(strict=False)
-            if actual != expected:
-                # Legacy installs under /home/bex and other prior fixed roots left
-                # dangling or absolute symlinks that still point at a sky-cua
-                # managed copy of this exact extension. Treat those as managed
-                # so host migrations (bex -> ubuntu) and reinstalls converge
-                # instead of failing the entire deploy.
-                try:
-                    raw_target = str(extension_path.readlink())
-                except OSError:
-                    raw_target = ""
-                is_legacy_managed = (
-                    raw_target.endswith("sky-cua-image-capability.ts") and "sky-cua" in raw_target
-                )
-                if not is_legacy_managed:
-                    raise ValueError(
-                        f"refusing to replace an unmanaged Pi extension: {extension_path}"
-                    )
-        else:
-            # Regular file at the extension path: only replace if it is
-            # byte-identical to the shipped source (e.g. a prior copy
-            # instead of a symlink). Otherwise preserve the user's file.
-            try:
-                if extension_path.read_bytes() != extension_source.read_bytes():
-                    raise ValueError(
-                        f"refusing to replace an unmanaged Pi extension: {extension_path}"
-                    )
-            except OSError as exc:
-                raise ValueError(
-                    f"refusing to replace an unmanaged Pi extension: {extension_path}"
-                ) from exc
-        extension_path.unlink()
-    extension_path.symlink_to(extension_source)
-    config_path = agent_dir / "mcp.json"
-    if config_path.exists():
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-        if not isinstance(config, dict):
-            raise ValueError(f"Pi MCP config must be a JSON object: {config_path}")
-    else:
-        config = {}
-    servers = config.setdefault("mcpServers", {})
-    if not isinstance(servers, dict):
-        raise ValueError(f"Pi MCP config mcpServers must be a JSON object: {config_path}")
-    servers["sky_cua"] = {
-        "command": str(wrapper),
-        "args": [],
-        "lifecycle": "lazy",
-        "directTools": True,
-    }
-    _write_text_atomically(config_path, json.dumps(config, indent=2) + "\n")
-    return config_path
-
-
-def _configure_openclaw_no_prompt_permissions(
-    *,
-    home: Path,
-    env: Mapping[str, str],
-    openclaw: str,
-    runner: Runner,
-) -> tuple[Path, ...]:
-    """Converge OpenClaw and every existing Codex home to full-auto operation."""
-    config_paths = sorted((home / ".openclaw/agents").glob("*/agent/codex-home/config.toml"))
-    planned: list[tuple[Path, str]] = []
-    for config_path in config_paths:
-        original = config_path.read_text(encoding="utf-8")
-        updated = _set_top_level_toml_string(original, "approval_policy", "never")
-        updated = _set_top_level_toml_string(updated, "sandbox_mode", "danger-full-access")
-        tomllib.loads(updated)
-        if updated != original:
-            planned.append((config_path, updated))
-
-    batch = [
-        {
-            "path": "plugins.entries.codex.config.appServer.mode",
-            "value": "yolo",
-        },
-        {
-            "path": "plugins.entries.codex.config.appServer.approvalPolicy",
-            "value": "never",
-        },
-        {
-            "path": "plugins.entries.codex.config.appServer.sandbox",
-            "value": "danger-full-access",
-        },
-        {
-            "path": "plugins.entries.codex.config.codexPlugins.enabled",
-            "value": True,
-        },
-        {
-            "path": "plugins.entries.codex.config.codexPlugins.allow_all_plugins",
-            "value": True,
-        },
-        {
-            "path": "plugins.entries.codex.config.codexPlugins.allow_destructive_actions",
-            "value": "approve",
-        },
-    ]
-    command_env = os.environ.copy()
-    command_env.update(env)
-    command_env["HOME"] = str(home)
-    result = runner(
-        [openclaw, "config", "set", "--batch-json", json.dumps(batch, separators=(",", ":"))],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=command_env,
-    )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(f"OpenClaw no-prompt permission configuration failed: {detail}")
-    for config_path, updated in planned:
-        _write_text_atomically(config_path, updated)
-    return tuple(config_paths)
 
 
 def install_payload(
@@ -1027,10 +713,15 @@ def install_payload(
         "backup_path": None,
         "servers": [],
     }
+    claude_report: dict[str, object] = {"status": "skipped"}
     plugins: tuple[str, ...] = ()
+    codex_report: dict[str, object] = {"mode": "skipped"}
     openclaw = False
     openclaw_permission_configs: tuple[Path, ...] = ()
     if configure_hosts:
+        claude_report = dict(
+            _claude_config.install_claude_config(public_root, home=install_home, env=active_env)
+        )
         hermes_config = _hermes_config.install_hermes_config(
             public_root,
             home=install_home,
@@ -1043,7 +734,12 @@ def install_payload(
                 env=active_env,
             ).report()
         plugins = _install_codex_plugins(
-            public_root, home=install_home, env=active_env, which=which
+            public_root,
+            home=install_home,
+            env=active_env,
+            which=which,
+            enabled_skill_names=durable_skill_names,
+            report=codex_report,
         )
         openclaw_bin = which("openclaw")
         if openclaw_bin is not None:
@@ -1070,10 +766,12 @@ def install_payload(
         "skills": [str(path) for path in skills],
         "pi_config": str(pi_config) if pi_config is not None else None,
         "codex_plugins": list(plugins),
+        "codex_install": codex_report,
         "openclaw_node_repl": openclaw,
         "openclaw_permission_configs": [str(path) for path in openclaw_permission_configs],
         "opencode_config": opencode_report,
         "hermes_config": hermes_report,
+        "claude_config": claude_report,
     }
 
 
