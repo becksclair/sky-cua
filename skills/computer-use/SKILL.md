@@ -14,8 +14,8 @@ Load `references/platform-linux.md` only for Linux, KDE/KWin, XWayland, or nativ
 
 ## Mandatory plan fields
 
-- After discovery or target activation, call `observe(surface="desktop")` and retain its exact `appshot_id`. Pass that id on every state-changing desktop call. `AppShotRequired` means no side effect ran; use the fresh recovery AppShot returned with the error rather than retrying with the rejected id.
-- **The only correct cropped-pixel action is** `desktop_pointer(operation="click", x=<crop-local x>, y=<crop-local y>, snapshot_id=<exact targeted-capture snapshot_id>)`. Copy that field contract into the plan. Never calculate, map, scale, or translate crop-local coordinates into desktop coordinates; authoritative geometry is enforced by the producing `snapshot_id`.
+- After discovery or target activation, call `observe(surface="desktop")` and retain its exact `appshot_id`. Pass it on every state-changing desktop call; `snapshot_id` does not replace it. `AppShotRequired` means no side effect ran. Inspect the returned recovery AppShot before continuing: if the target or state changed, reconsider the action instead of blindly retrying.
+- **The cropped-pixel action contract is** `desktop_pointer(operation="click", appshot_id=<current AppShot id>, x=<crop-local x>, y=<crop-local y>, snapshot_id=<exact targeted-capture snapshot_id>)`. Never calculate, map, scale, or translate crop-local coordinates into desktop coordinates; authoritative geometry is enforced by the producing `snapshot_id`.
 - For a requested state change, record the initial structured value, perform the action once, obtain a fresh structured readback, and require both the requested final value and `final_value != initial_value`. For Save, record the initial unsaved/saved indicator and require a fresh changed saved indicator. For Toggle, require the fresh structured final switch state to differ from the recorded initial state. Missing, ambiguous, or unchanged readback is failed/unverified; do not repeat the action speculatively.
 
 ## Tool Surface

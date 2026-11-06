@@ -1,5 +1,6 @@
 """Tests for durable global skill projection and its checkout migration rules."""
 
+import json
 import os
 from pathlib import Path
 
@@ -7,6 +8,9 @@ import pytest
 
 import sync_agent_skills as sync_skills
 from _skill_projection import (
+    LEGACY_ROUTER_MARKER,
+    LEGACY_SKILL_MARKER,
+    LEGACY_SKILL_MARKER_CONTENT,
     PUBLIC_SKILLS_ROOT_MARKER,
     PUBLIC_SKILLS_ROOT_MARKER_CONTENT,
     project_skill_links,
@@ -36,6 +40,173 @@ def _make_checkout_source(root: Path, names: list[str], *, label: str = "") -> P
 
 def _raw_target(path: Path) -> str:
     return os.readlink(path)
+
+
+def _make_legacy_copy(destination: Path, marker: str = LEGACY_SKILL_MARKER_CONTENT) -> None:
+    destination.mkdir(parents=True)
+    (destination / LEGACY_SKILL_MARKER).write_text(marker, encoding="utf-8")
+    (destination / "SKILL.md").write_text("# old installed skill\n", encoding="utf-8")
+
+
+def _make_legacy_router(destination: Path, documentation_root: Path) -> dict[str, object]:
+    destination.mkdir(parents=True)
+    manifest: dict[str, object] = {
+        "schema_version": 1,
+        "documentation_root": str(documentation_root),
+        "canonical_skill": str(documentation_root / "skills" / destination.name / "SKILL.md"),
+    }
+    (destination / LEGACY_ROUTER_MARKER).write_text(json.dumps(manifest), encoding="utf-8")
+    (destination / "SKILL.md").write_text("# Installed sky-cua routing\n", encoding="utf-8")
+    return manifest
+
+
+def test_deleted_generation_routers_migrate_enabled_and_remove_disabled(tmp_path: Path) -> None:
+    names = ["computer-use", "browser-use", "phone-use"]
+    source = _make_source(tmp_path / "installed", names)
+    destination = tmp_path / "home/.config/opencode/skills"
+    stale_documentation = tmp_path / "deleted/releases/old-generation/components/documentation"
+    for name in names:
+        _make_legacy_router(destination / name, stale_documentation)
+    assert not stale_documentation.exists()
+
+    project_skill_links(source, (destination,), names, ["browser-use"])
+
+    browser = destination / "browser-use"
+    assert browser.is_symlink()
+    assert browser.readlink() == relative_symlink_target(source / "browser-use", browser)
+    assert not (destination / "computer-use").exists()
+    assert not (destination / "phone-use").exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schema_version", 2),
+        ("schema_version", True),
+        ("documentation_root", "relative/documentation"),
+        ("documentation_root", "/absolute/../documentation"),
+        ("documentation_root", 42),
+        ("canonical_skill", "/different/skills/computer-use/SKILL.md"),
+        ("canonical_skill", "/documentation/skills/browser-use/SKILL.md"),
+        ("unknown_field", "not-produced"),
+    ],
+)
+def test_invalid_router_manifests_preserve_unmanaged_directory(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    names = ["computer-use"]
+    source = _make_source(tmp_path / "installed", names)
+    destination = tmp_path / "skills/computer-use"
+    manifest = _make_legacy_router(destination, Path("/documentation"))
+    manifest[field] = value
+    marker = destination / LEGACY_ROUTER_MARKER
+    marker.write_text(json.dumps(manifest), encoding="utf-8")
+    before = marker.read_bytes()
+    with pytest.raises(ValueError, match="unmanaged"):
+        project_skill_links(source, (destination.parent,), names, names)
+    project_skill_links(source, (destination.parent,), names, [])
+    assert destination.is_dir() and not destination.is_symlink()
+    assert marker.read_bytes() == before
+
+
+@pytest.mark.parametrize("marker_kind", ["symlink", "malformed", "missing_field", "array"])
+def test_incomplete_or_unowned_router_marker_is_preserved(tmp_path: Path, marker_kind: str) -> None:
+    source = _make_source(tmp_path / "installed", ["computer-use"])
+    destination = tmp_path / "skills/computer-use"
+    manifest = _make_legacy_router(destination, Path("/documentation"))
+    marker = destination / LEGACY_ROUTER_MARKER
+    if marker_kind == "symlink":
+        external = tmp_path / "marker.json"
+        marker.rename(external)
+        marker.symlink_to(external)
+    elif marker_kind == "malformed":
+        marker.write_text("{", encoding="utf-8")
+    elif marker_kind == "array":
+        marker.write_text("[]", encoding="utf-8")
+    else:
+        del manifest["canonical_skill"]
+        marker.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unmanaged"):
+        project_skill_links(source, (destination.parent,), ["computer-use"], ["computer-use"])
+    assert destination.is_dir() and not destination.is_symlink()
+
+
+def test_router_migration_prevalidates_all_destinations(tmp_path: Path) -> None:
+    names = ["computer-use", "browser-use"]
+    source = _make_source(tmp_path / "installed", names)
+    destination = tmp_path / "skills"
+    _make_legacy_router(destination / "computer-use", tmp_path / "deleted-documentation")
+    (destination / "browser-use").mkdir()
+    with pytest.raises(ValueError, match="unmanaged"):
+        project_skill_links(source, (destination,), names, names)
+    assert (destination / "computer-use" / LEGACY_ROUTER_MARKER).is_file()
+    assert not (destination / "computer-use").is_symlink()
+
+
+def test_marked_copies_migrate_enabled_and_remove_disabled_skills(tmp_path: Path) -> None:
+    names = ["computer-use", "browser-use", "phone-use"]
+    source = _make_source(tmp_path / "installed", names)
+    destination = tmp_path / "home/.claude/skills"
+    for name in names:
+        _make_legacy_copy(destination / name)
+
+    project_skill_links(source, (destination,), names, ["computer-use", "browser-use"])
+
+    for name in names[:2]:
+        link = destination / name
+        assert link.is_symlink()
+        assert link.readlink() == relative_symlink_target(source / name, link)
+    assert not (destination / "phone-use").exists()
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "",
+        "managed by another installer\n",
+        "managed by sky-cua provisioning",
+        "managed by sky-cua provisioning\r\n",
+    ],
+)
+def test_nonexact_legacy_marker_does_not_grant_ownership(tmp_path: Path, marker: str) -> None:
+    names = ["computer-use"]
+    source = _make_source(tmp_path / "installed", names)
+    destination = tmp_path / "skills/computer-use"
+    _make_legacy_copy(destination, marker)
+    with pytest.raises(ValueError, match="unmanaged"):
+        project_skill_links(source, (destination.parent,), names, names)
+    assert destination.is_dir() and not destination.is_symlink()
+    project_skill_links(source, (destination.parent,), names, [])
+    assert destination.is_dir()
+
+
+def test_symlinked_legacy_marker_does_not_grant_ownership(tmp_path: Path) -> None:
+    names = ["computer-use"]
+    source = _make_source(tmp_path / "installed", names)
+    destination = tmp_path / "skills/computer-use"
+    _make_legacy_copy(destination)
+    marker = destination / LEGACY_SKILL_MARKER
+    content = marker.read_text(encoding="utf-8")
+    marker.unlink()
+    other = tmp_path / "other-marker"
+    other.write_text(content, encoding="utf-8")
+    marker.symlink_to(other)
+    with pytest.raises(ValueError, match="unmanaged"):
+        project_skill_links(source, (destination.parent,), names, names)
+    assert marker.is_symlink()
+
+
+def test_marked_copy_migration_validates_other_destinations_before_mutation(tmp_path: Path) -> None:
+    names = ["computer-use", "browser-use"]
+    source = _make_source(tmp_path / "installed", names)
+    destination = tmp_path / "skills"
+    _make_legacy_copy(destination / "computer-use")
+    (destination / "browser-use").mkdir()
+    with pytest.raises(ValueError, match="unmanaged"):
+        project_skill_links(source, (destination,), names, names)
+    assert (destination / "computer-use" / LEGACY_SKILL_MARKER).is_file()
+    assert not (destination / "computer-use").is_symlink()
 
 
 def test_default_sync_copies_payload_and_projects_relative_links(tmp_path: Path) -> None:

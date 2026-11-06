@@ -164,7 +164,7 @@ def run_agent(
         )
         selected_model = opencode_model
         model_arg = f" --model {shlex.quote(opencode_model)}"
-        command = f"opencode run --format json{model_arg} {shlex.quote(prompt)}"
+        command = f"opencode run --standalone --auto --format json{model_arg} {shlex.quote(prompt)}"
         argv = [
             "script",
             "-q",
@@ -241,7 +241,6 @@ def run_agent(
     neutral_cwd: Path | None = None
     if agent == "opencode" and cwd is None:
         neutral_cwd = Path(tempfile.mkdtemp(prefix="sky-cua-opencode-cwd-"))
-        install_opencode_project_config(neutral_cwd)
         run_cwd = neutral_cwd
     elif agent == "pi" and cwd is None:
         neutral_cwd = prepare_pi_smoke_cwd()
@@ -273,13 +272,6 @@ def run_agent(
         raw_stdout_path.unlink(missing_ok=True)
 
     return proc
-
-
-def install_opencode_project_config(cwd: Path) -> None:
-    """Place the VM-local sky-cua MCP config where OpenCode will load it."""
-    generated = Path.home() / ".local" / "share" / "sky-cua" / "opencode.json"
-    if generated.is_file():
-        shutil.copy2(generated, cwd / "opencode.json")
 
 
 def prepare_pi_smoke_cwd() -> Path:
@@ -386,6 +378,13 @@ def redacted_pi_event(event: dict[str, Any]) -> dict[str, Any] | None:
     message = redacted_assistant_message(event.get("message"))
     if message is not None:
         redacted["message"] = message
+    part = event.get("part")
+    if event_type == "text" and isinstance(part, dict) and part.get("type") == "text":
+        text = part.get("text")
+        if isinstance(text, str):
+            dismissed = dismissed_json_from_text(text)
+            if dismissed is not None:
+                redacted["dismissed"] = dismissed
     tool_results = event.get("toolResults")
     if isinstance(tool_results, list):
         redacted_tool_results = [
@@ -394,6 +393,9 @@ def redacted_pi_event(event: dict[str, Any]) -> dict[str, Any] | None:
         compact_tool_results = [item for item in redacted_tool_results if item is not None]
         if compact_tool_results:
             redacted["toolResults"] = compact_tool_results
+    code_mode_results = opencode_code_mode_tool_results(event)
+    if code_mode_results:
+        redacted.setdefault("toolResults", []).extend(code_mode_results)
     for key in NESTED_EVENT_KEYS:
         value = event.get(key)
         if isinstance(value, dict):
@@ -409,6 +411,70 @@ def redacted_pi_event(event: dict[str, Any]) -> dict[str, Any] | None:
     if set(redacted) == {"type"}:
         return None
     return redacted if redacted else None
+
+
+def opencode_code_mode_tool_results(event: dict[str, Any]) -> list[dict[str, Any]]:
+    """Retain successful returned MCP identities from OpenCode's execute records.
+
+    Code and search catalog text are not evidence. Require both a completed
+    runtime tool-call record and its matching returned sky-cua result envelope.
+    """
+    part = event.get("part")
+    if event.get("type") != "tool_use" or not isinstance(part, dict):
+        return []
+    state = part.get("state")
+    if part.get("tool") != "execute" or not isinstance(state, dict):
+        return []
+    if state.get("status") != "completed" or event_declares_failure(event):
+        return []
+    metadata = state.get("metadata")
+    metadata = metadata.get("metadata") if isinstance(metadata, dict) else None
+    calls = metadata.get("toolCalls") if isinstance(metadata, dict) else None
+    output = state.get("output")
+    if not isinstance(calls, list) or not isinstance(output, str):
+        return []
+    completed_tools = {
+        call["tool"].removeprefix("sky_cua.")
+        for call in calls
+        if isinstance(call, dict)
+        and isinstance(call.get("tool"), str)
+        and call["tool"].startswith("sky_cua.")
+        and call.get("status") == "completed"
+    }
+    try:
+        returned = json.loads(output)
+    except json.JSONDecodeError:
+        return []
+    results: list[dict[str, Any]] = []
+
+    def collect(value: object) -> None:
+        if isinstance(value, list):
+            for item in value:
+                collect(item)
+        elif isinstance(value, dict):
+            tool = value.get("tool")
+            result = value.get("result")
+            if isinstance(tool, str) and isinstance(result, dict):
+                if (
+                    tool in completed_tools
+                    and result.get("success") is not False
+                    and not payload_declares_failure(value)
+                ):
+                    results.append(
+                        {
+                            "tool": f"sky_cua_{tool}",
+                            "status": "completed",
+                            "result": {"redacted": True},
+                        }
+                    )
+            elif value.get("status") != "rejected":
+                # Envelopes may be returned under named keys or inside
+                # Promise.allSettled records; rejected records are not evidence.
+                for item in value.values():
+                    collect(item)
+
+    collect(returned)
+    return results
 
 
 def ctx_execute_mcp_intent_summary(event: dict[str, Any]) -> dict[str, Any] | None:

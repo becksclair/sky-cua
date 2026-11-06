@@ -27,6 +27,7 @@ from _agent_mcp_smoke import (
     TOOL_FAILURE_STATUSES,
     dismissed_json_from_text,
     make_artifact_dir,
+    opencode_code_mode_tool_results,
     run_agent,
     write_result,
 )
@@ -98,6 +99,7 @@ SKY_CUA_ACTION_TOOL_NAMES = {
 
 def build_agent_prompt(*, agent: str, fixture_title: str, prompt_suffix: str) -> str:
     prompt = (
+        "Read and follow the installed computer-use skill available in this host. "
         f"Use the sky-cua MCP tools (server name sky_cua, sky-cua, or computer-use). "
         f"Find the dialog titled '{fixture_title}' and {prompt_suffix}. "
         f"Keep the interaction simple and direct; use window/state/click/keyboard tools only as needed. "
@@ -148,6 +150,11 @@ def _dismissed_from_stdout_line(line: str) -> bool | None:
 
 
 def _assistant_text_payloads_from_event(event: dict[str, object]) -> list[str]:
+    part = event.get("part")
+    if event.get("type") == "text" and isinstance(part, dict) and part.get("type") == "text":
+        text = part.get("text")
+        if isinstance(text, str):
+            return [text]
     message = event.get("message")
     if not isinstance(message, dict) or message.get("role") != "assistant":
         return []
@@ -240,6 +247,8 @@ def _tool_evidence_from_stdout_line_matching(
         return None
     event_type = event.get("type")
     if _is_completed_tool_event(event_type) and record_predicate(event):
+        return True
+    if record_predicate(opencode_code_mode_tool_results(event)):
         return True
     tool_results = event.get("toolResults")
     return isinstance(tool_results, list) and record_predicate(tool_results)

@@ -2,9 +2,9 @@
 
 ## Status
 
-Shipped. Last verified: 2026-06-10 with the live Claude Code terminal MCP
-smoke and the Pi MCP smoke after the agent-agnostic screenshot delivery
-rework.
+Shipped. Last verified: 2026-11-05 using Claude Desktop's embedded Code
+2.1.317 engine against the installed desktop, Nightly browser, and Node tools.
+The running Desktop Chat connector reload remains unverified.
 
 ## Summary
 
@@ -64,7 +64,28 @@ host.
   `screenshot_delivery: "inline"` for sessions that cannot read files by
   path.
 
+The canonical standalone `python3 install.py install` additionally registers
+both `sky-cua` and `node_repl` in existing `~/.claude.json` and Linux Claude
+Desktop `claude_desktop_config.json`. It links enabled skills into
+`~/.claude/skills`, migrates recognized old managed copies, and preserves
+unrelated configuration and permission rules. Node REPL remains subject to the
+host's existing approval policy; a session-specific grant is sufficient for a
+headless verification. The embedded Code engine was live-tested on 2026-11-05
+against the desktop dialog and Brave Nightly fixture, with evidence under
+`artifacts/host-guidance/claude/`. This does not establish that an already
+running Desktop Chat connector reloaded its configuration.
+
 ## Behavior
+
+The standalone config writer coordinates with Claude Code's logical-path
+`.lock` directory: it merges the latest JSON under the lock, keeps a 5-second
+heartbeat, and uses the CLI's 10-second stale threshold. Acquisition times out
+honestly after 30 seconds. It preserves configuration symlinks, file modes,
+unrelated entries, and server metadata, and checks only managed registration
+semantics after writing. Both host files are validated again under their locks
+before either is changed. This coordinates with Claude Code's observed writer;
+it cannot make an unrelated Desktop writer participate in the lock protocol.
+
 
 The plugin lane loads skills from the plugin's `skills/` directory and starts
 the MCP server from the plugin root. The installer lane copies platform
@@ -85,12 +106,19 @@ artifact.
 
 - `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`
 - `scripts/install_mcp_server.py` (`install_claude_code`)
+- `scripts/_claude_config.py` and `scripts/_skill_projection.py` — standalone
+  host registrations and migration of managed skill copies.
 - `scripts/build_plugin.py` (`BUNDLE_SOURCE_PATHS`, `WORKTREE_BUNDLE_FILES`)
 - `scripts/_plugin_bundle.py` (`ensure_bundle_structure`,
   `update_plugin_manifest_version`)
 - `CLAUDE.md` (imports `AGENTS.md` for Claude Code sessions in this repo)
 
 ## Verification
+
+- Installer follow-up verification covers 23 config tests and actual CLI
+  interoperation with 2.1.317 and 2.1.318, including a writer waiting on the
+  shared lock and preservation of concurrent entries. Evidence:
+  `artifacts/install-followups/verification.json`.
 
 - `uv run pytest scripts/test_plugin_bundle.py` covers bundle
   structure, manifest version bumps, and bundle source selection including

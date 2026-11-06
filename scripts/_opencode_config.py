@@ -98,6 +98,8 @@ def _build_opencode_servers(
     timeout_ms: int = OPENCODE_MCP_TIMEOUT_MS,
     env: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
+    if type(timeout_ms) is not int or timeout_ms <= 0:
+        raise ValueError("OpenCode MCP timeout must be a positive integer")
     client = str(install_root / "bin/sky-cua-client")
     node_repl = str(install_root / "bin/node_repl")
     active_env = os.environ if env is None else env
@@ -112,8 +114,8 @@ def _build_opencode_servers(
             "command": [client, "mcp"],
             "cwd": str(install_root),
             "environment": shared_env,
-            "enabled": True,
-            "timeout": timeout_ms,
+            "disabled": False,
+            "timeout": dict.fromkeys(("startup", "catalog", "execution"), timeout_ms),
         },
         "node_repl": {
             "type": "local",
@@ -125,8 +127,8 @@ def _build_opencode_servers(
             # explicit operator overrides here; the default install emits an
             # empty environment.
             "environment": shared_env,
-            "enabled": True,
-            "timeout": timeout_ms,
+            "disabled": False,
+            "timeout": dict.fromkeys(("startup", "catalog", "execution"), timeout_ms),
         },
     }
 
@@ -169,8 +171,31 @@ def _merge_opencode_servers(
     if not isinstance(mcp, dict):
         mcp = {}
     mcp = dict(mcp)
+    native_servers = mcp.get("servers")
+    native_servers = dict(native_servers) if isinstance(native_servers, dict) else {}
     for name, definition in servers.items():
-        mcp[name] = definition
+        if isinstance(definition, dict):
+            definition = dict(definition)
+            previous = native_servers.get(name)
+            if isinstance(previous, dict):
+                # Operator phase overrides remain authoritative on reinstall.
+                # Legacy sibling entries must not override the native config.
+                timeout = dict(definition.get("timeout", {}))
+                previous_timeout = previous.get("timeout")
+                if isinstance(previous_timeout, dict):
+                    for phase in ("startup", "catalog", "execution"):
+                        value = previous_timeout.get(phase)
+                        if type(value) is int and value > 0:
+                            timeout[phase] = value
+                definition["timeout"] = timeout
+                if isinstance(previous.get("codemode"), bool):
+                    definition["codemode"] = previous["codemode"]
+                if previous.get("protocol") in ("legacy", "auto", "2026-07-28"):
+                    definition["protocol"] = previous["protocol"]
+        native_servers[name] = definition
+        if name in OPENCODE_MANAGED_SERVERS:
+            mcp.pop(name, None)
+    mcp["servers"] = native_servers
     merged["mcp"] = mcp
     return merged
 

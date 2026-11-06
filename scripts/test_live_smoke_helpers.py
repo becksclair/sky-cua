@@ -761,25 +761,6 @@ def test_agent_smoke_redacted_opencode_event_preserves_tool_evidence(tmp_path: P
     assert "sky_cua_desktop_pointer" in redacted_text
 
 
-def test_opencode_neutral_cwd_gets_installed_project_config(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    home = tmp_path / "home"
-    generated = home / ".local" / "share" / "sky-cua" / "opencode.json"
-    generated.parent.mkdir(parents=True)
-    generated.write_text('{"mcp":{"sky_cua":{"command":["/vm/client","mcp"]}}}\n', encoding="utf-8")
-    neutral = tmp_path / "neutral"
-    neutral.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-
-    _agent_mcp_smoke.install_opencode_project_config(neutral)
-
-    assert (neutral / "opencode.json").read_text(encoding="utf-8") == generated.read_text(
-        encoding="utf-8"
-    )
-
-
 def test_pi_smoke_default_model_is_free_model_with_expected_auth_key() -> None:
     assert _model_profiles.model_profile("pi_mcp").model == (
         _agent_mcp_smoke.DEFAULT_PI_SMOKE_MODEL
@@ -1545,6 +1526,7 @@ def test_opencode_agent_runner_preserves_status_and_redacts_stdout(
     def fake_run(argv: list[str], **kwargs: Any) -> object:
         captured["argv"] = argv
         captured["env"] = kwargs["env"]
+        captured["has_project_override"] = (Path(kwargs["cwd"]) / "opencode.json").exists()
         stdout = cast(Any, kwargs["stdout"])
         stdout.write(
             json.dumps(
@@ -1571,6 +1553,8 @@ def test_opencode_agent_runner_preserves_status_and_redacts_stdout(
 
     assert proc.returncode == 7
     assert captured["argv"][:3] == ["script", "-q", "-e"]
+    assert "--standalone --auto" in captured["argv"][4]
+    assert captured["has_project_override"] is False
     assert "--model opencode-go/test-model" in captured["argv"][4]
     env = cast(dict[str, str], captured["env"])
     assert env["OPENCODE_API_KEY"] == "opencode-secret"

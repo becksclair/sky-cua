@@ -11,7 +11,7 @@ distribution contract replaced the former generation-selected release model on
 sky-cua owns one complete standalone artifact: the native direct MCP server,
 persistent Node 24 `node_repl`, Browser/Computer/Phone JavaScript facades, the
 latest bundled Chrome extension, native messaging host, Codex compatibility
-plugins, skills, and model-facing documentation. Codex Desktop and OpenClaw
+plugins, skills, and model-facing documentation. ChatGPT, Claude, OpenCode, and OpenClaw
 consume stable paths from the same fixed install root.
 
 ## Contract surface
@@ -54,7 +54,13 @@ Chrome-family browsers use the packaged extension/native-host path.
 The build owns all inputs and writes reusable outputs under `dist/` and
 `out/components/`. Installation replaces the single fixed root, then projects
 stable launchers, native-host manifests, skills, and detected consumer
-registrations. Reinstall is convergent and removes stale files from an older
+registrations. ChatGPT installs the bundled `computer-use` plugin with all three
+skills through its native plugin API, then disables duplicate shared skill
+entries. Claude Code and existing Claude Desktop configurations register
+`sky-cua` and `node_repl`; OpenCode registers the same launchers under native
+`mcp.servers`. Existing host permissions and unrelated configuration survive.
+Recognized legacy skill copies and generation routers become relative links to
+the fixed payload, including OpenCode's own skill directory. Reinstall is convergent and removes stale files from an older
 payload rather than retaining prior generations.
 
 The Acorn packages are prepared by the frozen runtime Bun lock, validated
@@ -95,6 +101,18 @@ against the producer artifact. The producer installer does own the narrow
 OpenClaw integration projection required for zero-prompt operation: global
 `node_repl`, native Codex app-server full-auto policy, and matching policy in
 existing agent Codex homes.
+
+Live host verification on 2026-11-05 used ChatGPT's bundled Codex engine, Claude
+Desktop's embedded Code engine, and OpenCode. Each read installed guidance,
+dismissed a disposable desktop dialog, and clicked a local fixture in the actual
+Brave Nightly session with observation-bound AppShot IDs. Node REPL passed in
+all three; Claude used a session-specific tool grant. Evidence is under
+`artifacts/host-guidance/`. The installed OpenCode agent-loop gate also passed
+with the normal global MCP configuration and sanitized runtime action evidence
+(`artifacts/opencode-zenity-smoke/20261105T202350Z/`). Code Mode acceptance joins
+completed runtime call metadata to returned tool results; code strings and
+search-catalog signatures alone do not prove actions. These Code-engine tests do not attest an already
+running Claude Desktop Chat connector's reload state.
 
 ## Known limitations
 

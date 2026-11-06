@@ -17,6 +17,9 @@ from typing import Literal
 
 PUBLIC_SKILLS_ROOT_MARKER = "SKY_CUA_SKILLS_ROOT"
 PUBLIC_SKILLS_ROOT_MARKER_CONTENT = "sky-cua managed public skills root\n"
+LEGACY_SKILL_MARKER = ".sky-cua-managed"
+LEGACY_SKILL_MARKER_CONTENT = "managed by sky-cua provisioning\n"
+LEGACY_ROUTER_MARKER = "SKY_CUA_PROJECTION.json"
 
 
 @dataclass(frozen=True)
@@ -153,6 +156,47 @@ def _is_managed_link(
     return target in _managed_targets(source_root, managed_source_roots, skill_name)
 
 
+def _is_legacy_managed_directory(destination: Path) -> bool:
+    """Recognize copied skills explicitly marked by the former installer."""
+    if destination.is_symlink() or not destination.is_dir():
+        return False
+    marker = destination / LEGACY_SKILL_MARKER
+    if marker.is_symlink() or not marker.is_file():
+        return False
+    try:
+        return marker.read_bytes() == LEGACY_SKILL_MARKER_CONTENT.encode("utf-8")
+    except OSError:
+        return False
+
+
+def _is_legacy_model_router(destination: Path) -> bool:
+    """Recognize the exact old generation-bound router manifest, even if stale."""
+    if destination.is_symlink() or not destination.is_dir():
+        return False
+    marker = destination / LEGACY_ROUTER_MARKER
+    if marker.is_symlink() or not marker.is_file():
+        return False
+    try:
+        manifest = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(manifest, dict) or set(manifest) != {
+        "schema_version",
+        "documentation_root",
+        "canonical_skill",
+    }:
+        return False
+    if type(manifest["schema_version"]) is not int or manifest["schema_version"] != 1:
+        return False
+    documentation_root = manifest["documentation_root"]
+    if not isinstance(documentation_root, str):
+        return False
+    root = Path(documentation_root)
+    if not root.is_absolute() or str(_lexical_absolute(root)) != documentation_root:
+        return False
+    return manifest["canonical_skill"] == str(root / "skills" / destination.name / "SKILL.md")
+
+
 def _validate_sources(source_root: Path, skill_names: Sequence[str]) -> None:
     for skill_name in skill_names:
         source = source_root / skill_name
@@ -230,7 +274,11 @@ def plan_skill_links(
     for root in destination_roots:
         for skill_name in names:
             destination = root / skill_name
-            managed = _is_managed_link(destination, source_root, managed_roots, skill_name)
+            managed = (
+                _is_managed_link(destination, source_root, managed_roots, skill_name)
+                or _is_legacy_managed_directory(destination)
+                or _is_legacy_model_router(destination)
+            )
             if skill_name in enabled:
                 projected.append(destination)
                 if destination.is_symlink():
@@ -251,9 +299,11 @@ def plan_skill_links(
                         )
                     operations.append(("replace", destination, skill_name))
                 elif destination.exists():
-                    raise ValueError(
-                        f"refusing to replace unmanaged skill projection: {destination}"
-                    )
+                    if not managed:
+                        raise ValueError(
+                            f"refusing to replace unmanaged skill projection: {destination}"
+                        )
+                    operations.append(("replace", destination, skill_name))
                 else:
                     operations.append(("replace", destination, skill_name))
             elif managed:
@@ -265,7 +315,7 @@ def apply_skill_link_plan(plan: SkillLinkPlan) -> tuple[Path, ...]:
     """Apply a plan produced by :func:`plan_skill_links`."""
     for operation, destination, skill_name in plan.operations:
         if operation == "remove":
-            destination.unlink()
+            _remove_path(destination)
         else:
             assert skill_name is not None
             replace_relative_symlink(plan.source_root / skill_name, destination)
@@ -282,10 +332,10 @@ def project_skill_links(
 ) -> tuple[Path, ...]:
     """Project selected skills into one or more destination roots.
 
-    Enabled entries must be absent or symlinks to the canonical source (or to
-    an explicitly managed legacy source root).  Existing directories, files,
-    and arbitrary symlinks are never overwritten.  Disabled managed links are
-    removed while unrelated user entries remain untouched.  All source and
+    Enabled entries must be absent, managed symlinks, or copied directories
+    bearing the former installer's exact ownership marker or router manifest. Unmanaged files,
+    directories, and arbitrary symlinks are never overwritten. Disabled managed
+    entries are removed while unrelated user entries remain untouched. All source and
     destination checks happen before the first mutation.
     """
     return apply_skill_link_plan(
