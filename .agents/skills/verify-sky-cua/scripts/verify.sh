@@ -206,6 +206,10 @@ cmd_build() {
   (cd "$SRC" && CARGO_TARGET_DIR="$TARGET" nice -n 10 \
     cargo build --release -p sky-cua-client -p sky-cua-service)
   [[ -x "$CLIENT" && -x "$SERVICE" ]] || die "build did not produce $CLIENT and $SERVICE"
+  # Cargo only relinks a binary whose crate changed, so an unchanged binary keeps
+  # an old mtime and doctor's "sources newer than binary" check would call a
+  # current build stale. Cargo has just confirmed both are current: mark them.
+  touch "$CLIENT" "$SERVICE"
   printf '%s\n' "$stamp" >"$ROOT/build-stamp.txt"
   log "built: $CLIENT ($(tr '\n' ' ' <<<"$stamp"))"
 }
