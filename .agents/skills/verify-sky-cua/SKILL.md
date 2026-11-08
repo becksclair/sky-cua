@@ -161,19 +161,15 @@ One-shot: `verify.sh all` runs sync, build, launch, doctor, drive, teardown, and
 pull. Teardown runs even if an earlier step failed, and the exit status is
 non-zero if any step failed.
 
-## Status at creation (2026-11-08, rev 5b79228, host asgard)
+## Status
 
-Run `run-20261108-161856` (`verify.sh all` from macOS): smoke PASS, semantic
-PASS, keyboard FAIL (29 of 33 checks), `residue=none`, `runtime_dir_new_entries=`
-empty, user daemon unchanged. The keyboard
-failure is a product defect, not a harness problem. With a resolved target window,
-the X11 input fallback types with `xdotool type --window <id>`
-(`crates/sky-cua-linux/src/x11/input_xtest.rs`, `type_text_chunk` and
-`press_key_sequence_to_target`). That sends synthetic `XSendEvent` events, which
-GTK ignores, so `desktop_keyboard` reports `success: true` while nothing reaches
-the app. A manual `xdotool type` without `--window` (XTest to the focused window)
-works on the same display. Do not weaken the keyboard journey to pass. It should
-pass once the defect is fixed.
+2026-11-08, host asgard: smoke, semantic, and keyboard PASS (33 of 33 checks),
+`residue=none`, user daemon unchanged. The keyboard journey caught a product
+defect at creation: the X11 input fallback typed with `xdotool --window`, which
+sends `XSendEvent` events that GTK ignores, so `desktop_keyboard` reported
+`success: true` while nothing reached the app. The fallback now focuses the
+target window and uses XTest (`crates/sky-cua-linux/src/x11/input_xtest.rs`,
+`focus_target`). Do not weaken a journey to make it pass.
 
 ## Gotchas
 

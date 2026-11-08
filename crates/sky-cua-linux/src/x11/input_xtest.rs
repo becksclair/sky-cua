@@ -134,57 +134,51 @@ pub fn press_key_sequence_to_target(
         .map(|key| normalize_key_name(key))
         .collect::<Vec<_>>()
         .join("+");
-    match window_id {
-        Some(window_id) => run_xdotool(["key", "--window", window_id, "--clearmodifiers", &chord]),
-        None => run_xdotool(["key", "--clearmodifiers", &chord]),
-    }
+    focus_target(window_id)?;
+    run_xdotool(["key", "--clearmodifiers", &chord])
 }
 
 fn send_text_inner(window_id: Option<&str>, text: &str) -> Result<(), BackendError> {
+    focus_target(window_id)?;
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     let mut current = String::new();
     for ch in normalized.chars() {
         if ch == '\n' {
             if !current.is_empty() {
-                type_text_chunk(window_id, &current)?;
+                type_text_chunk(&current)?;
                 current.clear();
             }
-            press_return(window_id)?;
+            press_return()?;
         } else {
             current.push(ch);
         }
     }
 
     if !current.is_empty() {
-        type_text_chunk(window_id, &current)?;
+        type_text_chunk(&current)?;
     }
 
     Ok(())
 }
 
-fn type_text_chunk(window_id: Option<&str>, text: &str) -> Result<(), BackendError> {
-    match window_id {
-        Some(window_id) => run_xdotool([
-            "type",
-            "--window",
-            window_id,
-            "--delay",
-            "1",
-            "--clearmodifiers",
-            "--",
-            text,
-        ]),
-        None => run_xdotool(["type", "--delay", "1", "--clearmodifiers", "--", text]),
-    }
+fn type_text_chunk(text: &str) -> Result<(), BackendError> {
+    run_xdotool(["type", "--delay", "1", "--clearmodifiers", "--", text])
 }
 
-fn press_return(window_id: Option<&str>) -> Result<(), BackendError> {
-    match window_id {
-        Some(window_id) => {
-            run_xdotool(["key", "--window", window_id, "--clearmodifiers", "Return"])
-        }
-        None => run_xdotool(["key", "--clearmodifiers", "Return"]),
-    }
+fn press_return() -> Result<(), BackendError> {
+    run_xdotool(["key", "--clearmodifiers", "Return"])
+}
+
+/// Give the target window keyboard focus before XTest input.
+///
+/// XTest events go to the focused window. `xdotool --window` would deliver
+/// synthetic `XSendEvent` events instead, which GTK and other toolkits ignore.
+/// When focus cannot be moved, fail instead of typing into an unrelated window.
+fn focus_target(window_id: Option<&str>) -> Result<(), BackendError> {
+    let Some(window_id) = window_id else {
+        return Ok(());
+    };
+    window_activate(window_id).or_else(|_| run_xdotool(["windowfocus", "--sync", window_id]))
 }
 
 fn run_xdotool(arguments: impl IntoIterator<Item = impl AsRef<str>>) -> Result<(), BackendError> {
