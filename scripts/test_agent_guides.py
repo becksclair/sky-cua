@@ -35,7 +35,6 @@ PATH_PREFIXES = (
     ".config/",
     "bin/",
     ".github/",
-    ".gitea/",
 )
 PATH_EXTENSIONS = (".rs", ".py", ".md", ".kt", ".ts", ".json", ".toml", ".yml", ".yaml", ".service")
 TOKEN_RE = re.compile(r"`([^`\s]+)`")

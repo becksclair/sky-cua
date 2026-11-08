@@ -273,8 +273,9 @@ checkout require the explicit `--checkout-links` development opt-in.
 the fixed install root and is idempotent when repeated. `release` accepts
 `--patch`, `--minor`, `--major`, or an explicit stable `--version X.Y.Z`; it
 runs `just verify`, commits only the standalone version, creates an annotated
-`standalone-vX.Y.Z` tag, and atomically pushes `main` plus the tag to trigger
-Gitea publication and automatic Saga deployment. See
+`standalone-vX.Y.Z` tag, and atomically pushes `main` plus the tag. Release
+publication and Saga deployment ran on the retired Gitea instance and currently
+have no automated path. See
 [`docs/features/release-package.md`](docs/features/release-package.md).
 
 If the local Codex config gets stale, the durable reset procedure is documented

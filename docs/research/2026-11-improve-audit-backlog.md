@@ -81,8 +81,9 @@ concrete defect)
 - `SECURITY-05` No production path revokes an enrolled direct-LAN phone;
   `FileStateStore::revoke` and `LinkRegistry::revoke` are dead code
   (`phone/direct/mod.rs`). S-M.
-- `SECURITY-06` The release pipeline attaches the Gitea token to any absolute
-  URL and follows redirects (`scripts/release_pipeline.py`). S.
+- `SECURITY-06` The release pipeline attached the Gitea token to any absolute
+  URL and followed redirects (`scripts/release_pipeline.py`). S. Resolved: the
+  Gitea publish client was removed on 2026-11-08.
 
 Performance
 - `PERF-01/05` Window discovery runs three times per desktop observe and once

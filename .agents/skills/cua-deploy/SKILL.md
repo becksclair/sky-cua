@@ -24,8 +24,8 @@ refreshes those outputs and then installs them. The same `install.py` inside an
 extracted archive installs that artifact without a checkout build.
 
 `python3 install.py release` is a separate checkout-only Git publication
-operation, not a deploy lane. It requires explicit release wording and triggers
-the Gitea-to-Saga pipeline after pushing its commit and tag.
+operation, not a deploy lane. It requires explicit release wording and pushes
+its commit and tag; nothing publishes or deploys the tag since Gitea was retired.
 
 ## Hard boundaries
 

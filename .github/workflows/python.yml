@@ -1,8 +1,6 @@
 name: python
 
-# Mirrors the `python` job in .gitea/workflows/verify.yml on GitHub-hosted
-# runners. Named python.yml (not verify.yml) per the guard in
-# scripts/test_release_pipeline.py against a duplicate .github verify.yml.
+# Runs the Python verification gate on GitHub-hosted runners.
 
 on:
   push:

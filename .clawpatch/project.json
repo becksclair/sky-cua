@@ -4,7 +4,7 @@
   "name": "sky-cua",
   "rootPath": "/home/bex/projects/sky-cua",
   "git": {
-    "remoteUrl": "git@git.heliasar.com:bex/sky-cua.git",
+    "remoteUrl": "https://github.com/becksclair/sky-cua.git",
     "defaultBranch": "main",
     "currentBranch": "main",
     "headSha": "5594c4b8aef7afb38718dac49972ad4b0343c37a"

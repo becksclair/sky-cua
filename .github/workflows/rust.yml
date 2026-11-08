@@ -1,8 +1,6 @@
 name: rust
 
-# Mirrors the `rust` job in .gitea/workflows/verify.yml on GitHub-hosted
-# runners. Named rust.yml (not verify.yml) per the guard in
-# scripts/test_release_pipeline.py against a duplicate .github verify.yml.
+# Runs the Rust verification gate on GitHub-hosted runners.
 
 on:
   push:

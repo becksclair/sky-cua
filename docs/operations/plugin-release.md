@@ -9,8 +9,8 @@ and one release pipeline; there is no marketplace publish step:
 - `python3 install.py build` and `python3 install.py install` — standalone
   distribution and fixed-root machine install.
 - `python3 install.py release` — guarded standalone version commit and tag push.
-- Gitea `release standalone` — verify, publish the archive as a Gitea Release,
-  read it back, and dispatch the published identity to Saga.
+- `scripts/release_pipeline.py validate|smoke-install` — check a built archive's
+  safety and identity, then install it into an isolated temporary home.
 
 ## Core invariant
 
@@ -165,7 +165,7 @@ root with the same isolated environment. Validate:
 Remove the disposable home after inspection. Do not install, deploy, publish,
 or modify a consumer repository as part of producer validation.
 
-## Publish through Gitea
+## Cut a release
 
 From a clean `main` checkout synchronized with its configured upstream, run:
 
@@ -184,25 +184,19 @@ version to increase. It updates only `scripts/standalone_release.py`, runs
 requires exactly one configured push destination and does not publish or deploy
 locally. Do not use it with unrelated staged, unstaged, or untracked files.
 
-The pushed tag triggers `.gitea/workflows/release-standalone.yml`. Successful
-command output proves only that remote refs match; monitor Gitea for publication
-and the subsequently dispatched Saga deployment. The workflow can also be
-dispatched manually with an existing tag to retry publication or deployment
-without creating different bytes.
+The pushed tag no longer triggers anything. Release publication and the Saga
+deployment ran as Gitea workflows, and Gitea is retired. Build and check the
+archive locally:
 
-The release job runs on `asgard-build-1`, executes the Rust and Python
-verification gates, builds and isolated-installs the standalone archive, and
-publishes exactly the archive plus its `.sha256` sidecar. It reads both
-attachments back before dispatching `.gitea/workflows/deploy-saga.yml` from
-`main`.
+```bash
+python3 install.py build
+python3 scripts/release_pipeline.py validate --archive dist/sky-cua-linux-x64-glibc.tar.gz --tag standalone-vX.Y.Z
+python3 scripts/release_pipeline.py smoke-install --archive dist/sky-cua-linux-x64-glibc.tar.gz --tag standalone-vX.Y.Z
+```
 
-Saga receives only the tag and expected digest. Its
-`/opt/homelab/scripts/deploy-sky-cua` hook downloads and validates the public
-release before service downtime, replaces `/home/ubuntu/.local/share/sky-cua`,
-starts Brave/Xpra before OpenClaw, and requires deterministic installed,
-native-host, plugin, service, and gateway health. Redispatch the same tag and
-digest after correcting an operational failure; never overwrite an existing
-release with different bytes.
+Saga's `/opt/homelab/scripts/deploy-sky-cua` hook downloaded a published
+release, so automated Saga deployment has no working path until a new
+publication target replaces Gitea.
 
 ## Local Codex config reset
 
@@ -241,6 +235,5 @@ and OpenClaw repositories after the producer artifact is proven.
 ## Related
 
 - [`docs/features/release-package.md`](../features/release-package.md)
-- [`docs/features/gitea-release-and-saga-deployment.md`](../features/gitea-release-and-saga-deployment.md)
 - [`docs/features/one-shot-installer.md`](../features/one-shot-installer.md)
 - [`docs/features/codex-desktop-compat.md`](../features/codex-desktop-compat.md)

@@ -87,7 +87,7 @@ existing local or remote target tags. It
 rewrites only `PRODUCT_VERSION`, runs `just verify`, commits only that file,
 creates an annotated `standalone-vX.Y.Z` tag, and atomically pushes the branch
 and tag without force. Successful local completion means the refs were pushed;
-Gitea publication and Saga deployment remain asynchronous. Failures preserve
+nothing publishes or deploys the tag since Gitea was retired. Failures preserve
 the visible local modification, commit, or tag for inspection and never reset,
 clean, delete, or force-push state.
 

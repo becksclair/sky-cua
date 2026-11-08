@@ -210,11 +210,10 @@ Open boxes link to the active ExecPlan that owns the work.
       `dist/sky-cua-linux-x64-glibc.tar.gz`, containing only the latest bundled
       Chrome extension and no generation/rollback/hash-selection contract -
       [`docs/features/release-package.md`](docs/features/release-package.md)
-  - [x] Gitea-owned verification and immutable release publication on Asgard,
-        with public digest readback and retryable fixed-root deployment to Saga
-        - [`docs/features/gitea-release-and-saga-deployment.md`](docs/features/gitea-release-and-saga-deployment.md)
   - [x] Guarded `python3 install.py release` version bump, scoped commit,
-        annotated tag, and atomic push into the Gitea-to-Saga pipeline.
+        annotated tag, and atomic push.
+  - [ ] Restore release publication and Saga deployment. Both ran as Gitea
+        workflows and were removed with Gitea on 2026-11-08.
 - [ ] Deduplicate the Codex compat-enablement sequence (`install_bundle` ->
       `run_browser_preflight` ->
       `update_codex_config(compat_enablement=compat_plugin_targets_payload(...))`),

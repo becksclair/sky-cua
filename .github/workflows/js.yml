@@ -1,9 +1,7 @@
 name: js
 
-# Mirrors the `js` job in .gitea/workflows/verify.yml on GitHub-hosted runners.
-# The full verify workflow (Rust, Python) runs on Gitea only; this file is
-# deliberately limited to the bun packages (see the guard in
-# scripts/test_release_pipeline.py against a duplicate .github verify.yml).
+# Runs the `just verify-js` gate on GitHub-hosted runners. Rust and Python run
+# in rust.yml and python.yml.
 
 on:
   push:
