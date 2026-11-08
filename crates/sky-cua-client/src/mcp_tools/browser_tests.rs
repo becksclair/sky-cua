@@ -27,7 +27,6 @@ use crate::heuristics::HeuristicsRegistry;
 use crate::mcp_server::ModelSessionInfo;
 
 /// Serializes the tests that toggle `SKY_CUA_BROWSER_EVAL`.
-static EVAL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Default)]
 struct FakeService {
@@ -1646,7 +1645,7 @@ fn browser_eval_tool_visibility_follows_the_enabled_flag() {
 
 #[test]
 fn browser_eval_enabled_by_default_routes_to_service() {
-    let _guard = EVAL_ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env::env_lock();
     let previous = std::env::var_os(BROWSER_EVAL_ENV);
     unsafe { std::env::remove_var(BROWSER_EVAL_ENV) };
 
@@ -1676,7 +1675,7 @@ fn browser_eval_enabled_by_default_routes_to_service() {
 
 #[test]
 fn browser_eval_rejected_when_explicitly_disabled() {
-    let _guard = EVAL_ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env::env_lock();
     let previous = std::env::var_os(BROWSER_EVAL_ENV);
     unsafe { std::env::set_var(BROWSER_EVAL_ENV, "off") };
 
@@ -1701,7 +1700,7 @@ fn browser_eval_rejected_when_explicitly_disabled() {
 
 #[test]
 fn browser_eval_routes_expression_to_service() {
-    let _guard = EVAL_ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env::env_lock();
     let previous = std::env::var_os(BROWSER_EVAL_ENV);
     unsafe { std::env::set_var(BROWSER_EVAL_ENV, "on") };
     let service = FakeService::with_response(browser_service_response!(Eval {

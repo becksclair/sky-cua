@@ -1535,8 +1535,6 @@ mod tests {
         );
     }
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
     #[test]
     fn unix_service_command_uses_client_socket_endpoint() {
         let socket_path = PathBuf::from("/tmp/sky-cua-test/service.sock");
@@ -1633,7 +1631,7 @@ mod tests {
 
     #[test]
     fn unix_service_endpoint_uses_repaired_runtime_dir_before_cache_fallback() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_socket_path = std::env::var_os(SERVICE_SOCKET_PATH_ENV);
         let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
         unsafe {
@@ -1658,7 +1656,7 @@ mod tests {
 
     #[test]
     fn unix_service_endpoint_treats_empty_runtime_dir_as_missing() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_socket_path = std::env::var_os(SERVICE_SOCKET_PATH_ENV);
         let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
         unsafe {
@@ -1683,7 +1681,7 @@ mod tests {
 
     #[test]
     fn unix_service_endpoint_preserves_explicit_socket_override() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_socket_path = std::env::var_os(SERVICE_SOCKET_PATH_ENV);
         let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
         unsafe {
@@ -1895,6 +1893,7 @@ mod tests {
 
     #[test]
     fn owner_change_is_reprobed_and_healthy_successor_wins() {
+        let _guard = crate::test_env::env_lock();
         let old_browser_control_mode =
             std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
         unsafe {
@@ -1957,6 +1956,7 @@ mod tests {
             return;
         }
 
+        let _guard = crate::test_env::env_lock();
         let old_browser_control_mode =
             std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
         unsafe {
@@ -2035,6 +2035,7 @@ mod tests {
 
     #[test]
     fn transient_refused_socket_waiter_converges_to_winner() {
+        let _guard = crate::test_env::env_lock();
         let old_browser_control_mode =
             std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
         unsafe {
@@ -2075,6 +2076,7 @@ mod tests {
 
     #[test]
     fn persistent_browser_conflict_neither_signals_nor_spawns() {
+        let _guard = crate::test_env::env_lock();
         let old_browser_control_mode =
             std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
         unsafe {
@@ -2130,7 +2132,7 @@ mod tests {
             return;
         }
 
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let temp_dir = test_temp_dir("concurrent-cold-start");
         let service_script = temp_dir.join("sky-cua-service");
         let socket_path = temp_dir.join("service.sock");
@@ -2193,7 +2195,7 @@ mod tests {
 
     #[test]
     fn respawns_service_after_child_exits() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let temp_dir = std::env::temp_dir().join(format!(
             "sky-cua-client-respawn-test-{}",
             std::process::id()

@@ -2,7 +2,7 @@
 //! annotations and cross-checks the advertised registry against
 //! `tests/fixtures/{tool_contract,call_cases,mcp_tool_surface_matrix}.json`.
 
-use std::{fs, path::PathBuf, sync::Mutex};
+use std::{fs, path::PathBuf};
 
 use serde_json::{Value, json};
 
@@ -13,8 +13,6 @@ use super::{
     schema_keyword_is_supported,
 };
 use crate::mcp_server::ModelSessionInfo;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// (read_only, destructive, idempotent, open_world) per tool.
 type AnnotationRow = (&'static str, (bool, bool, bool, bool));
@@ -871,7 +869,7 @@ fn grouped_action_tool_schemas_reject_vague_desktop_actions() {
 
 #[test]
 fn mcp_runtime_config_invalid_values_fallback() {
-    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    let _guard = crate::test_env::env_lock();
     unsafe {
         std::env::set_var("SKY_CUA_BROWSER_EVAL", "perhaps");
         std::env::set_var("SKY_CUA_MODEL_SUPPORTS_IMAGES", "sometimes");
@@ -903,7 +901,7 @@ fn mcp_runtime_config_invalid_values_fallback() {
 
 #[test]
 fn browser_eval_runtime_config_matches_service_falsy_values() {
-    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    let _guard = crate::test_env::env_lock();
     unsafe {
         std::env::set_var("SKY_CUA_BROWSER_EVAL", "off");
         std::env::remove_var("SKY_CUA_MODEL_SUPPORTS_IMAGES");
@@ -1508,7 +1506,7 @@ fn browser_ranking_schema_accepts_only_bounded_advisory_inputs() {
 
 #[test]
 fn browser_ranking_runtime_config_defaults_off_and_rejects_invalid_values() {
-    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    let _guard = crate::test_env::env_lock();
     unsafe {
         std::env::set_var("SKY_CUA_CONFIG_PATH", "");
         std::env::remove_var("SKY_CUA_SURFACES");
@@ -1548,7 +1546,7 @@ fn browser_ranking_runtime_config_defaults_off_and_rejects_invalid_values() {
 
 #[test]
 fn browser_ranking_runtime_config_resolves_env_then_machine() {
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env::env_lock();
     let path = std::env::temp_dir().join(format!(
         "sky-cua-browser-ranking-config-{}.toml",
         std::process::id()
@@ -1604,7 +1602,7 @@ impl EnvGuard {
             .map(|(key, value)| {
                 let prior = std::env::var_os(key);
                 // SAFETY: env-mutating tests run in separate nextest processes;
-                // ENV_LOCK also serializes these tests within this module.
+                // the crate-wide test env lock also serializes them in-process.
                 unsafe {
                     match value {
                         Some(value) => std::env::set_var(key, value),

@@ -12,6 +12,8 @@ mod mcp_tools;
 mod operator_cli;
 mod output_shapes;
 mod service_launcher;
+#[cfg(test)]
+mod test_env;
 
 use std::process::ExitCode;
 

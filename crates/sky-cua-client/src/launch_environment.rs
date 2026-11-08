@@ -854,11 +854,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::Mutex;
 
     use super::*;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn pinned_graphical_values_with_vanished_sockets_are_dead() {
@@ -1016,7 +1013,7 @@ mod tests {
     fn startup_health_ignores_repaired_path_differences() {
         // PATH is launch-spawn repair material; hosts have divergent PATHs,
         // so a daemon spawned by one host must stay healthy for the others.
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let mut desktop_env = GRAPHICAL_SESSION_ENV_KEYS
             .iter()
             .filter_map(|key| {
@@ -1120,7 +1117,7 @@ mod tests {
 
     #[test]
     fn startup_health_prefers_repaired_graphical_session_over_remote_display() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_values = GRAPHICAL_SESSION_ENV_KEYS
             .iter()
             .map(|key| (*key, std::env::var_os(key)))
@@ -1155,7 +1152,7 @@ mod tests {
 
     #[test]
     fn detached_startup_health_does_not_require_unrepaired_inherited_display() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_values = GRAPHICAL_SESSION_ENV_KEYS
             .iter()
             .map(|key| (*key, std::env::var_os(key)))
@@ -1193,7 +1190,7 @@ mod tests {
 
     #[test]
     fn empty_graphical_env_values_are_treated_as_detached() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_values = GRAPHICAL_SESSION_ENV_KEYS
             .iter()
             .map(|key| (*key, std::env::var_os(key)))
@@ -1214,7 +1211,7 @@ mod tests {
 
     #[test]
     fn missing_session_bus_alone_does_not_make_graphical_identity_untrusted() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_values = GRAPHICAL_SESSION_ENV_KEYS
             .iter()
             .map(|key| (*key, std::env::var_os(key)))
@@ -1249,7 +1246,7 @@ mod tests {
 
     #[test]
     fn forwarded_x11_display_is_treated_as_detached_without_ssh_hints() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_values = GRAPHICAL_SESSION_ENV_KEYS
             .iter()
             .map(|key| (*key, std::env::var_os(key)))
@@ -1283,7 +1280,7 @@ mod tests {
 
     #[test]
     fn tmux_launch_is_treated_as_detached_even_with_full_graphical_env() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_values = GRAPHICAL_SESSION_ENV_KEYS
             .iter()
             .map(|key| (*key, std::env::var_os(key)))
@@ -1327,7 +1324,7 @@ mod tests {
 
     #[test]
     fn repaired_or_env_present_treats_empty_env_as_missing() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_display = std::env::var_os("DISPLAY");
         unsafe {
             std::env::set_var("DISPLAY", "");
@@ -1347,7 +1344,7 @@ mod tests {
 
     #[test]
     fn normalized_path_preserves_order_and_appends_defaults() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_path = std::env::var_os("PATH");
         unsafe {
             std::env::set_var("PATH", "/tmp:/usr/bin:/tmp");
@@ -1371,7 +1368,7 @@ mod tests {
 
     #[test]
     fn startup_health_rejects_service_missing_client_desktop_env() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
         unsafe {
             std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
@@ -1395,7 +1392,7 @@ mod tests {
 
     #[test]
     fn startup_health_accepts_daemon_that_healed_dead_pinned_wayland_display() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let runtime = std::env::temp_dir().join(format!(
             "sky-cua-dead-wayland-health-{}-{}",
             std::process::id(),
@@ -1442,7 +1439,7 @@ mod tests {
 
     #[test]
     fn startup_health_rejects_service_with_stale_desktop_env_value() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
         unsafe {
             std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
@@ -1469,7 +1466,7 @@ mod tests {
 
     #[test]
     fn startup_health_rejects_conflicting_browser_selection() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_selection = std::env::var_os("SKY_CUA_BROWSER");
         unsafe {
             std::env::set_var("SKY_CUA_BROWSER", "brave");
@@ -1497,7 +1494,7 @@ mod tests {
         // browser (a superset), so a client pinning one browser must not
         // reject it: with the daemon singleton, exact-equality would let the
         // first spawning host permanently starve every other host.
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_selection = std::env::var_os("SKY_CUA_BROWSER");
         unsafe {
             std::env::set_var("SKY_CUA_BROWSER", "brave");
@@ -1520,7 +1517,7 @@ mod tests {
 
     #[test]
     fn startup_health_accepts_pinned_service_for_unpinned_client() {
-        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _guard = crate::test_env::env_lock();
         let old_selection = std::env::var_os("SKY_CUA_BROWSER");
         let old_socket_dir = std::env::var_os("SKY_CUA_BROWSER_USE_SOCKET_DIR");
         unsafe {

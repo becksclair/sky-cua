@@ -1884,6 +1884,7 @@ mod tests {
 
     #[test]
     fn browser_eval_dispatch_uses_frozen_session_policy() {
+        let _guard = crate::test_env::env_lock();
         unsafe { std::env::remove_var("SKY_CUA_BROWSER_EVAL") };
         let service = FakeService::with_response(ServiceResponse::Browser {
             response: BrowserResponse::Eval {

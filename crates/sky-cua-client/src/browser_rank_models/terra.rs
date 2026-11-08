@@ -631,8 +631,11 @@ printf '%s\n' '{"type":"item.completed","item":{"type":"mcp_tool_call"}}' '{"typ
     #[cfg(unix)]
     #[test]
     fn mock_cli_oversized_output_cleans_up_without_pipe_deadlock() {
-        let fixture = Fixture::new("head -c 5000000 /dev/zero\nexec sleep 10");
-        let error = match fixture.run(Duration::from_secs(5)) {
+        // The child outlives the timeout, so response_too_large can only come
+        // from the live size check, never from reading output after exit. The
+        // generous timeout keeps a loaded runner from reporting timeout first.
+        let fixture = Fixture::new("head -c 5000000 /dev/zero\nexec sleep 60");
+        let error = match fixture.run(Duration::from_secs(30)) {
             Ok(_) => panic!("unexpected success"),
             Err(error) => error,
         };
