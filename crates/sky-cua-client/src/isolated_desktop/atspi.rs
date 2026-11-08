@@ -87,6 +87,9 @@ trait AtspiOps {
         accessibility_bus_address: Option<&str>,
     ) -> Result<u64>;
     fn terminate_process(&mut self, pid: u32) -> Result<()>;
+    /// Whether the exact recorded process generation may still be running.
+    /// Uncertainty counts as running, so recorded state is never discarded early.
+    fn recorded_owner_alive(&mut self, expected: &ProcessIdentity) -> bool;
     fn terminate_spawned(&mut self, process: &mut SpawnedProcess);
     fn sleep(&mut self, duration: Duration);
 }
@@ -188,6 +191,14 @@ impl AtspiOps for ProcessAtspiOps {
             }
         }
         Ok(())
+    }
+
+    fn recorded_owner_alive(&mut self, expected: &ProcessIdentity) -> bool {
+        match fs::read_to_string(format!("/proc/{}/stat", expected.pid)) {
+            Ok(stat) => stat_shows_live_generation(&stat, expected.start_ticks),
+            // A present but unreadable entry counts as running.
+            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+        }
     }
 
     fn terminate_spawned(&mut self, process: &mut SpawnedProcess) {
@@ -639,6 +650,25 @@ fn process_start_ticks(pid: u32) -> Result<u64> {
         .with_context(|| format!("invalid start time in /proc/{pid}/stat"))
 }
 
+/// Whether a `/proc/<pid>/stat` line shows the expected process generation
+/// still running. A zombie or dead entry has exited even though its stat file
+/// remains until it is reaped; unparseable input counts as running.
+fn stat_shows_live_generation(stat: &str, expected_start_ticks: u64) -> bool {
+    let Some((_, fields)) = stat.rsplit_once(") ") else {
+        return true;
+    };
+    let fields: Vec<&str> = fields.split_whitespace().collect();
+    let (Some(state), Some(start_ticks)) = (fields.first(), fields.get(19)) else {
+        return true;
+    };
+    match start_ticks.parse::<u64>() {
+        Ok(start_ticks) => {
+            start_ticks == expected_start_ticks && !matches!(*state, "Z" | "X" | "x")
+        }
+        Err(_) => true,
+    }
+}
+
 fn state_path(display_number: u32) -> Option<PathBuf> {
     sky_cua_runtime_dir().map(|dir| dir.join(format!("isolated-atspi-{display_number}.json")))
 }
@@ -763,8 +793,19 @@ fn terminate_recorded_process<O: AtspiOps>(
     state: &AtspiSessionState,
     accessibility_bus_address: Option<&str>,
 ) -> Result<()> {
-    let Some(owner_pid) = ops.owner_pid(bus_address, name)? else {
-        return Ok(());
+    let owner_pid = match ops.owner_pid(bus_address, name) {
+        Ok(Some(owner_pid)) => owner_pid,
+        Ok(None) => return Ok(()),
+        // An unreachable private bus usually means the desktop died first. When
+        // the recorded owner generation is gone too, nothing is left to stop;
+        // otherwise keep the error so the state is retained for a retry.
+        Err(error) => {
+            if ops.recorded_owner_alive(expected) {
+                return Err(error);
+            }
+            tracing::debug!(%error, pid = expected.pid, %name, "private AT-SPI bus is gone and its recorded owner has exited");
+            return Ok(());
+        }
     };
     let env = IsolatedAtspiEnv {
         display: state.display.clone(),

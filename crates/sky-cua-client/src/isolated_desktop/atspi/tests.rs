@@ -15,6 +15,7 @@ struct FakeOps {
     probed: bool,
     fail_probe: bool,
     fail_registry_owner_query: bool,
+    exited_records: Vec<u32>,
 }
 
 impl FakeOps {
@@ -31,6 +32,7 @@ impl FakeOps {
             probed: false,
             fail_probe: false,
             fail_registry_owner_query: false,
+            exited_records: Vec::new(),
         }
     }
 }
@@ -105,6 +107,11 @@ impl AtspiOps for FakeOps {
     fn terminate_process(&mut self, pid: u32) -> Result<()> {
         self.terminated_records.push(pid);
         Ok(())
+    }
+
+    fn recorded_owner_alive(&mut self, expected: &ProcessIdentity) -> bool {
+        !self.exited_records.contains(&expected.pid)
+            && expected.start_ticks == u64::from(expected.pid) * 10
     }
 
     fn terminate_spawned(&mut self, process: &mut SpawnedProcess) {
@@ -327,6 +334,47 @@ fn registry_teardown_failure_does_not_skip_launcher_teardown() {
 
     assert!(error.to_string().contains("registry teardown failed"));
     assert_eq!(ops.terminated_records, vec![101]);
+}
+
+#[test]
+fn unreachable_bus_with_exited_owner_completes_teardown() {
+    let mut ops = FakeOps::new(true);
+    ops.launcher_owner = Some(101);
+    ops.fail_registry_owner_query = true;
+    ops.exited_records.push(202);
+
+    terminate_recorded_state_with(&mut ops, &test_state(false))
+        .expect("an exited owner on a dead bus leaves nothing to stop");
+
+    assert_eq!(ops.terminated_records, vec![101]);
+}
+
+#[test]
+fn unreachable_bus_with_reused_owner_pid_completes_teardown() {
+    let mut ops = FakeOps::new(true);
+    ops.launcher_owner = Some(101);
+    ops.fail_registry_owner_query = true;
+    let mut state = test_state(false);
+    state.registry.start_ticks = 9999;
+
+    terminate_recorded_state_with(&mut ops, &state)
+        .expect("a reused pid is not the recorded owner generation");
+
+    assert_eq!(ops.terminated_records, vec![101]);
+}
+
+fn stat_line(state: &str, start_ticks: u64) -> String {
+    let filler = vec!["0"; 18].join(" ");
+    format!("202 (at-spi2) registryd) {state} {filler} {start_ticks} 0 0")
+}
+
+#[test]
+fn stat_liveness_requires_the_recorded_generation_and_a_running_state() {
+    assert!(stat_shows_live_generation(&stat_line("S", 2020), 2020));
+    assert!(!stat_shows_live_generation(&stat_line("S", 9999), 2020));
+    assert!(!stat_shows_live_generation(&stat_line("Z", 2020), 2020));
+    assert!(!stat_shows_live_generation(&stat_line("X", 2020), 2020));
+    assert!(stat_shows_live_generation("malformed", 2020));
 }
 
 #[test]
