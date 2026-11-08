@@ -329,9 +329,11 @@ from which source, `path_changed` reports whether `PATH` was normalized, and
 snapshot/list diagnostics may include `SessionEnvRepaired`; treat that as
 useful context that the runtime recovered, not as an error by itself.
 
-Action tools accept `snapshot_id` from the latest `observe(surface="desktop")`
-or `capture_desktop` result. With a captured snapshot that includes capture metadata,
-explicit coordinates are screenshot pixels from that image. A structure-only
+Desktop action tools accept the `appshot_id` and action `snapshot_id` from the
+latest `observe(surface="desktop")`. A `capture_desktop` snapshot id is rejected,
+and any later capture or observation makes the earlier one stale. With an
+observation that includes capture metadata, explicit coordinates are screenshot
+pixels from that image. A structure-only
 desktop observation snapshot id still scopes `element_index` lookups, but
 cannot translate screenshot pixels. Without capture metadata, supported
 coordinate actions use the current screen coordinate space exposed by the active

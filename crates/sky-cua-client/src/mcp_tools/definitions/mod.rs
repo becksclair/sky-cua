@@ -725,7 +725,7 @@ fn build_grouped_tool_definitions(
         ),
         grouped_tool_with_constraints(
             "desktop_pointer",
-            "Click, secondary-click, or drag on the desktop. Preferred: pass the snapshot_id from the same capture_desktop/observe plus x/y read off that screenshot; those pixels are translated to the screen for you and work even when no semantic elements are exposed (e.g. Wayland apps with no matched AT-SPI tree). Or pass snapshot_id plus element_index/name/text for a semantic target. Bare x/y with no snapshot_id are raw screen coordinates and should be used only when you have no snapshot. Do not call with only operation.",
+            "Click, secondary-click, or drag on the desktop. Preferred: pass the appshot_id and snapshot_id from the latest observe(surface=\"desktop\") plus x/y read off its image; those pixels are translated to the screen for you and work even when no semantic elements are exposed (e.g. Wayland apps with no matched AT-SPI tree). capture_desktop snapshot ids are rejected; observe again after any capture. Or pass snapshot_id plus element_index/name/text for a semantic target. Bare x/y with no snapshot_id are raw screen coordinates and should be used only when you have no snapshot. Do not call with only operation.",
             LOCAL_DESTRUCTIVE_ACTION,
             desktop_pointer_properties(),
             json!(["operation", "appshot_id"]),
