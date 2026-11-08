@@ -7,7 +7,12 @@ readiness report, and the apps, windows, and focused window on the desktop.
 ## Sub-features
 
 - `disc-tools` advertises tools in `tools/list` according to the surface policy
-  (`SKY_CUA_SURFACES=desktop` hides browser and phone tools).
+  (`SKY_CUA_SURFACES=desktop` hides browser and phone tools and
+  `capture_screen`, leaving 16 tools). Five advertised tools have no feature
+  file or journey in this map: `status`, `setup_desktop`, `session_presence`,
+  `activate_window`, and `desktop_scroll`
+  (`crates/sky-cua-client/src/mcp_tools/definitions/mod.rs`). Report them as
+  not verified.
 - `disc-doctor` returns a structured readiness report (session kind, display,
   topology, capture, input, and semantic backends).
 - `disc-windows` lists desktop windows with `window_id`, backend, `app_id`, pid,
@@ -22,7 +27,10 @@ readiness report, and the apps, windows, and focused window on the desktop.
 
 - MCP `tools/list`, `doctor {}`, and
   `list_resources {surface: "desktop", resource: "apps"|"windows"|"focused_window"}`.
-- Terminal: `sky-cua-client <health|doctor|list-apps|list-windows|focused-window>`.
+- Terminal: `sky-cua-client <health|doctor|list-apps|list-windows|focused-window>`
+  (no arguments), and `sky-cua-client get-app-state` with optional selector
+  flags `--app-id`, `--desktop-file-id`, `--window-title`, and `--name`, plus
+  `--detail` and `--capture-screen` (each flag takes a value).
 
 ## Driving it with verify.sh
 
@@ -40,18 +48,26 @@ Preconditions:
   `doctor reports session_kind x11`).
 - **Windows.** During the semantic or keyboard journey,
   `list_resources {surface: "desktop", resource: "windows"}` lists the marker
-  window with `backend=x11`, `app_id=zenity.desktop`, and `[focused]`.
+  window with `backend=x11`, `app_id=zenity.desktop`, and `[focused]` in the
+  text content (`focused: true` in the structured result). The driver only
+  checks that the marker is listed; read these fields from `steps.jsonl`.
 - **Operator CLI.** Run `verify.sh cli list-windows`. Exit code is 0 and the JSON
   reports `environment.display == ":147"`, `session_kind == "x11"`,
   `capture_backend == "x11"`, `input_backend == "x_test"`, and one display
-  `DUMMY0` at 1280x800. Run `verify.sh cli doctor` and `verify.sh cli list-apps`
-  the same way and save stdout into the run dir when citing them.
+  `x11:DUMMY0` at 1280x800. Run `verify.sh cli doctor`, `list-apps`, and
+  `focused-window` the same way. `verify.sh cli` already saves each stdout as
+  `cli-<time>-<command>.out` in the run dir.
 - **Proof.** `tools-list.json` and the `doctor` entry in `steps.jsonl`.
 
 ## Gotchas
 
 - `list_resources` desktop resources reject `title_contains` with
-  `InvalidRequest`; it is browser-only.
+  `InvalidRequest`; it is browser-only. The rejection is a tool result with
+  `isError: true` and `structuredContent.error.code`, not a JSON-RPC error. No
+  journey exercises it.
+- On a remote host `verify.sh cli` forwards its arguments as one unquoted
+  string, so a window title containing spaces is split. Journey markers have no
+  spaces.
 - `compositor` reports the host's `kde-kwin-wayland` even inside the private X11
   desktop. Use `session_kind`, `display`, and `input_backend` to identify the
   lane.

@@ -25,13 +25,19 @@ them without touching the user's real screen, session bus, or running daemon.
 ## How to get to it (user POV)
 
 - Set `SKY_CUA_ISOLATED_DESKTOP=1` (or `[isolated_desktop] enabled = true`) and
-  start `sky-cua-client mcp`. Ephemeral lifecycle brings the desktop up on
-  connect and down on exit.
-- Run `sky-cua-client isolated-desktop ensure|status|stop` (hidden operator
-  subcommand).
+  start `sky-cua-client mcp`. The client brings the desktop up on connect. The
+  default lifecycle is persistent: the desktop outlives the client until
+  `isolated-desktop stop`. Only `SKY_CUA_ISOLATED_DESKTOP_LIFECYCLE=ephemeral`
+  tears it down when the client exits. `verify.sh` pins `persistent`.
+- Run `sky-cua-client isolated-desktop ensure|status|stop` (hidden development
+  subcommand, dispatched before the operator CLI; `verify.sh cli` reaches it).
+  `ensure` never starts a viewer.
 - Call the MCP tool `desktop_launch_app {command, args}`.
-- Optionally watch with `xpra attach :N --readonly` (viewer `attach`). The skill
-  uses viewer `none`.
+- The viewer defaults to `attach`: once the isolated daemon is healthy,
+  `sky-cua-client mcp` opens `xpra attach :N --readonly` as a window on the
+  user's real screen (`html5` and `none` are the alternatives). `verify.sh`
+  pins `SKY_CUA_ISOLATED_DESKTOP_VIEWER=none` so no window appears there;
+  `status.viewer` prints it as `None`.
 
 ## Driving it with verify.sh
 
@@ -46,7 +52,7 @@ Preconditions:
   `status.up=true`, `status.geometry=1280x800`, and all `status.dep_*=true`.
 - **Second daemon.** Confirm the isolated daemon is ours and the user's is
   untouched. `verify.sh doctor` shows `isolated_daemon_pid=<pid>` with `exe`
-  under `~/.cache/sky-cua-verify/target/release/`, plus
+  under `~/.cache/sky-cua-verify/target*/release/`, plus
   `user_daemons_unchanged=true`.
 - **Launch an app.** Run `verify.sh drive --journey semantic`. Its first call is
   `desktop_launch_app {"command": "sh", "args": ["-c", "zenity --entry --title='<marker>' ... > <run>/semantic-zenity-output.txt; echo $? > <run>/semantic-zenity-exit.txt"]}`.
@@ -70,8 +76,9 @@ Preconditions:
 
 - `desktop_launch_app` runs any command with the daemon's sandbox environment.
   `sh -c` is the supported way to capture app output for side-effect proof.
-- `desktop_launch_app` returns `DestinationAppShotUnavailable` for shell
-  launches. Poll the windows list for the title marker before observing.
+- `desktop_launch_app` succeeds for shell launches (pid included) but carries a
+  `DestinationAppShotUnavailable` diagnostic. Poll the windows list for the
+  title marker before observing.
 - KDE single-instance apps (kcalc, kwrite) need the full sandbox. The lane
   provides it, but a stray host instance of the same app can still be reused
   through D-Bus activation. Prefer zenity for journeys.

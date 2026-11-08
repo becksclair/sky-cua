@@ -62,9 +62,11 @@ user-visible behavior. It then has exactly four H2 sections in this order:
   and `desktop_action` activate, with structured readback. Scripted
   (`--journey semantic`), passing.
 - [Keyboard input](./keyboard-input.md): `desktop_keyboard` type_text and
-  press_key. Scripted (`--journey keyboard`), currently failing on a known
-  product defect.
+  press_key. Scripted (`--journey keyboard`), passing.
 - [Doctor and discovery](./doctor-and-discovery.md): `doctor`, `tools/list`,
   `list_resources`, and the operator CLI. Partly scripted (`--journey smoke`).
+  It also names the five advertised tools no feature file covers.
 - [Pointer and capture](./pointer-and-capture.md): `desktop_pointer` and
-  `capture_desktop`. Mapped, not yet scripted.
+  `capture_desktop`. Scripted (`--journey pointer`), passing for drag, click,
+  and main-display/window capture; secondary click has a manual recipe;
+  display-selector captures are not scripted.

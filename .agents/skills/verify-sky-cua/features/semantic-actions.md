@@ -21,12 +21,15 @@ observation then reads the new state back.
   collapse) are not yet scripted.
 - `sem-perform-action` (`desktop_action` operation `perform_action` with
   `action_index` or `action_name`) is not yet scripted.
+- `sem-toggle` (`desktop_toggle`) is not yet scripted.
 
 ## How to get to it (user POV)
 
 - Call MCP `observe {surface: "desktop", window_title | app_id | pid | window_id}`.
 - Call MCP `desktop_set_value {appshot_id, snapshot_id, element_index, value}`,
-  or target an element with `element_identifier` (its `backend_ref`).
+  or target an element with `element_identifier` (its `backend_ref`), or with
+  the `name` or `text` selectors (both require `snapshot_id`). The journeys
+  target only by `element_index`.
 - Call MCP `desktop_action {operation: "activate", appshot_id, snapshot_id, element_index}`.
 - Call MCP `desktop_semantic {operation: "focus"|"select"|"expand"|"collapse", ...}`.
 - Operator CLI: `sky-cua-client get-app-state --window-title <t> --detail full`
@@ -56,9 +59,12 @@ Preconditions:
 - **Side effect.** `semantic-zenity-output.txt` equals the token,
   `semantic-zenity-exit.txt` is `0`, and the marker is gone from
   `list_resources` windows (`dialog window is gone afterwards`).
-- **Proof.** `images/06-semantic-observe-<snapshot>.png` shows the token in the
-  entry. `steps.jsonl` holds the before observe, the set_value and activate
-  responses, and the after observe.
+- **Proof.** The second `images/NN-semantic-observe-<snapshot>.png` (the
+  readback observe) shows the token in the entry. `NN` is the run-wide step
+  number: `06` in a full `drive`, `05` with `--journey semantic`. `steps.jsonl`
+  holds, in order: `desktop_launch_app`, the `list_resources` window poll, the
+  before observe, `desktop_set_value`, the readback observe, `desktop_action`
+  activate, and the final `list_resources` window check.
 
 ## Gotchas
 
@@ -70,3 +76,5 @@ Preconditions:
   That is expected and harmless.
 - `success: true` is not proof. Require the readback and the zenity output and
   exit code.
+- Password-like elements read back `value: null` because sky-cua suppresses
+  sensitive content. Do not use a password field for the readback check.

@@ -39,7 +39,7 @@ Everything goes through one script: `.agents/skills/verify-sky-cua/scripts/verif
 Hard rules:
 
 - Never stop, restart, signal, or reconfigure a `sky-cua-service` that is not
-  `~/.cache/sky-cua-verify/target/release/sky-cua-service`. Never `pkill -f`;
+  `~/.cache/sky-cua-verify/target*/release/sky-cua-service`. Never `pkill -f`;
   kill by recorded PID only.
 - Never run `install.py install`, `scripts/install_mcp_server.py`, or the `bin/`
   wrappers for verification. `bin/sky-cua-service` falls back to the user's
@@ -62,7 +62,20 @@ Ready means `launch` exits 0 and its last line reads
 That line requires a daemon from the scratch binary holding the isolated socket
 lock and answering `health`. `launch` starts a new run id and writes it to
 `~/.cache/sky-cua-verify/current-run`. Later commands use it, or `VERIFY_RUN_ID`.
-Run `sync` and `build` again after every source change. `doctor` flags a stale build.
+Run `build` after every `sync` (a no-op build takes under a second). `build`
+records the synced stamp as `build-stamp.txt`, and `launch` copies that into
+the run, so the evidence names the tree the binaries were built from. `doctor`
+flags a build older than the last sync. Tear the instance down before a build
+that recompiles: the identity checks compare `/proc/<pid>/exe` with the
+scratch binary, which a relink replaces under the running daemon.
+`sync` compares by checksum and does not preserve mtimes, so a changed file
+always lands newer than the last build.
+
+`VERIFY_HOST=local` (run on a Linux machine from its own git checkout) skips
+`sync` and builds the checkout in place into its own scratch target,
+`target-local-<hash of the checkout path>/`. Sharing one target across source
+trees lets cargo reuse a binary built from the other tree. Its `build` stamps
+the checkout's rev and dirty-path count instead.
 
 ## Doctor
 
@@ -71,16 +84,20 @@ verify.sh doctor
 ```
 
 This is read-only and starts nothing. It requires `verdict=drivable`, which means:
-binaries present, `build_fresh=true`, `status.up=true` on the expected display
+binaries present, `build_fresh=true` (`build_stamp` equals `src_stamp` and no
+Rust source is newer than the binary), `status.up=true` on the expected display
 and geometry, every `status.dep_*=true`, `isolated_daemon_pid` whose `exe` is the
 scratch binary, `isolated_daemon_health=ok`, and `user_daemons_unchanged=true`.
-Run it first whenever anything looks off.
+The health probe goes through the isolated client, which runs
+`isolated-desktop ensure` on connect, so doctor skips it
+(`isolated_daemon_health=skipped`) when the desktop is down instead of
+silently rebuilding it. Run it first whenever anything looks off.
 
 ## Drive
 
 ```bash
-verify.sh drive                      # all journeys: smoke, semantic, keyboard
-verify.sh drive --journey semantic   # one journey (smoke | semantic | keyboard)
+verify.sh drive                      # all journeys: smoke, semantic, keyboard, pointer
+verify.sh drive --journey semantic   # one journey (smoke | semantic | keyboard | pointer)
 verify.sh cli list-windows           # operator CLI against the isolated instance
 verify.sh cli get-app-state --window-title <title> --detail compact
 ```
@@ -117,17 +134,24 @@ Each run writes `~/.cache/sky-cua-verify/runs/<run-id>/` on the host. `pull`
 `<checkout>/artifacts/verify-sky-cua/<run-id>/` on the operator machine, which is
 gitignored. Contents:
 
-- `summary.json`: per-journey verdicts and every check with its detail. `drive`
-  exits non-zero if any check fails.
+- `summary.json`: the latest verdict and checks for every journey driven in
+  this run. A re-drive of one journey replaces only that journey's checks.
+  `drive` exits non-zero if any check in that drive fails.
 - `steps.jsonl`: every MCP call (arguments, full response, image refs) in order.
-- `images/`: AppShot window crops (`*.webp`) and full-display source captures
-  (`<snapshot_id>.png`) copied out of `$XDG_RUNTIME_DIR/sky-cua/{appshots,captures}`
-  before teardown deletes them.
+  Step numbers continue across re-drives into the same run.
+- `images/NN-<journey>-<tool>-<name>`: AppShot window crops
+  (`observe-*.webp`) and, per capture id, the full-display source grab
+  (`<snapshot_id>.png`), the window crop (`<snapshot_id>-window.png`), and the
+  model image (`<snapshot_id>.webp`), copied out of
+  `$XDG_RUNTIME_DIR/sky-cua/{appshots,captures}` before teardown deletes them.
 - `<journey>-zenity-output.txt`, `<journey>-zenity-exit.txt`: app-side proof.
 - `cli-<time>-<command>.out`: stdout of every `verify.sh cli` call.
-- `tools-list.json`, `launch-ensure.txt`, `launch-health.json`, `src-stamp.txt`
-  (synced git rev and dirty-path count), `isolated-daemon.pid`,
-  `daemon-service-isolated-147.log` (daemon tracing), `foreign-daemons-before.txt`,
+- `build-stamp.txt`: git rev, dirty-path count, and stamp time of the tree the
+  binaries were built from. Compare it with the checkout you meant to test.
+- `tools-list.json` (smoke journey), `launch-ensure.txt`, `launch-health.json`,
+  `launch-health.err`, `isolated-daemon.pid`,
+  `daemon-service-isolated-<N>.log` (daemon tracing; the daemon appends across
+  runs, so it also holds earlier runs), `foreign-daemons-before.txt`,
   `runtime-dir-before.txt`, `teardown.txt`.
 
 Report the check lines from `summary.json` and point at one before and one after
@@ -151,11 +175,18 @@ It must print `teardown: residue=none`, and the user's daemons must be unchanged
 `$XDG_RUNTIME_DIR/sky-cua` that did not exist at launch). That list should be
 empty. Report anything listed instead of deleting it, because it may belong to
 the user's daemon.
-It is idempotent: run it after every failed or interrupted attempt.
+It is idempotent, including after a drive killed mid-write: run it after every
+failed or interrupted attempt.
+If the private desktop died abnormally (xpra gone while the daemon lived),
+`isolated-desktop stop` cannot reach the dead private buses. It clears
+`isolated-atspi-<N>.json` once the launcher and registry recorded there have
+exited, but keeps it while either is still running, so teardown reports
+`residue=isolated-atspi-<N>.json`. Check whether those recorded pids are still
+alive, then `launch` and `teardown` once more; a normal teardown clears it.
 
 Evidence in `runs/` and `artifacts/verify-sky-cua/` survives teardown. To reclaim
 host disk later (about 1.2 GB of target), remove everything except evidence:
-`ssh $VERIFY_HOST 'cd ~/.cache/sky-cua-verify && rm -rf src target state config browser-sockets src-files.txt src-stamp.txt'`.
+`ssh $VERIFY_HOST 'cd ~/.cache/sky-cua-verify && rm -rf src target target-local-* state config browser-sockets src-files.txt src-stamp.txt build-stamp.txt'`.
 
 One-shot: `verify.sh all` runs sync, build, launch, doctor, drive, teardown, and
 pull. Teardown runs even if an earlier step failed, and the exit status is
@@ -163,9 +194,11 @@ non-zero if any step failed.
 
 ## Status
 
-2026-11-08, host asgard: smoke, semantic, and keyboard PASS (33 of 33 checks),
-`residue=none`, user daemon unchanged. The keyboard journey caught a product
-defect at creation: the X11 input fallback typed with `xdotool --window`, which
+2026-11-08, host asgard, rev 76af95b: smoke, semantic, keyboard, and pointer
+(including drag) PASS (54 of 54 checks) in both the default remote mode and
+`VERIFY_HOST=local`, `residue=none`, user daemon unchanged. The keyboard
+journey caught a product defect at creation: the X11 input fallback typed with
+`xdotool --window`, which
 sends `XSendEvent` events that GTK ignores, so `desktop_keyboard` reported
 `success: true` while nothing reached the app. The fallback now focuses the
 target window and uses XTest (`crates/sky-cua-linux/src/x11/input_xtest.rs`,
@@ -191,7 +224,8 @@ target window and uses XTest (`crates/sky-cua-linux/src/x11/input_xtest.rs`,
   teardown means the session was already gone. That is fine when
   `residue=none`.
 - `cargo` must not use the user's checkout or `target/` on the host. The skill
-  always builds `~/.cache/sky-cua-verify/src` into `~/.cache/sky-cua-verify/target`.
+  always builds into `~/.cache/sky-cua-verify/target` (remote) or
+  `target-local-<hash>` (local).
 - Not covered here: browser-use (not routed into the isolated desktop), phone-use
   (needs a device; see `phone-use`), Wayland portal/KWin/overlay lanes (see
   `vm-tests`), and Windows.

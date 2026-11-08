@@ -11,7 +11,7 @@
 #   build     release-build sky-cua-client and sky-cua-service into the scratch target
 #   launch    bring the private desktop and the isolated daemon up; wait until usable
 #   doctor    read-only: is this instance worth driving?
-#   drive     run the MCP journey (default: zenity entry round trip); writes evidence
+#   drive     run the MCP journeys (default: all; --journey smoke|semantic|keyboard|pointer)
 #   teardown  stop the private desktop and the isolated daemon; verify nothing is left
 #   cli ARGS  run sky-cua-client ARGS against the isolated instance (operator CLI:
 #             health, doctor, list-apps, list-windows, get-app-state --name X, ...)
@@ -28,6 +28,7 @@ set -euo pipefail
 VERIFY_HOST="${VERIFY_HOST:-asgard}"
 VERIFY_DISPLAY="${VERIFY_DISPLAY:-:147}"
 DISPLAY_NUMBER="${VERIFY_DISPLAY#:}"
+RESOLUTION=1280x800
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_REL=".agents/skills/verify-sky-cua"
 # Root of every file this skill creates on the host. Relative to $HOME so the
@@ -68,7 +69,10 @@ cmd_sync() {
   (cd "$repo" && git ls-files -co --exclude-standard) | grep -vx '.claude/skills' >"$list"
   grep -qx 'Cargo.toml' "$list" || die "file list from $repo has no Cargo.toml; refusing to sync"
   ssh -o BatchMode=yes "$VERIFY_HOST" "mkdir -p \"\$HOME/$ROOT_REL/src\""
-  rsync -a --files-from="$list" "$repo/" "$VERIFY_HOST:$ROOT_REL/src/"
+  # Compare by checksum and do not preserve mtimes: a changed file lands with the
+  # host's current time, so cargo and doctor's freshness check see it as newer
+  # than the last build even when it was edited before that build ran.
+  rsync -rlpc --files-from="$list" "$repo/" "$VERIFY_HOST:$ROOT_REL/src/"
   # Mirror deletions: drop host files that are no longer in the working tree.
   rsync -a "$list" "$VERIFY_HOST:$ROOT_REL/src-files.txt"
   ssh -o BatchMode=yes "$VERIFY_HOST" "cd \"\$HOME/$ROOT_REL/src\" && \
@@ -78,7 +82,7 @@ cmd_sync() {
   rev="$(git -C "$repo" rev-parse HEAD)"
   dirty="$(git -C "$repo" status --porcelain | wc -l | tr -d ' ')"
   ssh -o BatchMode=yes "$VERIFY_HOST" \
-    "printf 'rev=%s\ndirty_paths=%s\nsynced_at=%s\n' '$rev' '$dirty' \"\$(date -u +%FT%TZ)\" > \"\$HOME/$ROOT_REL/src-stamp.txt\""
+    "printf 'rev=%s\ndirty_paths=%s\nstamped_at=%s\n' '$rev' '$dirty' \"\$(date -u +%FT%TZ)\" > \"\$HOME/$ROOT_REL/src-stamp.txt\""
   log "synced $(wc -l <"$list" | tr -d ' ') files at $rev (dirty paths: $dirty) to $VERIFY_HOST:~/$ROOT_REL/src"
   rm -f "$list"
 }
@@ -109,7 +113,14 @@ host_init() {
   [[ "$(uname -s)" == "Linux" ]] || die "the isolated lane needs a Linux host; set VERIFY_HOST to one"
   ROOT="$HOME/$ROOT_REL"
   SRC="${VERIFY_SRC:-$(repo_root)}"
-  TARGET="$ROOT/target"
+  # One cargo target per source tree. Cargo records workspace paths relative to
+  # the workspace root, so a tree with older mtimes can reuse artifacts built
+  # from a different tree, and the build stamp would then name the wrong source.
+  if local_mode; then
+    TARGET="$ROOT/target-local-$(printf '%s' "$SRC" | sha256sum | cut -c1-12)"
+  else
+    TARGET="$ROOT/target"
+  fi
   CLIENT="$TARGET/release/sky-cua-client"
   SERVICE="$TARGET/release/sky-cua-service"
   : "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
@@ -138,7 +149,7 @@ isolated() {
     XDG_CONFIG_HOME="$ROOT/config" \
     SKY_CUA_ISOLATED_DESKTOP=1 \
     SKY_CUA_ISOLATED_DESKTOP_DISPLAY="$VERIFY_DISPLAY" \
-    SKY_CUA_ISOLATED_DESKTOP_RESOLUTION=1280x800 \
+    SKY_CUA_ISOLATED_DESKTOP_RESOLUTION="$RESOLUTION" \
     SKY_CUA_ISOLATED_DESKTOP_VIEWER=none \
     SKY_CUA_ISOLATED_DESKTOP_LIFECYCLE=persistent \
     SKY_CUA_SURFACES=desktop \
@@ -167,14 +178,36 @@ foreign_daemons() {
   done
 }
 
+# Local mode has no sync step: describe the checkout being built (rev and dirty
+# count). Remote mode gets src-stamp.txt from sync instead.
+local_mode() { [[ -z "${VERIFY_SRC:-}" ]]; }
+local_stamp() {
+  printf 'rev=%s\ndirty_paths=%s\nstamped_at=%s\n' \
+    "$(git -C "$SRC" rev-parse HEAD)" \
+    "$(git -C "$SRC" status --porcelain | wc -l | tr -d ' ')" \
+    "$(date -u +%FT%TZ)"
+}
+
 cmd_build() {
   host_init
   [[ -f "$SRC/Cargo.toml" ]] || die "no checkout at $SRC; run sync first"
+  # Snapshot the stamp before cargo reads the tree; it becomes build-stamp.txt
+  # only when the build succeeds, so it always describes the binaries. Local
+  # mode leaves src-stamp.txt alone: it records the last sync, which a later
+  # remote-mode doctor must still compare against.
+  local stamp
+  if local_mode; then
+    stamp="$(local_stamp)"
+  else
+    [[ -f "$ROOT/src-stamp.txt" ]] || die "no $ROOT/src-stamp.txt; run sync first"
+    stamp="$(cat "$ROOT/src-stamp.txt")"
+  fi
   log "building release client + service from $SRC into $TARGET"
   (cd "$SRC" && CARGO_TARGET_DIR="$TARGET" nice -n 10 \
     cargo build --release -p sky-cua-client -p sky-cua-service)
   [[ -x "$CLIENT" && -x "$SERVICE" ]] || die "build did not produce $CLIENT and $SERVICE"
-  log "built: $CLIENT"
+  printf '%s\n' "$stamp" >"$ROOT/build-stamp.txt"
+  log "built: $CLIENT ($(tr '\n' ' ' <<<"$stamp"))"
 }
 
 cmd_launch() {
@@ -188,8 +221,9 @@ cmd_launch() {
   local run="$ROOT/runs/$run_id"
   mkdir -p "$run"
   printf '%s\n' "$run_id" >"$ROOT/current-run"
-  cp "$ROOT/src-stamp.txt" "$run/src-stamp.txt" 2>/dev/null ||
-    git -C "$SRC" rev-parse HEAD >"$run/src-stamp.txt"
+  # The run records the tree the binaries were built from, not the last sync.
+  cp "$ROOT/build-stamp.txt" "$run/build-stamp.txt" 2>/dev/null ||
+    die "no $ROOT/build-stamp.txt; run build first"
   foreign_daemons >"$run/foreign-daemons-before.txt"
   ls -A "$XDG_RUNTIME_DIR/sky-cua" >"$run/runtime-dir-before.txt" 2>/dev/null || true
   log "run $run_id: ensuring private desktop $VERIFY_DISPLAY"
@@ -217,11 +251,27 @@ cmd_doctor() {
   local ok=1 run pid
   run="$(current_run_dir 2>/dev/null || true)"
   printf 'host=%s kernel=%s\n' "$(hostname)" "$(uname -r)"
-  printf 'src_stamp=%s\n' "$(tr '\n' ' ' <"$ROOT/src-stamp.txt" 2>/dev/null || echo missing)"
+  # The tree under test: the last sync's stamp, or in local mode the checkout's
+  # current rev and dirty count (computed, not written).
+  local src_stamp build_stamp
+  if local_mode; then
+    src_stamp="$(local_stamp 2>/dev/null | grep -v '^stamped_at=' || true)"
+    build_stamp="$(grep -v '^stamped_at=' "$ROOT/build-stamp.txt" 2>/dev/null || true)"
+  else
+    src_stamp="$(cat "$ROOT/src-stamp.txt" 2>/dev/null || true)"
+    build_stamp="$(cat "$ROOT/build-stamp.txt" 2>/dev/null || true)"
+  fi
+  printf 'src_stamp=%s\n' "$(tr '\n' ' ' <<<"${src_stamp:-missing}")"
+  printf 'build_stamp=%s\n' "$(tr '\n' ' ' <<<"${build_stamp:-missing}")"
   if [[ -x "$CLIENT" && -x "$SERVICE" ]]; then
     printf 'binaries=ok built=%s\n' "$(date -u -r "$SERVICE" +%FT%TZ)"
-    # Stale build: any synced Rust source newer than the service binary.
-    if [[ -n "$(find "$SRC/crates" "$SRC/Cargo.lock" -newer "$SERVICE" -name '*.rs' -o -newer "$SERVICE" -name 'Cargo.*' 2>/dev/null | head -n 1)" ]]; then
+    # Stale build: the tree changed since the build (a later sync, or in local
+    # mode a different rev or dirty count), or Rust sources are newer than the
+    # binary.
+    if [[ -z "$build_stamp" || "$src_stamp" != "$build_stamp" ]]; then
+      printf 'build_fresh=false (tree changed since the last build; run build)\n'
+      ok=0
+    elif [[ -n "$(find "$SRC/crates" "$SRC/Cargo.lock" -newer "$SERVICE" -name '*.rs' -o -newer "$SERVICE" -name 'Cargo.*' 2>/dev/null | head -n 1)" ]]; then
       printf 'build_fresh=false (sources newer than binary; run build)\n'
       ok=0
     else
@@ -231,14 +281,28 @@ cmd_doctor() {
     printf 'binaries=missing\n'
     ok=0
   fi
-  # Structured desktop status; starts nothing.
+  # Structured desktop status; starts nothing. `status` exits 0 even when the
+  # desktop is down, so check the fields themselves.
+  local desktop_up=0
   if [[ -x "$CLIENT" ]]; then
-    isolated "$CLIENT" isolated-desktop status | sed 's/^/status./' || ok=0
+    local status_out
+    status_out="$(isolated "$CLIENT" isolated-desktop status)" || ok=0
+    printf '%s\n' "$status_out" | sed 's/^/status./'
+    if grep -qx 'up=true' <<<"$status_out"; then desktop_up=1; else ok=0; fi
+    grep -qx "display=$VERIFY_DISPLAY" <<<"$status_out" || ok=0
+    grep -qx "geometry=$RESOLUTION" <<<"$status_out" || ok=0
+    if grep -q '^dep_.*=false$' <<<"$status_out"; then ok=0; fi
   fi
   pid="$(isolated_daemon_pid)"
   if [[ -n "$pid" ]]; then
     printf 'isolated_daemon_pid=%s exe=%s\n' "$pid" "$(readlink "/proc/$pid/exe")"
-    if isolated "$CLIENT" health >/dev/null 2>&1; then
+    # The isolated client runs `isolated-desktop ensure` on connect, so `health`
+    # against a down desktop would rebuild it (and may replace the daemon).
+    # Probe only when the desktop is already up, where ensure is a no-op.
+    if ((!desktop_up)); then
+      printf 'isolated_daemon_health=skipped (desktop down; relaunch or teardown)\n'
+      ok=0
+    elif isolated "$CLIENT" health >/dev/null 2>&1; then
       printf 'isolated_daemon_health=ok\n'
     else
       printf 'isolated_daemon_health=failed\n'
@@ -332,7 +396,11 @@ def scalars(node, key=""):
 docs = []
 steps = run / "steps.jsonl"
 if steps.is_file():
-    docs += [json.loads(line).get("response") for line in steps.read_text().splitlines()]
+    for line in steps.read_text().splitlines():
+        try:
+            docs.append(json.loads(line).get("response"))
+        except ValueError:
+            pass  # a drive killed mid-write leaves a truncated last line
 for out in sorted(run.glob("cli-*.out")):
     try:
         docs.append(json.loads(out.read_text()))

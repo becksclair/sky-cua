@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Drive the isolated sky-cua instance through its MCP surface and record evidence.
 
-Journeys (``--journey``, default ``all`` = smoke + semantic + keyboard):
+Journeys (``--journey``, default ``all`` = smoke + semantic + keyboard + pointer):
 
 - ``smoke``: tools/list surface and the doctor tool.
 - ``semantic``: launch a zenity entry dialog into the private desktop with
@@ -11,6 +11,10 @@ Journeys (``--journey``, default ``all`` = smoke + semantic + keyboard):
   the token to a file and exited 0) plus window disappearance.
 - ``keyboard``: the same dialog, but the token goes in through
   ``desktop_keyboard`` type_text and the dialog is accepted with press_key Return.
+- ``pointer``: ``capture_desktop`` of the main display and of the dialog window,
+  then ``desktop_set_value`` writes a placeholder, a ``desktop_pointer`` drag
+  selects it, typing replaces it with the token, and OK is clicked with
+  ``desktop_pointer`` at crop-local pixels from a fixed-layout locator.
 
 Every app journey also proves non-interference: the launched app's environment
 points at the private display and bus, and no host X display shows the window.
@@ -37,7 +41,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-JOURNEYS = ("smoke", "semantic", "keyboard")
+JOURNEYS = ("smoke", "semantic", "keyboard", "pointer")
 
 
 def parse_args() -> argparse.Namespace:
@@ -160,7 +164,15 @@ class Recorder:
         self.appshot_store = runtime_store / "sky-cua/appshots"
         self.capture_store = runtime_store / "sky-cua/captures"
         self.checks: list[dict[str, Any]] = []
+        # A re-drive into the same run continues the step numbering, so step
+        # entries and image names never collide with an earlier drive's.
         self.seq = 0
+        if self.steps_path.is_file():
+            for line in self.steps_path.read_text(encoding="utf-8").splitlines():
+                try:
+                    self.seq = max(self.seq, int(json.loads(line).get("seq", 0)))
+                except (ValueError, TypeError, AttributeError):
+                    continue
         self.journey = ""
 
     def log_call(self, name: str, arguments: dict[str, Any], response: dict[str, Any]) -> None:
@@ -176,21 +188,24 @@ class Recorder:
                 path.write_bytes(base64.b64decode(str(block["data"])))
                 saved.append(path.name)
         # AppShot images are temporary host-private artifacts named by filename;
-        # copy them out before they expire. The full-resolution source capture
-        # lives in captures/<snapshot_id>.png.
+        # copy them out before they expire. A capture id owns several files in
+        # captures/: <snapshot_id>.png (full-display source grab),
+        # <snapshot_id>-window.png (the window crop), and <snapshot_id>.webp
+        # (the model image the agent sees). Copy every variant.
         for key, value in walk(response.get("structuredContent")):
             if not isinstance(value, str) or "/" in value:
                 continue
             if key == "filename":
-                source = self.appshot_store / value
+                sources = [self.appshot_store / value]
             elif key == "snapshot_id":
-                source = self.capture_store / f"{value}.png"
+                sources = sorted(self.capture_store.glob(f"{value}*"))
             else:
                 continue
-            target = self.images / f"{prefix}-{source.name}"
-            if source.is_file() and not target.exists():
-                shutil.copy2(source, target)
-                saved.append(target.name)
+            for source in sources:
+                target = self.images / f"{prefix}-{source.name}"
+                if source.is_file() and not target.exists():
+                    shutil.copy2(source, target)
+                    saved.append(target.name)
         slim = {
             **response,
             "content": [
@@ -278,6 +293,10 @@ class Driver:
         marker = f"sky-cua-verify-{self.rec.journey}-{secrets.token_hex(3)}"
         out_file = self.rec.run_dir / f"{self.rec.journey}-zenity-output.txt"
         rc_file = self.rec.run_dir / f"{self.rec.journey}-zenity-exit.txt"
+        # A repeated drive in the same run must not read the previous drive's
+        # exit file as this dialog's side effect.
+        out_file.unlink(missing_ok=True)
+        rc_file.unlink(missing_ok=True)
         script = (
             f"zenity --entry --title='{marker}' --text='sky-cua verification' "
             f"--width=420 > '{out_file}'; echo $? > '{rc_file}'"
@@ -444,6 +463,128 @@ class Driver:
         )
         self.confirm_side_effect(marker, token, out_file, rc_file)
 
+    def capture(self, arguments: dict[str, Any], label: str) -> dict[str, Any]:
+        """Run capture_desktop; return {pixel_size, logical_rect, role} of the capture."""
+        response = self.call("capture_desktop", arguments)
+        capture = result_of(response).get("capture") or {}
+        shape = {
+            "pixel_size": capture.get("pixel_size"),
+            "logical_rect": capture.get("logical_rect"),
+            "role": first(capture.get("images"), "role"),
+        }
+        self.rec.check(
+            f"capture_desktop {label} returned a snapshot",
+            not response.get("isError") and bool(result_of(response).get("snapshot_id")),
+            shape,
+        )
+        return shape
+
+    def pointer(self) -> None:
+        opened = self.open_dialog()
+        if not opened:
+            return
+        marker, _, out_file, rc_file = opened
+        # A capture becomes the latest snapshot and invalidates earlier AppShots,
+        # so capture first and observe afresh before acting.
+        display = self.capture({}, "main display")
+        self.rec.check(
+            "main-display capture is the full private screen",
+            display["role"] == "primary_display_capture"
+            and display["pixel_size"] == {"width": 1280, "height": 800},
+        )
+        observation = self.call("observe", {"surface": "desktop", "window_title": marker})
+        bounds = result_of(observation).get("bounds") or {}
+        window = self.capture({"title": marker}, "window")
+        rect = window["logical_rect"] or {}
+        self.rec.check(
+            "window capture is cropped to the dialog's bounds",
+            window["role"] == "target_window_crop"
+            and all(rect.get(k) == bounds.get(k) for k in ("x", "y", "width", "height")),
+            {"capture": rect, "observed_bounds": bounds},
+        )
+        observation = self.call("observe", {"surface": "desktop", "window_title": marker})
+        entry = find_element(observation, is_entry) or {}
+        token = f"pointer-{secrets.token_hex(4)}"
+        placeholder = f"placeholder-{secrets.token_hex(4)}"
+        set_value = self.call(
+            "desktop_set_value",
+            {
+                "appshot_id": result_of(observation)["appshot_id"],
+                "snapshot_id": first(result_of(observation), "snapshot_id"),
+                "element_index": entry.get("element_index"),
+                "value": placeholder,
+            },
+        )
+        self.rec.check("desktop_set_value succeeded", not set_value.get("isError"))
+        after = self.readback(marker, placeholder, entry.get("value"))
+        # GTK4 zenity elements expose no bounds. Locators measured from the
+        # 420x262 crop at --width=420: the entry spans x 10%-90% at y 53%, and OK
+        # is centred at about (72%, 80%). The crop size comes from the
+        # observation's window bounds, so points stay crop-local; snapshot_id
+        # carries the crop-to-screen geometry.
+        bounds = result_of(after).get("bounds") or {}
+        width, height = float(bounds.get("width", 0)), float(bounds.get("height", 0))
+        drag = {
+            "from_x": round(width * 0.88),
+            "from_y": round(height * 0.53),
+            "to_x": round(width * 0.11),
+            "to_y": round(height * 0.53),
+        }
+        dragged = self.call(
+            "desktop_pointer",
+            {
+                "operation": "drag",
+                "appshot_id": result_of(after)["appshot_id"],
+                "snapshot_id": first(result_of(after), "snapshot_id"),
+                **drag,
+                "duration_ms": 600,
+            },
+        )
+        self.rec.check(
+            "desktop_pointer drag across the entry text succeeded",
+            not dragged.get("isError"),
+            {**drag, "message": result_of(dragged).get("message")},
+        )
+        # Typing replaces the selection: only a drag that selected the whole
+        # placeholder leaves exactly the token.
+        observation = self.call("observe", {"surface": "desktop", "window_title": marker})
+        typed = self.call(
+            "desktop_keyboard",
+            {
+                "operation": "type_text",
+                "text": token,
+                "appshot_id": result_of(observation)["appshot_id"],
+            },
+        )
+        self.rec.check(
+            "desktop_keyboard type_text over the selection succeeded", not typed.get("isError")
+        )
+        after = self.call("observe", {"surface": "desktop", "window_title": marker})
+        final = (find_element(after, is_entry) or {}).get("value")
+        self.rec.check(
+            "drag selected the whole entry: typing replaced it with exactly the token",
+            final == token,
+            {"before": placeholder, "final": final},
+        )
+        x = round(width * 0.72)
+        y = round(height * 0.80)
+        clicked = self.call(
+            "desktop_pointer",
+            {
+                "operation": "click",
+                "appshot_id": result_of(after)["appshot_id"],
+                "snapshot_id": first(result_of(after), "snapshot_id"),
+                "x": x,
+                "y": y,
+            },
+        )
+        self.rec.check(
+            "desktop_pointer click on OK by crop pixels succeeded",
+            not clicked.get("isError"),
+            {"x": x, "y": y, "message": result_of(clicked).get("message")},
+        )
+        self.confirm_side_effect(marker, token, out_file, rc_file)
+
     def reap(self) -> None:
         """Kill only what this driver launched, by pid; never by name."""
         for pid in reversed(self.live_pids):
@@ -452,15 +593,30 @@ class Driver:
         self.live_pids.clear()
 
 
-def finish(rec: Recorder) -> int:
+def finish(rec: Recorder, selected: tuple[str, ...]) -> int:
     passed = bool(rec.checks) and all(check["passed"] for check in rec.checks)
+    # summary.json holds the latest verdict for every journey driven in this
+    # run: a re-drive replaces only the journeys it ran and keeps the others.
+    summary_path = rec.run_dir / "summary.json"
+    kept: list[dict[str, Any]] = []
+    if summary_path.is_file():
+        try:
+            previous = json.loads(summary_path.read_text(encoding="utf-8"))
+            kept = [c for c in previous.get("checks", []) if c.get("journey") not in selected]
+        except (ValueError, AttributeError):
+            kept = []
+    checks = kept + rec.checks
     journeys: dict[str, bool] = {}
-    for check in rec.checks:
+    for check in checks:
         journeys[check["journey"]] = journeys.get(check["journey"], True) and check["passed"]
-    summary = {"passed": passed, "journeys": journeys, "checks": rec.checks}
-    (rec.run_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True))
+    summary = {
+        "passed": bool(checks) and all(check["passed"] for check in checks),
+        "journeys": journeys,
+        "checks": checks,
+    }
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
     verdicts = ", ".join(f"{name}={'PASS' if ok else 'FAIL'}" for name, ok in journeys.items())
-    print(f"summary: {verdicts} -> {rec.run_dir / 'summary.json'}", flush=True)
+    print(f"summary: {verdicts} -> {summary_path}", flush=True)
     return 0 if passed else 1
 
 
@@ -490,7 +646,7 @@ def main() -> int:
                 rec.check("journey raised", False, f"{type(error).__name__}: {error}")
             finally:
                 driver.reap()
-        return finish(rec)
+        return finish(rec, selected)
     finally:
         client.close()
 
