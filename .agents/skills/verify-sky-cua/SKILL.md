@@ -45,7 +45,9 @@ Hard rules:
   wrappers for verification. `bin/sky-cua-service` falls back to the user's
   `target/release` build, and the installers rewrite live registrations.
 - Never point `VERIFY_DISPLAY` at a display you did not create. `launch` refuses
-  a display held by a non-xpra server.
+  a display held by a non-xpra server, unless the product recorded that display
+  (`isolated-xpra-<N>.json`) and its xpra died: then `ensure` cleans up the
+  recorded orphan and restarts it.
 - Only the isolated lane is safe here. Driving the Wayland/portal lane would act
   on the user's real screen.
 

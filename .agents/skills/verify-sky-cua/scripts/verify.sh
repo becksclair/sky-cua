@@ -219,7 +219,14 @@ cmd_launch() {
   [[ -x "$CLIENT" && -x "$SERVICE" ]] || die "missing scratch binaries; run build first"
   local lock="/tmp/.X${DISPLAY_NUMBER}-lock"
   if [[ -e "$lock" ]] && ! xpra info "$VERIFY_DISPLAY" >/dev/null 2>&1; then
-    die "$VERIFY_DISPLAY is held by a non-xpra server ($lock); pick another VERIFY_DISPLAY"
+    # A display whose xpra died but whose roots the product recorded is our own
+    # orphan: `ensure` cleans it up and restarts. Anything else is a server we
+    # do not own.
+    if [[ -e "$XDG_RUNTIME_DIR/sky-cua/isolated-xpra-${DISPLAY_NUMBER}.json" ]]; then
+      log "$VERIFY_DISPLAY is a recorded isolated desktop whose xpra died; ensure will clean it up"
+    else
+      die "$VERIFY_DISPLAY is held by a non-xpra server ($lock); pick another VERIFY_DISPLAY"
+    fi
   fi
   local run_id="${VERIFY_RUN_ID:-run-$(date -u +%Y%m%d-%H%M%S)}"
   local run="$ROOT/runs/$run_id"
