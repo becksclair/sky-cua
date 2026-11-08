@@ -21,7 +21,10 @@
 mod atspi;
 mod lifecycle_lease;
 mod owned_bus;
+mod owned_process;
 mod probe;
+#[cfg(target_os = "linux")]
+mod xpra_ownership;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -111,6 +114,17 @@ impl IsolatedDesktopHandle {
         // deep inside `start_xpra_desktop`/`xpra_session_is_healthy`.
         ensure_dependencies()?;
 
+        // An `auto` display whose xpra died leaves its recorded Xorg holding the
+        // persisted number, which `resolve_display` would then skip, leaking it.
+        // Clean that recorded orphan up first so the number is reused.
+        #[cfg(target_os = "linux")]
+        if cfg.display == "auto"
+            && let Some(number) = persisted_display_number()
+        {
+            let _lease = IsolatedDesktopLifecycleLease::acquire(number)?;
+            heal_recorded_orphan(number)?;
+        }
+
         let display = resolve_display(&cfg.display)?;
         let display_number = parse_display_number(&display)
             .ok_or_else(|| anyhow!("invalid isolated desktop display string: {display}"))?;
@@ -134,7 +148,7 @@ impl IsolatedDesktopHandle {
             // the safe floor: an unset bus would let the daemon fall back to the
             // user's real session bus.
             let (xpra_dbus_address, xauthority) = xpra_info_environment(&display)?;
-            let dbus_address = match xpra_dbus_address {
+            let dbus_address = match xpra_dbus_address.clone() {
                 Some(address) => address,
                 None => recover_owned_bus(display_number).ok_or_else(|| {
                     anyhow!(
@@ -144,6 +158,20 @@ impl IsolatedDesktopHandle {
                     )
                 })?,
             };
+            // Refresh the recorded roots for the live session: a missing record
+            // (started before recording), a partial one (the client died before
+            // the bus was recorded), or a stale one would otherwise leave a later
+            // abnormal death uncleanable. A healthy reused session must not fail
+            // on this, so a recording problem is only logged and any existing
+            // record is left as it was.
+            #[cfg(target_os = "linux")]
+            if let Err(error) =
+                xpra_ownership::record_session(display_number, xpra_dbus_address.as_deref())
+            {
+                // `display` is shadowed inside tracing's macros; bind it first.
+                let xpra_display = display.as_str();
+                tracing::warn!(%error, xpra_display, "could not record the reused xpra session");
+            }
             // A reused session is already settled at its live mode; pass `None`
             // (as `status()` does) so the settle budget is not spun waiting for it
             // to re-reach `cfg.resolution` when the live mode and config differ.
@@ -172,6 +200,13 @@ impl IsolatedDesktopHandle {
             });
         }
 
+        // The session was just found unhealthy, so skip the health probe that
+        // `heal_recorded_orphan` would repeat.
+        #[cfg(target_os = "linux")]
+        if xpra_ownership::has_record(display_number) {
+            clean_up_recorded_orphan(display_number)?;
+        }
+
         start_xpra_desktop(&display, &resolution, cfg)?;
 
         // The session is now up. If any step that finishes bringing it online
@@ -179,11 +214,12 @@ impl IsolatedDesktopHandle {
         // be orphaned with no handle to reap it — the exact host residue this
         // feature exists to avoid. Tear it back down before propagating the error.
         let (geometry, dbus_address, xauthority, owns_bus, bus_child) =
-            match finish_session_bringup(&display, expected) {
+            match finish_session_bringup(&display, display_number, expected) {
                 Ok(values) => values,
                 Err(error) => {
-                    let _ = stop_xpra_desktop(&display);
-                    remove_stale_display_lock(&display);
+                    // The recorded roots (if recording got that far) are stopped
+                    // even when xpra itself is already gone.
+                    let _ = stop_locked(&display, display_number, &socket_path);
                     return Err(error);
                 }
             };
@@ -208,15 +244,11 @@ impl IsolatedDesktopHandle {
                 .and_then(|()| verify_xpra_after_atspi_bootstrap(&display))
         {
             terminate_atspi_session(display_number);
-            if owns_bus {
-                reap_persisted_owned_bus(display_number);
-                if let Some(mut child) = bus_child {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
+            let _ = stop_locked(&display, display_number, &socket_path);
+            if let Some(mut child) = bus_child {
+                let _ = child.kill();
+                let _ = child.wait();
             }
-            let _ = stop_xpra_desktop(&display);
-            remove_stale_display_lock(&display);
             return Err(error).with_context(|| {
                 format!(
                     "failed to bootstrap the private AT-SPI registry for xpra session {display}"
@@ -423,7 +455,17 @@ pub fn status(cfg: &ResolvedIsolatedDesktop) -> Result<IsolatedDesktopStatus> {
 /// `/tmp/.X<N>-lock` plus the daemon socket. Filters strictly by the resolved
 /// display number, so it can never touch the user's real session.
 pub fn stop(cfg: &ResolvedIsolatedDesktop) -> Result<String> {
-    let display = resolve_display(&cfg.display)?;
+    // Stop must act on the display that was used, never pick a new one: with
+    // `auto`, a dead session whose Xorg still answers would otherwise make
+    // `resolve_display` allocate a fresh number and leave the orphan running.
+    let display = if cfg.display == "auto" {
+        match persisted_display_number() {
+            Some(number) => format!(":{number}"),
+            None => return Ok(cfg.display.clone()),
+        }
+    } else {
+        cfg.display.clone()
+    };
     if let Some(number) = parse_display_number(&display) {
         let _lifecycle_lease = IsolatedDesktopLifecycleLease::acquire(number)?;
         #[cfg(target_os = "linux")]
@@ -441,11 +483,74 @@ pub fn stop(cfg: &ResolvedIsolatedDesktop) -> Result<String> {
 /// lease. AT-SPI termination intentionally happens in the caller first, while
 /// both private buses are reachable.
 fn stop_locked(display: &str, display_number: u32, socket_path: &Path) -> Result<()> {
-    stop_xpra_desktop(display)?;
-    reap_persisted_owned_bus(display_number);
+    // Every step runs even when an earlier one fails, so one stuck process does
+    // not strand the rest; the failures are reported together.
+    let mut errors = Vec::new();
+    if let Err(error) = stop_xpra_desktop(display) {
+        errors.push(format!("{error:#}"));
+    }
+    // `xpra stop` cannot reach a session whose server already died; stop the
+    // recorded roots directly.
+    #[cfg(target_os = "linux")]
+    if let Err(error) = xpra_ownership::teardown_recorded(display_number) {
+        errors.push(format!("{error:#}"));
+    }
+    if let Err(error) = reap_persisted_owned_bus(display_number) {
+        errors.push(format!("{error:#}"));
+    }
     terminate_isolated_daemon(socket_path);
     remove_stale_display_lock(display);
-    Ok(())
+    if errors.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "isolated desktop {display} teardown was incomplete: {}",
+        errors.join("; ")
+    )
+}
+
+/// Clean up a recorded session on `display_number` whose xpra server is gone.
+/// A no-op when nothing is recorded or the session is healthy. The caller holds
+/// the display's lifecycle lease.
+#[cfg(target_os = "linux")]
+fn heal_recorded_orphan(display_number: u32) -> Result<()> {
+    if !xpra_ownership::has_record(display_number)
+        || xpra_session_is_healthy(&format!(":{display_number}"))?
+    {
+        return Ok(());
+    }
+    clean_up_recorded_orphan(display_number)
+}
+
+/// Tear down the recorded session on `display_number`, which the caller has
+/// found recorded and not healthy, while holding its lifecycle lease.
+#[cfg(target_os = "linux")]
+fn clean_up_recorded_orphan(display_number: u32) -> Result<()> {
+    let display = format!(":{display_number}");
+    let xpra_display = display.as_str();
+    // "Not healthy" can be a transient probe failure under load. Tear down only
+    // on positive evidence that xpra is gone; otherwise leave the session alone
+    // and let the caller fail on the occupied display as it always has.
+    if xpra_ownership::xpra_server_running(display_number) {
+        tracing::warn!(
+            xpra_display,
+            "the xpra server is still running although its session looks unhealthy; not tearing it down"
+        );
+        return Ok(());
+    }
+    tracing::info!(
+        xpra_display,
+        "cleaning up a recorded isolated desktop whose xpra server died"
+    );
+    terminate_atspi_session(display_number);
+    stop_locked(
+        &display,
+        display_number,
+        &isolated_socket_path(display_number)?,
+    )
+    .with_context(|| {
+        format!("cannot reuse {display}: its previous session could not be cleaned up")
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -507,10 +612,7 @@ fn resolve_display(configured: &str) -> Result<String> {
     // xpra session (which we reuse). If a foreign server now owns the persisted
     // number, fall through to a fresh scan rather than colliding with it or
     // silently adopting a session we did not create.
-    if let Some(path) = isolated_display_state_path()
-        && let Ok(raw) = std::fs::read_to_string(&path)
-        && let Some(number) = parse_display_number(raw.trim())
-    {
+    if let Some(number) = persisted_display_number() {
         let display = format!(":{number}");
         // Reuse the persisted number when a live `xpra` session is on it (our own
         // session, by the number we persisted), or when it is genuinely free (no
@@ -546,6 +648,12 @@ fn resolve_display(configured: &str) -> Result<String> {
     }
 
     Ok(display)
+}
+
+/// The display number persisted by an earlier `auto` resolution, if any.
+fn persisted_display_number() -> Option<u32> {
+    let raw = std::fs::read_to_string(isolated_display_state_path()?).ok()?;
+    parse_display_number(raw.trim())
 }
 
 /// Like [`first_free_display_number`] but also skips any display that is
@@ -666,6 +774,9 @@ fn start_xpra_desktop(
         .arg("--pulseaudio=no")
         .arg("--mdns=no")
         .arg("--start-new-commands=no")
+        // An automation desktop needs no input-method daemon. Without this, xpra
+        // starts ibus-daemon through its daemonizer, an extra detached subtree.
+        .arg("--input-method=none")
         .arg("--systemd-run=no")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -685,16 +796,27 @@ fn start_xpra_desktop(
 /// here can tear the just-started session back down instead of leaking it.
 fn finish_session_bringup(
     display: &str,
+    display_number: u32,
     expected: Option<DisplayGeometry>,
 ) -> Result<(DisplayGeometry, String, String, bool, Option<Child>)> {
     wait_for_display(display)?;
+    // Record the X server the moment it answers, before any further step can
+    // fail or the client can die, so teardown can always reach it.
+    #[cfg(target_os = "linux")]
+    xpra_ownership::record_session(display_number, None)?;
+    #[cfg(not(target_os = "linux"))]
+    let _ = display_number;
     let geometry = read_settled_geometry(display, expected)?;
     // Primary path: xpra's own default dbus launch records the sandbox bus
     // address in `xpra info`. Fall back to a client-owned dbus-daemon only if
     // xpra did not provide one.
     let (xpra_dbus_address, xauthority) = xpra_info_environment(display)?;
     let (dbus_address, owns_bus, bus_child) = match xpra_dbus_address {
-        Some(address) => (address, false, None),
+        Some(address) => {
+            #[cfg(target_os = "linux")]
+            xpra_ownership::record_session(display_number, Some(&address))?;
+            (address, false, None)
+        }
         None => {
             let (address, child) = start_owned_session_bus().context(
                 "xpra did not report a sandbox session bus and a client-owned \
@@ -878,9 +1000,18 @@ fn remove_stale_display_lock(display: &str) {
         return;
     };
     let lock_path = PathBuf::from(format!("/tmp/.X{number}-lock"));
-    // Only remove a stale lock if the display is no longer reachable; a
-    // still-reachable display means the lock is live and must not be touched.
+    // Only remove a stale lock: the display must be unreachable AND the pid the
+    // lock names must no longer be running. An unreachable display alone is not
+    // proof, since a live foreign server can refuse our authorization. A
+    // just-killed server can linger as an unreaped zombie, which has exited.
     if xdpyinfo_reachable(display) {
+        return;
+    }
+    let lock_owner_alive = std::fs::read_to_string(&lock_path)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .is_none_or(owned_process::pid_is_running);
+    if lock_owner_alive {
         return;
     }
     let _ = std::fs::remove_file(&lock_path);

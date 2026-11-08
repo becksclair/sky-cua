@@ -2,9 +2,12 @@
 //!
 //! Xpra supplies a private session bus, but it does not guarantee that the
 //! accessibility bus launcher or registry are ready on that bus. This module
-//! brings them up before the isolated service starts, records their exact D-Bus
-//! owners, and tears down only owners that still match that recorded private
-//! session. It never calls the host user-systemd AT-SPI repair path.
+//! brings them up before the isolated service starts, records the exact process
+//! generation of each owner, and at teardown signals only those recorded
+//! generations, re-validated from `/proc`. The buses are used for discovery at
+//! bootstrap, never as the authority to signal, so teardown still works after
+//! the private desktop has died. It never calls the host user-systemd AT-SPI
+//! repair path.
 
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -22,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use zbus::blocking::{Connection, Proxy, connection, fdo::DBusProxy};
 use zbus::names::{BusName, WellKnownName};
 
+use super::owned_process::{self, Liveness, ProcessIdentity};
 use super::probe::{AT_SPI_BUS_LAUNCHER_PATH, AT_SPI_REGISTRY_PATH};
 use super::sky_cua_runtime_dir;
 
@@ -48,12 +52,6 @@ struct IsolatedAtspiEnv {
 struct SpawnedProcess {
     pid: u32,
     child: Option<Child>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct ProcessIdentity {
-    pid: u32,
-    start_ticks: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,10 +84,10 @@ trait AtspiOps {
         env: &IsolatedAtspiEnv,
         accessibility_bus_address: Option<&str>,
     ) -> Result<u64>;
-    fn terminate_process(&mut self, pid: u32) -> Result<()>;
-    /// Whether the exact recorded process generation may still be running.
-    /// Uncertainty counts as running, so recorded state is never discarded early.
-    fn recorded_owner_alive(&mut self, expected: &ProcessIdentity) -> bool;
+    /// What `/proc` says about a recorded owner generation.
+    fn liveness(&mut self, expected: &ProcessIdentity) -> Liveness;
+    /// Terminate exactly the recorded generation and wait for it to exit.
+    fn terminate_generation(&mut self, expected: &ProcessIdentity) -> Result<()>;
     fn terminate_spawned(&mut self, process: &mut SpawnedProcess);
     fn sleep(&mut self, duration: Duration);
 }
@@ -181,24 +179,12 @@ impl AtspiOps for ProcessAtspiOps {
         validate_process_identity(pid, executable, env, accessibility_bus_address)
     }
 
-    fn terminate_process(&mut self, pid: u32) -> Result<()> {
-        let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-        if result != 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                return Err(error)
-                    .with_context(|| format!("failed to terminate private pid {pid}"));
-            }
-        }
-        Ok(())
+    fn liveness(&mut self, expected: &ProcessIdentity) -> Liveness {
+        owned_process::liveness(expected)
     }
 
-    fn recorded_owner_alive(&mut self, expected: &ProcessIdentity) -> bool {
-        match fs::read_to_string(format!("/proc/{}/stat", expected.pid)) {
-            Ok(stat) => stat_shows_live_generation(&stat, expected.start_ticks),
-            // A present but unreadable entry counts as running.
-            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
-        }
+    fn terminate_generation(&mut self, expected: &ProcessIdentity) -> Result<()> {
+        owned_process::terminate_generation(expected)
     }
 
     fn terminate_spawned(&mut self, process: &mut SpawnedProcess) {
@@ -481,6 +467,26 @@ fn connect_bus(address: &str) -> Result<Connection> {
         .context("failed to connect to a private D-Bus address")
 }
 
+/// The pid of the `dbus-daemon` serving `address`, as the bus itself reports it.
+/// Discovery only: callers must still validate the generation before trusting it.
+///
+/// zbus's blocking API drives its own executor, which panics when called from a
+/// thread already running a tokio runtime (the MCP server calls `ensure` from
+/// one), so the query runs on a dedicated thread, as bootstrap does.
+pub(super) fn bus_daemon_pid(address: &str) -> Result<u32> {
+    let address = address.to_string();
+    thread::Builder::new()
+        .name("sky-cua-bus-pid".to_string())
+        .spawn(move || {
+            let connection = connect_bus(&address)?;
+            owner_pid_on_connection(&connection, "org.freedesktop.DBus")?
+                .ok_or_else(|| anyhow!("the private session bus did not report its own pid"))
+        })
+        .context("failed to start the private bus pid query")?
+        .join()
+        .map_err(|_| anyhow!("the private bus pid query panicked"))?
+}
+
 fn owner_pid_on_connection(connection: &Connection, name: &str) -> Result<Option<u32>> {
     let proxy = DBusProxy::new(connection).context("failed to create a D-Bus daemon proxy")?;
     let bus_name = BusName::try_from(name).context("invalid D-Bus owner name")?;
@@ -564,7 +570,7 @@ fn validate_process_identity(
             expected_executable.display()
         )
     })?;
-    if actual_executable != expected_executable {
+    if !owned_process::exe_matches(&actual_executable, &expected_executable) {
         bail!(
             "private AT-SPI owner pid {pid} runs {}, expected {}",
             actual_executable.display(),
@@ -574,7 +580,7 @@ fn validate_process_identity(
 
     let environ = read_process_environment(pid)?;
     validate_process_environment(&environ, expected_env, expected_accessibility_bus, pid)?;
-    process_start_ticks(pid)
+    owned_process::process_start_ticks(pid)
 }
 
 fn validate_process_environment(
@@ -633,39 +639,6 @@ fn require_env(
         actual => {
             bail!("private AT-SPI owner pid {pid} has {key}={actual:?}, expected {expected:?}")
         }
-    }
-}
-
-fn process_start_ticks(pid: u32) -> Result<u64> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat"))
-        .with_context(|| format!("cannot read start time for private AT-SPI owner pid {pid}"))?;
-    let (_, fields) = stat
-        .rsplit_once(") ")
-        .ok_or_else(|| anyhow!("malformed /proc/{pid}/stat"))?;
-    fields
-        .split_whitespace()
-        .nth(19)
-        .ok_or_else(|| anyhow!("missing start time in /proc/{pid}/stat"))?
-        .parse::<u64>()
-        .with_context(|| format!("invalid start time in /proc/{pid}/stat"))
-}
-
-/// Whether a `/proc/<pid>/stat` line shows the expected process generation
-/// still running. A zombie or dead entry has exited even though its stat file
-/// remains until it is reaped; unparseable input counts as running.
-fn stat_shows_live_generation(stat: &str, expected_start_ticks: u64) -> bool {
-    let Some((_, fields)) = stat.rsplit_once(") ") else {
-        return true;
-    };
-    let fields: Vec<&str> = fields.split_whitespace().collect();
-    let (Some(state), Some(start_ticks)) = (fields.first(), fields.get(19)) else {
-        return true;
-    };
-    match start_ticks.parse::<u64>() {
-        Ok(start_ticks) => {
-            start_ticks == expected_start_ticks && !matches!(*state, "Z" | "X" | "x")
-        }
-        Err(_) => true,
     }
 }
 
@@ -749,7 +722,6 @@ fn terminate_recorded_state_with<O: AtspiOps>(
     let mut errors = Vec::new();
     if let Err(error) = terminate_recorded_process(
         ops,
-        &state.accessibility_bus_address,
         REGISTRY_NAME,
         &state.registry,
         Path::new(AT_SPI_REGISTRY_PATH),
@@ -762,7 +734,6 @@ fn terminate_recorded_state_with<O: AtspiOps>(
     }
     if let Err(error) = terminate_recorded_process(
         ops,
-        &state.session_bus_address,
         A11Y_BUS_NAME,
         &state.launcher,
         Path::new(AT_SPI_BUS_LAUNCHER_PATH),
@@ -784,58 +755,55 @@ fn terminate_recorded_state_with<O: AtspiOps>(
     ))
 }
 
+/// Terminate one recorded owner generation. The private buses are not
+/// consulted: they usually die with the desktop, and a name owner is only a pid,
+/// never proof of ownership. The recorded generation is checked directly; an
+/// exited generation needs nothing, a live one must still match the recorded
+/// executable and private session environment before it is signalled, and any
+/// doubt keeps the state for a retry instead of discarding it.
 fn terminate_recorded_process<O: AtspiOps>(
     ops: &mut O,
-    bus_address: &str,
     name: &str,
     expected: &ProcessIdentity,
     executable: &Path,
     state: &AtspiSessionState,
     accessibility_bus_address: Option<&str>,
 ) -> Result<()> {
-    let owner_pid = match ops.owner_pid(bus_address, name) {
-        Ok(Some(owner_pid)) => owner_pid,
-        Ok(None) => return Ok(()),
-        // An unreachable private bus usually means the desktop died first. When
-        // the recorded owner generation is gone too, nothing is left to stop;
-        // otherwise keep the error so the state is retained for a retry.
-        Err(error) => {
-            if ops.recorded_owner_alive(expected) {
-                return Err(error);
-            }
-            tracing::debug!(%error, pid = expected.pid, %name, "private AT-SPI bus is gone and its recorded owner has exited");
-            return Ok(());
-        }
-    };
+    match ops.liveness(expected) {
+        Liveness::Gone => return Ok(()),
+        Liveness::Unknown => bail!(
+            "cannot verify recorded {name} owner pid {}; keeping its state for a retry",
+            expected.pid
+        ),
+        Liveness::Alive => {}
+    }
     let env = IsolatedAtspiEnv {
         display: state.display.clone(),
         session_bus_address: state.session_bus_address.clone(),
         xauthority: state.xauthority.clone(),
     };
-    let actual_start = match ops.validate_process(
-        owner_pid,
-        executable,
-        &env,
-        accessibility_bus_address,
-    ) {
-        Ok(start) => start,
-        Err(error) => {
-            tracing::warn!(%error, pid = owner_pid, %name, "refusing to signal mismatched AT-SPI owner");
-            return Ok(());
-        }
-    };
-    if !recorded_owner_matches(expected, owner_pid, actual_start) {
-        tracing::warn!(
-            pid = owner_pid,
-            expected_pid = expected.pid,
-            expected_start_ticks = expected.start_ticks,
-            actual_start_ticks = actual_start,
-            %name,
-            "refusing to signal a changed AT-SPI owner generation"
-        );
+    let actual_start =
+        match ops.validate_process(expected.pid, executable, &env, accessibility_bus_address) {
+            Ok(start) => start,
+            // The generation may have exited after the liveness read, which also
+            // fails validation; that leaves nothing to stop.
+            Err(_) if ops.liveness(expected) == Liveness::Gone => return Ok(()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "recorded {name} owner pid {} is running but no longer matches the \
+                         private session; refusing to signal it",
+                        expected.pid
+                    )
+                });
+            }
+        };
+    if !recorded_owner_matches(expected, expected.pid, actual_start) {
+        // The recorded generation exited between the liveness read and the
+        // validation; the pid now belongs to someone else.
         return Ok(());
     }
-    ops.terminate_process(owner_pid)
+    ops.terminate_generation(expected)
 }
 
 fn recorded_owner_matches(expected: &ProcessIdentity, owner_pid: u32, start_ticks: u64) -> bool {

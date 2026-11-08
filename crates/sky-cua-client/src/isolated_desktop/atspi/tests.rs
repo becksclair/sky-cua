@@ -16,6 +16,8 @@ struct FakeOps {
     fail_probe: bool,
     fail_registry_owner_query: bool,
     exited_records: Vec<u32>,
+    unknown_records: Vec<u32>,
+    fail_validation_for: Vec<u32>,
 }
 
 impl FakeOps {
@@ -33,6 +35,8 @@ impl FakeOps {
             fail_probe: false,
             fail_registry_owner_query: false,
             exited_records: Vec::new(),
+            unknown_records: Vec::new(),
+            fail_validation_for: Vec::new(),
         }
     }
 }
@@ -101,17 +105,28 @@ impl AtspiOps for FakeOps {
     ) -> Result<u64> {
         self.validations
             .push((pid, accessibility_bus_address.map(ToString::to_string)));
+        if self.fail_validation_for.contains(&pid) {
+            bail!("simulated environment mismatch for pid {pid}")
+        }
         Ok(u64::from(pid) * 10)
     }
 
-    fn terminate_process(&mut self, pid: u32) -> Result<()> {
-        self.terminated_records.push(pid);
-        Ok(())
+    // A live generation's start ticks are `pid * 10`, matching `validate_process`.
+    fn liveness(&mut self, expected: &ProcessIdentity) -> Liveness {
+        if self.unknown_records.contains(&expected.pid) {
+            Liveness::Unknown
+        } else if self.exited_records.contains(&expected.pid)
+            || expected.start_ticks != u64::from(expected.pid) * 10
+        {
+            Liveness::Gone
+        } else {
+            Liveness::Alive
+        }
     }
 
-    fn recorded_owner_alive(&mut self, expected: &ProcessIdentity) -> bool {
-        !self.exited_records.contains(&expected.pid)
-            && expected.start_ticks == u64::from(expected.pid) * 10
+    fn terminate_generation(&mut self, expected: &ProcessIdentity) -> Result<()> {
+        self.terminated_records.push(expected.pid);
+        Ok(())
     }
 
     fn terminate_spawned(&mut self, process: &mut SpawnedProcess) {
@@ -326,34 +341,48 @@ fn exact_owner_reuse_skips_redundant_persistence() {
 #[test]
 fn registry_teardown_failure_does_not_skip_launcher_teardown() {
     let mut ops = FakeOps::new(true);
-    ops.launcher_owner = Some(101);
-    ops.fail_registry_owner_query = true;
+    ops.fail_validation_for.push(202);
 
     let error = terminate_recorded_state_with(&mut ops, &test_state(false))
-        .expect_err("registry query failure must be reported");
+        .expect_err("a live registry that fails validation must be reported");
 
     assert!(error.to_string().contains("registry teardown failed"));
     assert_eq!(ops.terminated_records, vec![101]);
 }
 
 #[test]
-fn unreachable_bus_with_exited_owner_completes_teardown() {
+fn live_owners_are_terminated_without_consulting_the_bus() {
     let mut ops = FakeOps::new(true);
-    ops.launcher_owner = Some(101);
+    // The private buses died with the desktop; teardown must not depend on them.
     ops.fail_registry_owner_query = true;
+
+    terminate_recorded_state_with(&mut ops, &test_state(false))
+        .expect("validated live owners should be terminated");
+
+    assert_eq!(ops.terminated_records, vec![202, 101]);
+    assert_eq!(
+        ops.validations
+            .iter()
+            .map(|(pid, _)| *pid)
+            .collect::<Vec<_>>(),
+        vec![202, 101]
+    );
+}
+
+#[test]
+fn exited_owner_completes_teardown() {
+    let mut ops = FakeOps::new(true);
     ops.exited_records.push(202);
 
     terminate_recorded_state_with(&mut ops, &test_state(false))
-        .expect("an exited owner on a dead bus leaves nothing to stop");
+        .expect("an exited owner leaves nothing to stop");
 
     assert_eq!(ops.terminated_records, vec![101]);
 }
 
 #[test]
-fn unreachable_bus_with_reused_owner_pid_completes_teardown() {
+fn reused_owner_pid_completes_teardown_without_signalling_it() {
     let mut ops = FakeOps::new(true);
-    ops.launcher_owner = Some(101);
-    ops.fail_registry_owner_query = true;
     let mut state = test_state(false);
     state.registry.start_ticks = 9999;
 
@@ -363,18 +392,16 @@ fn unreachable_bus_with_reused_owner_pid_completes_teardown() {
     assert_eq!(ops.terminated_records, vec![101]);
 }
 
-fn stat_line(state: &str, start_ticks: u64) -> String {
-    let filler = vec!["0"; 18].join(" ");
-    format!("202 (at-spi2) registryd) {state} {filler} {start_ticks} 0 0")
-}
-
 #[test]
-fn stat_liveness_requires_the_recorded_generation_and_a_running_state() {
-    assert!(stat_shows_live_generation(&stat_line("S", 2020), 2020));
-    assert!(!stat_shows_live_generation(&stat_line("S", 9999), 2020));
-    assert!(!stat_shows_live_generation(&stat_line("Z", 2020), 2020));
-    assert!(!stat_shows_live_generation(&stat_line("X", 2020), 2020));
-    assert!(stat_shows_live_generation("malformed", 2020));
+fn unverifiable_owner_keeps_its_state_for_a_retry() {
+    let mut ops = FakeOps::new(true);
+    ops.unknown_records.push(202);
+
+    let error = terminate_recorded_state_with(&mut ops, &test_state(false))
+        .expect_err("an unverifiable owner must not be forgotten");
+
+    assert!(error.to_string().contains("registry teardown failed"));
+    assert_eq!(ops.terminated_records, vec![101]);
 }
 
 #[test]
@@ -475,4 +502,18 @@ fn state_round_trips_as_owner_only_json() {
     assert_eq!(mode, 0o600);
     fs::remove_file(path).expect("state should be removed");
     fs::remove_dir(directory).expect("state directory should be removed");
+}
+
+#[test]
+fn bus_daemon_pid_is_safe_inside_a_tokio_runtime() {
+    // The MCP server calls `ensure` from a tokio runtime; a blocking zbus call
+    // made directly on that thread panics instead of returning an error.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let result =
+        runtime.block_on(async { bus_daemon_pid("unix:path=/nonexistent/sky-cua-test-bus") });
+    assert!(result.is_err());
 }

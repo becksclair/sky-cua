@@ -1,4 +1,6 @@
-use super::owned_bus::{pid_is_dbus_daemon, read_owned_bus, remove_owned_bus_state};
+use super::owned_bus::{
+    parse_owned_bus, pid_is_dbus_daemon, read_owned_bus, remove_owned_bus_state,
+};
 use super::*;
 
 #[test]
@@ -42,9 +44,9 @@ fn isolated_desktop_removes_wayland_and_stale_atspi_bus_env() {
 
 #[test]
 fn isolated_desktop_socket_path_follows_runtime_dir_convention() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env::env_lock();
     let old = std::env::var_os("XDG_RUNTIME_DIR");
-    // SAFETY: serialized by ENV_LOCK; restored below.
+    // SAFETY: serialized by the crate-wide test env lock; restored below.
     unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000") };
     let path = isolated_socket_path(100).expect("socket path resolves");
     match old {
@@ -59,32 +61,38 @@ fn isolated_desktop_socket_path_follows_runtime_dir_convention() {
 
 #[test]
 fn isolated_desktop_socket_path_requires_runtime_dir() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env::env_lock();
     let old = std::env::var_os("XDG_RUNTIME_DIR");
-    // SAFETY: serialized by ENV_LOCK; restored below.
+    // SAFETY: serialized by the crate-wide test env lock; restored below.
     unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     let result = isolated_socket_path(100);
     if let Some(value) = old {
-        // SAFETY: serialized by ENV_LOCK; restores the pre-test value.
+        // SAFETY: serialized by the crate-wide test env lock; restores the pre-test value.
         unsafe { std::env::set_var("XDG_RUNTIME_DIR", value) }
     }
     assert!(result.is_err());
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn owned_bus_state_round_trips_and_rejects_malformed() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env::env_lock();
     let old = std::env::var_os("XDG_RUNTIME_DIR");
     let temp = std::env::temp_dir().join(format!("sky-cua-owned-bus-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&temp);
-    // SAFETY: serialized by ENV_LOCK; restored below.
+    // SAFETY: serialized by the crate-wide test env lock; restored below.
     unsafe { std::env::set_var("XDG_RUNTIME_DIR", &temp) };
 
     assert_eq!(read_owned_bus(123), None);
-    persist_owned_bus(123, "unix:path=/run/sandbox-bus,guid=abc", 4242);
+    // The record carries the bus daemon's generation, so use a live pid.
+    let pid = std::process::id();
+    persist_owned_bus(123, "unix:path=/run/sandbox-bus,guid=abc", pid);
+    let (address, identity) = read_owned_bus(123).expect("record round-trips");
+    assert_eq!(address, "unix:path=/run/sandbox-bus,guid=abc");
+    assert_eq!(identity.pid, pid);
     assert_eq!(
-        read_owned_bus(123),
-        Some(("unix:path=/run/sandbox-bus,guid=abc".to_string(), 4242))
+        identity.start_ticks,
+        super::owned_process::process_start_ticks(pid).unwrap()
     );
     // An init/invalid owner pid is rejected as malformed.
     persist_owned_bus(124, "unix:path=/run/x", 1);
@@ -101,11 +109,11 @@ fn owned_bus_state_round_trips_and_rejects_malformed() {
 
 #[test]
 fn recover_owned_bus_drops_a_stale_record() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env::env_lock();
     let old = std::env::var_os("XDG_RUNTIME_DIR");
     let temp = std::env::temp_dir().join(format!("sky-cua-stale-bus-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&temp);
-    // SAFETY: serialized by ENV_LOCK; restored below.
+    // SAFETY: serialized by the crate-wide test env lock; restored below.
     unsafe { std::env::set_var("XDG_RUNTIME_DIR", &temp) };
 
     // Persist a record whose pid is THIS process — not a `dbus-daemon`, so the
@@ -114,6 +122,46 @@ fn recover_owned_bus_drops_a_stale_record() {
     persist_owned_bus(200, "unix:path=/run/dead-bus", std::process::id());
     assert_eq!(recover_owned_bus(200), None);
     assert_eq!(read_owned_bus(200), None);
+
+    let _ = std::fs::remove_dir_all(&temp);
+    match old {
+        Some(value) => unsafe { std::env::set_var("XDG_RUNTIME_DIR", value) },
+        None => unsafe { std::env::remove_var("XDG_RUNTIME_DIR") },
+    }
+}
+
+#[test]
+fn owned_bus_record_without_a_generation_is_never_trusted() {
+    // A record from before generations were recorded has only address and pid;
+    // it cannot be verified, so it must not parse into something to signal.
+    assert_eq!(parse_owned_bus("unix:path=/run/bus\n4242\n"), None);
+    assert_eq!(parse_owned_bus("unix:path=/run/bus\n4242\nsoon\n"), None);
+    let (_, identity) =
+        parse_owned_bus("unix:path=/run/bus\n4242\n99\n").expect("well-formed record");
+    assert_eq!((identity.pid, identity.start_ticks), (4242, 99));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn reaping_a_record_for_an_exited_bus_removes_it_without_signalling() {
+    let _guard = crate::test_env::env_lock();
+    let old = std::env::var_os("XDG_RUNTIME_DIR");
+    let temp = std::env::temp_dir().join(format!("sky-cua-reap-bus-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp);
+    // SAFETY: serialized by the crate-wide test env lock; restored below.
+    unsafe { std::env::set_var("XDG_RUNTIME_DIR", &temp) };
+
+    // A record naming this test process with a different start time describes
+    // a generation that has exited; reaping must forget it and signal nothing.
+    let dir = temp.join("sky-cua");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("isolated-bus-201"),
+        format!("unix:path=/run/gone-bus\n{}\n1\n", std::process::id()),
+    )
+    .unwrap();
+    super::owned_bus::reap_persisted_owned_bus(201).expect("an exited bus needs no signal");
+    assert_eq!(read_owned_bus(201), None);
 
     let _ = std::fs::remove_dir_all(&temp);
     match old {
@@ -165,7 +213,3 @@ fn resolve_resolution_passes_explicit_values_through() {
     assert_eq!(resolve_resolution("1280x800"), "1280x800");
     assert_eq!(resolve_resolution("2560x1440"), "2560x1440");
 }
-
-/// Serializes the env-mutating socket-path tests so they cannot race on
-/// `XDG_RUNTIME_DIR` under the parallel test runner.
-static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

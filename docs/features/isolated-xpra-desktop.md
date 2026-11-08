@@ -133,7 +133,9 @@ Hidden development/operations subcommand `sky-cua-client isolated-desktop
   presence of the required dependencies (`xpra`, `openbox`, `xdotool`, the
   AT-SPI bus launcher, and the AT-SPI registry daemon) — all as structured
   fields.
-- `stop` tears the session down and removes a stale `/tmp/.X<N>-lock`.
+- `stop` tears the session down, including one whose xpra server already died,
+  and removes a stale `/tmp/.X<N>-lock`. With `display = "auto"` it acts on the
+  persisted display number and never allocates a new one.
 
 ## Behavior
 
@@ -202,6 +204,35 @@ filtered strictly by the known display number. A `display = "auto"` choice is
 persisted to `$XDG_RUNTIME_DIR/sky-cua/isolated-display` so later sessions reuse
 the same number.
 
+### Recorded ownership and abnormal death (Linux)
+
+`xpra stop` cannot reach a session whose xpra server already died, yet that
+session's Xorg server and private session `dbus-daemon` keep running, and the
+rest of the session (openbox, portals, gvfsd, dconf, AT-SPI) hangs off those two.
+So as soon as the display answers, `ensure` records both roots in
+`$XDG_RUNTIME_DIR/sky-cua/isolated-xpra-<N>.json`: the X server from the pid in
+`/tmp/.X<N>-lock`, accepted only when its arguments name `:N` or xpra's
+`$XDG_RUNTIME_DIR/xpra/<N>/` session directory, and the session bus from the
+pid the bus reports for itself. Each is recorded as a process generation (pid
+plus start time) with its executable. A reused session without a record is
+adopted the same way.
+
+Teardown stops the recorded roots after `xpra stop`. Every recorded process
+(these roots, the AT-SPI owners, and a client-owned fallback bus) is handled the
+same way: an exited generation needs nothing; a live one is signalled only if it
+still runs the recorded executable (a ` (deleted)` suffix after a package upgrade
+is accepted) and, for the X server, still belongs to this display. The signal
+goes through a pidfd opened at teardown time, `SIGTERM` escalates to `SIGKILL`,
+and a record is removed only once its process has exited. A process that cannot
+be verified or will not exit keeps its record and makes teardown report an
+error. A live-verified abnormal death (kill only xpra) leaves no lane process
+behind once Xorg and the session bus are stopped. `ensure` performs the same
+cleanup before restarting a display whose recorded xpra server died, and a
+stale `/tmp/.X<N>-lock` is removed only when its owning pid no longer exists.
+
+xpra starts with `--input-method=none`: the automation desktop needs no input
+method, and the default would start `ibus-daemon` as an extra detached subtree.
+
 ### Private AT-SPI lifecycle (Linux)
 
 Before `ensure` returns, the client starts
@@ -221,7 +252,9 @@ and process start-time identity. Compact owner state is persisted under
 preserves the direct-registry identity. A persistent per-display `flock` lease
 serializes Xpra/AT-SPI ensure and teardown across client processes, and ensure
 rechecks Xpra liveness after registry bootstrap. Teardown revalidates and
-terminates the registry, then the launcher, before stopping Xpra. The exact-owner
+terminates the registry, then the launcher, before stopping Xpra, using the
+recorded generations directly rather than the private buses, which may already
+be gone. The exact-owner
 record is removed only after teardown succeeds; an incomplete teardown retains
 it so a later ensure or stop can safely retry. This path never invokes the host
 systemd AT-SPI repair path, whose authority guard remains unchanged.
