@@ -3,6 +3,13 @@
 //! the deadline is polled, so a child that writes more than a pipe buffer
 //! (64 KiB on Linux) can still exit instead of blocking on `write(2)` until
 //! the deadline kills it and misreports a timeout.
+//!
+//! [`darwin`] holds the macOS process-identity primitives (socket peer pid,
+//! exact process generation, executable path) that stand in for `/proc` and
+//! `SO_PEERCRED` in lifecycle code.
+
+#[cfg(target_os = "macos")]
+pub mod darwin;
 
 use std::io::Read;
 use std::process::{Child, Command, Output};

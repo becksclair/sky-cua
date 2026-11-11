@@ -372,7 +372,7 @@ mod tests {
     }
 
     fn unique_temp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_paths::socket_temp_root().join(format!(
             "sky-cua-agent-cursor-{name}-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()

@@ -59,6 +59,11 @@ packaged adapter around that runtime, not the runtime boundary itself.
   including real app-shell child trees, semantic invoke/select/toggle
   routing, top-level window fallback snapshots, GDI screenshots, and
   SendInput actions
+- macOS desktop control through `sky-cua-macos`: Accessibility trees and
+  semantic actions on non-blocking per-application worker lanes,
+  ScreenCaptureKit screenshots, CGEvent input, and System Settings
+  permission guidance (the overlay, browser-use, and installer are not yet
+  ported; see `docs/features/macos-desktop-backend.md`)
 - Linux window targeting through a registry of KWin, X11, GNOME, COSMIC,
   Hyprland, and i3 backends, with terminal metadata selectors where available
 - Linux compositor cursor overlay and hide/show support through X11/XFixes,

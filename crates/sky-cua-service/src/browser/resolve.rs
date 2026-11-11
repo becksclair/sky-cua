@@ -523,7 +523,7 @@ mod tests {
         use super::*;
 
         fn unique_socket_dir() -> std::path::PathBuf {
-            std::env::temp_dir().join(format!(
+            crate::test_paths::socket_temp_root().join(format!(
                 "sky-cua-browser-resolve-{}-{}",
                 std::process::id(),
                 SystemTime::now()

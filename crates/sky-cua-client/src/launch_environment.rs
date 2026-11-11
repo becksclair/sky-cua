@@ -1043,7 +1043,9 @@ mod tests {
         assert!(ensure_health_satisfies_desktop_env(&response, &desktop_vars, true).is_ok());
     }
 
+    // Desktop-env health comparison is Linux-only (see ensure_health_satisfies_desktop_env).
     #[test]
+    #[cfg(target_os = "linux")]
     fn startup_health_rejects_service_missing_repaired_desktop_env() {
         let response = ServiceResponse::Health {
             ok: true,
@@ -1065,7 +1067,9 @@ mod tests {
         assert!(error.to_string().contains("XDG_RUNTIME_DIR"));
     }
 
+    // Desktop-env health comparison is Linux-only (see ensure_health_satisfies_desktop_env).
     #[test]
+    #[cfg(target_os = "linux")]
     fn startup_health_rejects_service_missing_spawn_only_repairs() {
         let response = ServiceResponse::Health {
             ok: true,
@@ -1095,7 +1099,9 @@ mod tests {
         assert!(detail.contains("ACCESSIBILITY_ENABLED"));
     }
 
+    // Desktop-env health comparison is Linux-only (see ensure_health_satisfies_desktop_env).
     #[test]
+    #[cfg(target_os = "linux")]
     fn shared_browser_daemon_health_can_ignore_client_specific_desktop_identity() {
         let response = ServiceResponse::Health {
             ok: true,
@@ -1366,7 +1372,9 @@ mod tests {
         assert!(parts.contains(&PathBuf::from("/bin")));
     }
 
+    // Desktop-env health comparison is Linux-only (see ensure_health_satisfies_desktop_env).
     #[test]
+    #[cfg(target_os = "linux")]
     fn startup_health_rejects_service_missing_client_desktop_env() {
         let _guard = crate::test_env::env_lock();
         let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
@@ -1437,7 +1445,9 @@ mod tests {
         result.expect("a dead pinned WAYLAND_DISPLAY must not make the healed daemon stale");
     }
 
+    // Desktop-env health comparison is Linux-only (see ensure_health_satisfies_desktop_env).
     #[test]
+    #[cfg(target_os = "linux")]
     fn startup_health_rejects_service_with_stale_desktop_env_value() {
         let _guard = crate::test_env::env_lock();
         let old_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");

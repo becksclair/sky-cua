@@ -120,6 +120,7 @@ pub(crate) fn point_for_element_for_backend(
         InputBackendKind::LinuxVirtualInput => point_for_linux_virtual_element(element, capture),
         InputBackendKind::SendInput
         | InputBackendKind::WindowsMessages
+        | InputBackendKind::CgEvent
         | InputBackendKind::None => point_for_element(element, None),
     }
 }
@@ -365,7 +366,9 @@ pub(crate) fn point_from_screenshot_pixels(
             }
             point
         }
-        InputBackendKind::SendInput | InputBackendKind::WindowsMessages => point,
+        InputBackendKind::SendInput
+        | InputBackendKind::WindowsMessages
+        | InputBackendKind::CgEvent => point,
         InputBackendKind::None => point,
     }
 }

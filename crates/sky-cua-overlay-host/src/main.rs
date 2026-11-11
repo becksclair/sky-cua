@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use calloop::{
     EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction, RegistrationToken,
     generic::Generic,
@@ -25,7 +25,7 @@ const CLIENT_IO_TIMEOUT: Duration = Duration::from_millis(500);
 
 // Initial `armed_interval` for the socket loop before its timer is first
 // armed; every armed period comes from OverlayHostBackend::pointer_tick_interval().
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 const SOCKET_LOOP_TICK_INTERVAL: Duration = Duration::from_millis(16);
 // Upper bound on the TCP accept loop's poll sleep; see `run_accept_loop`.
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(16);
@@ -237,7 +237,7 @@ fn serve_unix_socket_with(path: PathBuf) -> Result<()> {
     result
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn run_unix_socket_event_loop(listener: UnixListener) -> Result<()> {
     let mut event_loop: EventLoop<UnixSocketLoopState> =
         EventLoop::try_new().context("failed to create overlay host socket event loop")?;
@@ -275,7 +275,7 @@ fn run_unix_socket_event_loop(listener: UnixListener) -> Result<()> {
         .context("overlay host socket event loop failed")
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 struct UnixSocketLoopState {
     listener: UnixListener,
     backend: OverlayHostBackend,
@@ -286,7 +286,7 @@ struct UnixSocketLoopState {
     armed_interval: Duration,
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 impl UnixSocketLoopState {
     /// (Re)arms the frame-pacing timer when the backend now wants a faster
     /// cadence than the armed one, so a request that makes the overlay visible
@@ -353,6 +353,14 @@ impl UnixSocketLoopState {
     }
 }
 
+/// Off Linux there is no calloop/Wayland event source to integrate with, so
+/// the socket endpoint uses the shared polling accept loop. The backend there
+/// is the no-op overlay, which reports its own unsupported capabilities.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn run_unix_socket_event_loop(listener: UnixListener) -> Result<()> {
+    run_accept_loop(|| listener.accept().map(|(stream, _)| stream), "socket")
+}
+
 /// Shared serve loop for socket-style endpoints: poll a non-blocking listener
 /// for clients, switch each accepted stream to blocking mode with per-client
 /// I/O timeouts, handle one request per connection, advance frame-paced
@@ -381,7 +389,14 @@ fn run_accept_loop<S: ClientStream>(
                     .with_context(|| format!("failed to accept overlay host {label} connection"));
             }
         };
-        configure_client_stream(&stream, label)?;
+        // A client that disconnected before setup costs only its own
+        // connection: Darwin rejects the timeout options with `EINVAL` once
+        // the peer has closed, which is what a connect-and-drop readiness
+        // probe leaves behind.
+        if let Err(error) = configure_client_stream(&stream, label) {
+            eprintln!("overlay host {label} connection setup failed: {error:#}");
+            continue;
+        }
         match handle_socket_message(&mut backend, &mut stream) {
             Ok(shutdown) => {
                 if shutdown {
@@ -667,6 +682,41 @@ mod tests {
             .expect("server should exit cleanly");
     }
 
+    /// The service's readiness probe connects and disconnects at once. Darwin
+    /// then rejects the timeout setup on the accepted stream with `EINVAL`,
+    /// which must cost that one connection, never the host.
+    #[test]
+    fn unix_socket_serve_survives_a_client_that_disconnects_before_setup() {
+        pin_noop_overlay_backend();
+        let dir = unique_temp_dir("socket-probe");
+        let socket_path = dir.join("agent-cursor.sock");
+        let server_path = socket_path.clone();
+        let server = thread::spawn(move || serve_unix_socket(server_path));
+        wait_for_socket(&socket_path);
+
+        drop(UnixStream::connect(&socket_path).expect("connect readiness probe"));
+        // Let the host accept the already-closed connection.
+        thread::sleep(Duration::from_millis(80));
+
+        let shutdown = send(
+            &socket_path,
+            OverlayHostMessage {
+                version: OVERLAY_HOST_PROTOCOL_VERSION,
+                kind: OverlayHostMessageKind::Shutdown,
+                state: None,
+                gesture: None,
+                sequence: None,
+                reason: None,
+                arrival_wait: None,
+            },
+        );
+        assert!(shutdown.ok);
+        server
+            .join()
+            .expect("join overlay host socket server")
+            .expect("server should exit cleanly");
+    }
+
     #[test]
     fn unix_socket_serve_drops_idle_client_and_serves_next_request() {
         pin_noop_overlay_backend();
@@ -920,7 +970,14 @@ mod tests {
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        // macOS's per-user `$TMPDIR` is about 50 bytes deep, which leaves too
+        // little of the 104-byte `sun_path` for these socket fixtures.
+        let root = if cfg!(target_os = "macos") {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let dir = root.join(format!(
             "sky-cua-overlay-host-{name}-{}-{}",
             std::process::id(),
             SystemTime::now()

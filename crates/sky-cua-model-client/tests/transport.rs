@@ -60,6 +60,9 @@ impl Server {
                                 Err(error) => panic!("accept failed: {error}"),
                             }
                         };
+                        // BSD-derived systems (macOS) hand back accepted sockets
+                        // that inherit the listener's O_NONBLOCK; Linux does not.
+                        stream.set_nonblocking(false).unwrap();
                         stream
                             .set_read_timeout(Some(Duration::from_millis(500)))
                             .unwrap();

@@ -35,6 +35,10 @@ pub enum BackendErrorCode {
     /// server-side deadline and was abandoned so a single hung AT-SPI or
     /// portal call cannot wedge the shared desktop request lane forever.
     DesktopRequestDeadlineExceeded,
+    /// The operating system has not granted a privacy permission the
+    /// operation needs (for example macOS Accessibility, Screen Recording, or
+    /// event-synthesis access). The message names where the user grants it.
+    PermissionRequired,
 }
 
 impl BackendErrorCode {
@@ -64,6 +68,7 @@ impl BackendErrorCode {
             Self::NotImplemented => "NotImplemented",
             Self::Internal => "Internal",
             Self::DesktopRequestDeadlineExceeded => "DesktopRequestDeadlineExceeded",
+            Self::PermissionRequired => "PermissionRequired",
         }
     }
 }

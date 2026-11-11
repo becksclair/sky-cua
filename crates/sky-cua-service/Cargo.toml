@@ -35,3 +35,6 @@ sky-cua-linux = { path = "../sky-cua-linux" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 sky-cua-windows = { path = "../sky-cua-windows" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+sky-cua-macos = { path = "../sky-cua-macos" }

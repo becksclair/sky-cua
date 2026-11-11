@@ -882,7 +882,8 @@ fn keyboard_input_ready(environment: &EnvironmentInfo) -> bool {
         InputBackendKind::LinuxVirtualInput => virtual_input_keyboard_available(),
         InputBackendKind::None
         | InputBackendKind::SendInput
-        | InputBackendKind::WindowsMessages => false,
+        | InputBackendKind::WindowsMessages
+        | InputBackendKind::CgEvent => false,
     }
 }
 
@@ -895,6 +896,7 @@ fn keyboard_input_unavailable_reason(environment: &EnvironmentInfo) -> &'static 
         InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
             "Windows input backends are unavailable on Linux"
         }
+        InputBackendKind::CgEvent => "macOS input backends are unavailable on Linux",
         InputBackendKind::PortalRemoteDesktop | InputBackendKind::XTest => {
             unreachable!(
                 "keyboard_input_ready returns true for PortalRemoteDesktop and XTest, \

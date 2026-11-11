@@ -46,6 +46,28 @@ const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const STARTUP_DEADLINE: Duration = Duration::from_secs(24);
 #[cfg(unix)]
 const STALE_SERVICE_TERMINATION_GRACE: Duration = Duration::from_secs(3);
+
+/// The exact process generation recorded for a socket peer. macOS records the
+/// kernel start time beside the pid; other platforms record none and rely on
+/// the singleton-lock fence alone.
+#[cfg(target_os = "macos")]
+type PeerGeneration = sky_cua_platform::process::darwin::ProcessGeneration;
+#[cfg(not(target_os = "macos"))]
+type PeerGeneration = std::convert::Infallible;
+
+/// The daemon process on the other end of a connection, observed on that
+/// connection while it was answering. Only this observation, never an older
+/// one, may authorize signalling a stale daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(unix), allow(dead_code))]
+struct PeerProcess {
+    pid: u32,
+    /// Exact generation of `pid` (macOS). Always `None` on Linux, whose
+    /// replacement path keeps its pid-plus-lock-owner fence unchanged.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    generation: Option<PeerGeneration>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ServiceClient {
     endpoint: ServiceEndpoint,
@@ -204,7 +226,7 @@ impl ServiceClient {
         let timeout = remaining.min(STARTUP_HEALTH_READ_TIMEOUT);
         // Lifecycle decisions must never use a stream cached from an earlier
         // daemon generation.
-        let (response, owner_pid) = self.call_fresh_with_timeouts_with_peer(
+        let (response, owner) = self.call_fresh_with_timeouts_with_peer(
             &ServiceRequest::Health,
             timeout,
             remaining.min(STARTUP_HEALTH_WRITE_TIMEOUT),
@@ -221,7 +243,7 @@ impl ServiceClient {
                 {
                     anyhow!(SharedBrowserDaemonConflict { detail })
                 } else {
-                    anyhow!(StaleStartupService { detail, owner_pid })
+                    anyhow!(StaleStartupService { detail, owner })
                 }
             },
         )?;
@@ -234,8 +256,17 @@ impl ServiceClient {
             // Only browser-mode incompatibility stays fail-closed.
             return Err(anyhow!(StaleStartupService {
                 detail: error.to_string(),
-                owner_pid,
+                owner,
             }));
+        }
+        // A rebuilt service binary makes the running daemon stale the same
+        // way a changed desktop session does.
+        #[cfg(target_os = "macos")]
+        if let Some(detail) = owner
+            .and_then(|owner| owner.generation)
+            .and_then(|generation| service_binary_rebuilt_detail(&service_path(), &generation))
+        {
+            return Err(anyhow!(StaleStartupService { detail, owner }));
         }
         Ok(response)
     }
@@ -378,15 +409,15 @@ impl ServiceClient {
         request: &ServiceRequest,
         read_timeout: Duration,
         write_timeout: Duration,
-    ) -> Result<(ServiceResponse, Option<u32>)> {
+    ) -> Result<(ServiceResponse, Option<PeerProcess>)> {
         // Attempt 1: try cached stream if available.
         if let Some(stream) = self.take_cached_stream() {
             match self.perform_call_on_stream(stream, request, read_timeout, write_timeout) {
-                Ok((response, stream, owner_pid)) => {
+                Ok((response, stream, owner)) => {
                     self.store_cached_stream(stream);
-                    return Ok((response, owner_pid));
+                    return Ok((response, owner));
                 }
-                Err(failure) if is_stale_stream_failure(&failure) => {
+                Err(failure) if cached_stream_is_dead(&failure) => {
                     self.clear_cached_stream();
                     // Cache invalidation (dropping a dead cached stream) is
                     // orthogonal to whether re-sending the request is safe.
@@ -409,10 +440,10 @@ impl ServiceClient {
 
         // Attempt 2: fresh connection.
         let stream = self.endpoint.connect().map_err(CallFailure::BeforeWrite)?;
-        let (response, stream, owner_pid) =
+        let (response, stream, owner) =
             self.perform_call_on_stream(stream, request, read_timeout, write_timeout)?;
         self.store_cached_stream(stream);
-        Ok((response, owner_pid))
+        Ok((response, owner))
     }
 
     fn call_fresh_with_timeouts_with_peer(
@@ -421,16 +452,16 @@ impl ServiceClient {
         read_timeout: Duration,
         write_timeout: Duration,
         deadline: Instant,
-    ) -> Result<(ServiceResponse, Option<u32>)> {
+    ) -> Result<(ServiceResponse, Option<PeerProcess>)> {
         self.clear_cached_stream();
         let stream = self
             .endpoint
             .connect_before(deadline)
             .map_err(CallFailure::BeforeWrite)?;
-        let (response, stream, owner_pid) =
+        let (response, stream, owner) =
             self.perform_call_on_stream(stream, request, read_timeout, write_timeout)?;
         self.store_cached_stream(stream);
-        Ok((response, owner_pid))
+        Ok((response, owner))
     }
 
     fn perform_call_on_stream(
@@ -439,8 +470,8 @@ impl ServiceClient {
         request: &ServiceRequest,
         read_timeout: Duration,
         write_timeout: Duration,
-    ) -> Result<(ServiceResponse, EitherStream, Option<u32>), CallFailure> {
-        let owner_pid = stream.peer_pid();
+    ) -> Result<(ServiceResponse, EitherStream, Option<PeerProcess>), CallFailure> {
+        let owner = stream.peer_process();
         stream
             .set_read_timeout(Some(read_timeout))
             .context("failed to set a read timeout on the sky-cua-service socket")
@@ -490,7 +521,7 @@ impl ServiceClient {
         let response: ServiceResponse = serde_json::from_str(line.trim_end())
             .map_err(|error| CallFailure::AfterWrite(error.into()))?;
         let stream = reader.into_inner();
-        Ok((response, stream, owner_pid))
+        Ok((response, stream, owner))
     }
 
     fn new(launch_environment: &LaunchEnvironment) -> Result<Self> {
@@ -685,20 +716,20 @@ impl ServiceClient {
                     return Err(error);
                 }
                 Err(error) if is_stale_startup_health_error(&error) => {
-                    let owner_pid = error
+                    let owner = error
                         .downcast_ref::<StaleStartupService>()
-                        .and_then(|stale| stale.owner_pid)
+                        .and_then(|stale| stale.owner)
                         .ok_or_else(|| {
                             stale_owner_without_exact_generation_error(&self.endpoint)
                         })?;
                     if !may_replace_stale_owner {
                         return Err(anyhow!(SharedDaemonGenerationConflict {
-                            current_owner: owner_pid,
+                            current_owner: owner.pid,
                         }));
                     }
                     match self
                         .endpoint
-                        .terminate_fresh_stale_owner(owner_pid)
+                        .terminate_fresh_stale_owner(owner)
                         .context("failed during stale-owner termination")?
                     {
                         StaleOwnerTermination::Signalled => {
@@ -846,15 +877,20 @@ impl ServiceEndpoint {
         match self {
             #[cfg(target_os = "linux")]
             Self::Unix(path) => connect_unix_before(path, deadline).map(EitherStream::Unix),
+            // BSD Unix-domain connect never queues on a full backlog (it fails
+            // with ECONNREFUSED at once), so a blocking connect is bounded.
             #[cfg(all(unix, not(target_os = "linux")))]
-            Self::Unix(path) => UnixStream::connect(path)
-                .with_context(|| {
-                    format!(
-                        "failed to connect to sky-cua-service socket {}",
-                        path.display()
-                    )
-                })
-                .map(EitherStream::Unix),
+            Self::Unix(path) => {
+                let _ = deadline;
+                UnixStream::connect(path)
+                    .with_context(|| {
+                        format!(
+                            "failed to connect to sky-cua-service socket {}",
+                            path.display()
+                        )
+                    })
+                    .map(EitherStream::Unix)
+            }
             #[cfg(windows)]
             Self::Tcp(addr) => {
                 let _ = deadline;
@@ -898,21 +934,35 @@ impl ServiceEndpoint {
     }
 
     #[cfg(unix)]
-    fn terminate_fresh_stale_owner(&self, observed_peer_pid: u32) -> Result<StaleOwnerTermination> {
+    fn terminate_fresh_stale_owner(&self, observed: PeerProcess) -> Result<StaleOwnerTermination> {
         let Self::Unix(path) = self;
+        let observed_peer_pid = observed.pid;
         let current_owner = crate::daemon_singleton::read_owner_pid(path)?;
         if current_owner != Some(observed_peer_pid) {
             return Ok(StaleOwnerTermination::GenerationChanged);
         }
+        #[cfg(not(target_os = "macos"))]
         if !crate::daemon_singleton::pid_is_sky_cua_service(observed_peer_pid) {
             return Err(anyhow!(
                 "freshly observed stale owner pid {observed_peer_pid} no longer identifies as sky-cua-service; refusing to signal"
             ));
         }
+        // macOS verifies the exact generation observed on the health
+        // connection, not just the pid: a recycled pid is never signalled.
+        #[cfg(target_os = "macos")]
+        let Some(generation) = self.verified_service_generation(observed)? else {
+            return Ok(StaleOwnerTermination::GenerationChanged);
+        };
 
         // Re-read immediately before signalling to fence a daemon generation
         // change between identity verification and SIGTERM.
         if crate::daemon_singleton::read_owner_pid(path)? != Some(observed_peer_pid) {
+            return Ok(StaleOwnerTermination::GenerationChanged);
+        }
+        #[cfg(target_os = "macos")]
+        if sky_cua_platform::process::darwin::process_generation(observed_peer_pid)
+            != Some(generation)
+        {
             return Ok(StaleOwnerTermination::GenerationChanged);
         }
         let result = unsafe { libc::kill(observed_peer_pid as libc::pid_t, libc::SIGTERM) };
@@ -924,6 +974,26 @@ impl ServiceEndpoint {
             Ok(StaleOwnerTermination::Signalled)
         } else {
             Err(error.into())
+        }
+    }
+
+    /// The observed generation when it is still running and still identifies
+    /// as `sky-cua-service`; `None` when that generation has exited (its pid
+    /// is gone or now names a later process).
+    #[cfg(target_os = "macos")]
+    fn verified_service_generation(&self, observed: PeerProcess) -> Result<Option<PeerGeneration>> {
+        use crate::daemon_singleton::ServiceGenerationStatus;
+
+        let Some(generation) = observed.generation else {
+            return Err(stale_owner_without_exact_generation_error(self));
+        };
+        match crate::daemon_singleton::service_generation_status(&generation) {
+            ServiceGenerationStatus::Running => Ok(Some(generation)),
+            ServiceGenerationStatus::Exited => Ok(None),
+            ServiceGenerationStatus::NotService => Err(anyhow!(
+                "freshly observed stale owner pid {} no longer identifies as sky-cua-service; refusing to signal",
+                observed.pid
+            )),
         }
     }
 
@@ -1268,16 +1338,94 @@ impl EitherStream {
         }
     }
 
-    fn peer_pid(&self) -> Option<u32> {
+    fn peer_process(&self) -> Option<PeerProcess> {
         match self {
             #[cfg(target_os = "linux")]
-            Self::Unix(stream) => unix_stream_peer_pid(stream),
-            #[cfg(all(unix, not(target_os = "linux")))]
+            Self::Unix(stream) => unix_stream_peer_pid(stream).map(|pid| PeerProcess {
+                pid,
+                generation: None,
+            }),
+            #[cfg(target_os = "macos")]
+            Self::Unix(stream) => unix_stream_peer_process(stream),
+            #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
             Self::Unix(_stream) => None,
             #[cfg(windows)]
             Self::Tcp(_stream) => None,
         }
     }
+}
+
+/// The listening daemon behind `stream` and its exact generation.
+///
+/// `LOCAL_PEERPID` names the process that owned the listener when this
+/// connection was queued. Its start time is read while the connection is
+/// open, before the request is written: a reply on this stream then proves
+/// that process was still alive after the read, so the recorded generation
+/// is the daemon's own and not a later holder of a recycled pid.
+#[cfg(target_os = "macos")]
+fn unix_stream_peer_process(stream: &UnixStream) -> Option<PeerProcess> {
+    use sky_cua_platform::process::darwin;
+
+    let pid = darwin::local_peer_pid(stream)?;
+    let generation = darwin::process_generation(pid)?;
+    Some(PeerProcess {
+        pid,
+        generation: Some(generation),
+    })
+}
+
+/// Why the daemon generation is older than the service binary this client
+/// would launch, or `None` when it is not (or the binary cannot be inspected).
+///
+/// The rule: the daemon is stale when the binary's modification time is
+/// later than the daemon's start. A relink writes a fresh modification time.
+///
+/// Known miss: an install that preserves a modification time older than the
+/// running daemon's start (for example `cp -p` or an archive extraction of an
+/// older build) is not detected. Such an installer must restart the daemon
+/// itself or write the binary with a fresh modification time.
+///
+/// The inode change time is deliberately not used: cargo re-clones
+/// `target/<profile>/<bin>` from its deps output on invocations that do not
+/// relink, which keeps the modification time but sets a new change time, so
+/// merely running a cargo command would replace a daemon serving live
+/// sessions.
+#[cfg(target_os = "macos")]
+fn service_binary_rebuilt_detail(
+    service_path: &std::path::Path,
+    generation: &PeerGeneration,
+) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::metadata(service_path).ok()?;
+    let changed_at_nanos = u64::try_from(metadata.mtime())
+        .ok()?
+        .checked_mul(1_000_000_000)?
+        .checked_add(u64::try_from(metadata.mtime_nsec()).ok()?)?;
+    if !binary_changed_after_start(changed_at_nanos, generation.started_at_micros) {
+        return None;
+    }
+    if crate::daemon_singleton::service_generation_status(generation)
+        != crate::daemon_singleton::ServiceGenerationStatus::Running
+    {
+        return None;
+    }
+    Some(format!(
+        "service binary {} modified at {} (unix ns) after daemon pid {} started at {} (unix us); the daemon runs an outdated build",
+        service_path.display(),
+        changed_at_nanos,
+        generation.pid,
+        generation.started_at_micros,
+    ))
+}
+
+/// Whether a binary change at `changed_at_nanos` happened strictly after a
+/// process start at `started_at_micros` (both since the Unix epoch). The
+/// start time has microsecond resolution, so the comparison is at that
+/// resolution: a change within the start microsecond is not "after".
+#[cfg(any(target_os = "macos", test))]
+fn binary_changed_after_start(changed_at_nanos: u64, started_at_micros: u64) -> bool {
+    changed_at_nanos / 1_000 > started_at_micros
 }
 
 #[cfg(target_os = "linux")]
@@ -1389,6 +1537,18 @@ fn is_stale_stream_error(error: &anyhow::Error) -> bool {
         || error_string.contains("unexpected eof")
 }
 
+/// Whether a failure on a *cached* stream means the request should move to a
+/// fresh connection.
+///
+/// Any failure before the write qualifies on every platform: nothing reached
+/// the daemon, so a fresh connection is always safe. That is what covers
+/// Darwin, which rejects `setsockopt(SO_RCVTIMEO/SO_SNDTIMEO)` with `EINVAL`
+/// once the peer has closed, so a cached stream to an exited or replaced
+/// daemon fails while setting timeouts instead of at the write.
+fn cached_stream_is_dead(failure: &CallFailure) -> bool {
+    is_stale_stream_failure(failure) || matches!(failure, CallFailure::BeforeWrite(_))
+}
+
 /// [`is_stale_stream_error`] applied to a [`CallFailure`], for the cached
 /// -stream retry site (which sees the failure before it is converted to
 /// `anyhow::Error`).
@@ -1403,7 +1563,7 @@ fn is_stale_stream_failure(failure: &CallFailure) -> bool {
 #[derive(Debug)]
 struct StaleStartupService {
     detail: String,
-    owner_pid: Option<u32>,
+    owner: Option<PeerProcess>,
 }
 
 impl std::fmt::Display for StaleStartupService {
@@ -1519,6 +1679,27 @@ mod tests {
     };
 
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    mod macos_lifecycle;
+
+    #[test]
+    fn binary_change_must_follow_process_start_at_microsecond_resolution() {
+        let started_at_micros = 1_700_000_000_000_000;
+        let same_microsecond = started_at_micros * 1_000 + 999;
+        assert!(!binary_changed_after_start(
+            same_microsecond,
+            started_at_micros
+        ));
+        assert!(!binary_changed_after_start(
+            (started_at_micros - 1) * 1_000,
+            started_at_micros
+        ));
+        assert!(binary_changed_after_start(
+            (started_at_micros + 1) * 1_000,
+            started_at_micros
+        ));
+    }
 
     #[test]
     fn daemon_log_stem_is_derived_from_the_socket_file_stem() {
@@ -1802,6 +1983,21 @@ mod tests {
     }
 
     #[test]
+    fn cached_stream_failure_before_the_write_moves_to_a_fresh_connection() {
+        // Darwin's `EINVAL` from setting a timeout on a closed-peer stream.
+        assert!(cached_stream_is_dead(&CallFailure::BeforeWrite(anyhow!(
+            "failed to set a read timeout: Invalid argument (os error 22)"
+        ))));
+        assert!(cached_stream_is_dead(&CallFailure::AfterWrite(anyhow!(
+            "Broken pipe (os error 32)"
+        ))));
+        // After the write only a recognised dead-connection error qualifies.
+        assert!(!cached_stream_is_dead(&CallFailure::AfterWrite(anyhow!(
+            "invalid type: map, expected a string"
+        ))));
+    }
+
+    #[test]
     fn should_retry_error_recovers_call_failure_stage_from_the_error_chain() {
         let request = ServiceRequest::ExecuteAction {
             request: Box::new(action_request()),
@@ -1819,14 +2015,18 @@ mod tests {
     fn startup_health_stale_error_is_typed() {
         let error = anyhow!(StaleStartupService {
             detail: "DISPLAY".to_string(),
-            owner_pid: Some(4242),
+            owner: Some(PeerProcess {
+                pid: 4242,
+                generation: None,
+            }),
         });
 
         assert!(is_stale_startup_health_error(&error));
         assert_eq!(
             error
                 .downcast_ref::<StaleStartupService>()
-                .and_then(|error| error.owner_pid),
+                .and_then(|error| error.owner)
+                .map(|owner| owner.pid),
             Some(4242)
         );
     }
@@ -1884,7 +2084,10 @@ mod tests {
         let endpoint = ServiceEndpoint::Unix(socket_path);
 
         let outcome = endpoint
-            .terminate_fresh_stale_owner(std::process::id().saturating_add(1))
+            .terminate_fresh_stale_owner(PeerProcess {
+                pid: std::process::id().saturating_add(1),
+                generation: None,
+            })
             .expect("changed owner is a lifecycle race, not a termination failure");
 
         assert_eq!(outcome, StaleOwnerTermination::GenerationChanged);
@@ -1896,8 +2099,10 @@ mod tests {
         let _guard = crate::test_env::env_lock();
         let old_browser_control_mode =
             std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
+        let old_browser = std::env::var_os("SKY_CUA_BROWSER");
         unsafe {
             std::env::set_var(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV, "legacy");
+            std::env::set_var("SKY_CUA_BROWSER", "chrome");
         }
         let temp_dir = test_temp_dir("owner-race-successor");
         let socket_path = temp_dir.join("service.sock");
@@ -1906,13 +2111,27 @@ mod tests {
             format!("{}\n", std::process::id().saturating_add(1)),
         )
         .expect("write successor owner");
-        let mut successor_desktop_env = std::collections::BTreeMap::new();
+        let mut successor_desktop_env = HealthEnv::new();
         successor_desktop_env.insert("DISPLAY".to_string(), ":test".to_string());
+        // The first owner is stale on every platform through a conflicting
+        // browser selection (Linux additionally compares DISPLAY).
+        let stale_browser_env =
+            HealthEnv::from([("SKY_CUA_BROWSER".to_string(), "brave".to_string())]);
+        let successor_browser_env =
+            HealthEnv::from([("SKY_CUA_BROWSER".to_string(), "chrome".to_string())]);
         let server = spawn_health_sequence(
             socket_path.clone(),
             vec![
-                (PlatformBrowserControlMode::Legacy, Default::default()),
-                (PlatformBrowserControlMode::Legacy, successor_desktop_env),
+                (
+                    PlatformBrowserControlMode::Legacy,
+                    Default::default(),
+                    stale_browser_env,
+                ),
+                (
+                    PlatformBrowserControlMode::Legacy,
+                    successor_desktop_env,
+                    successor_browser_env,
+                ),
             ],
         );
         let client = test_client(socket_path);
@@ -1932,6 +2151,7 @@ mod tests {
             sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV,
             old_browser_control_mode,
         );
+        restore_env("SKY_CUA_BROWSER", old_browser);
         let _ = fs::remove_dir_all(temp_dir);
     }
 
@@ -1959,8 +2179,12 @@ mod tests {
         let _guard = crate::test_env::env_lock();
         let old_browser_control_mode =
             std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
+        let old_browser = std::env::var_os("SKY_CUA_BROWSER");
         unsafe {
             std::env::set_var(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV, "legacy");
+            // Conflicts with the helper's reported browser so the owner is
+            // stale on every platform, not only where DISPLAY is compared.
+            std::env::set_var("SKY_CUA_BROWSER", "chrome");
         }
         let temp_dir = test_temp_dir("waiter-generation-fence");
         let socket_path = temp_dir.join("service.sock");
@@ -2015,6 +2239,7 @@ mod tests {
             sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV,
             old_browser_control_mode,
         );
+        restore_env("SKY_CUA_BROWSER", old_browser);
         let _ = fs::remove_dir_all(temp_dir);
     }
 
@@ -2145,10 +2370,12 @@ mod tests {
         let old_count_path = std::env::var_os("SKY_CUA_TEST_SPAWN_COUNT_PATH");
         let old_browser_control_mode =
             std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
+        let old_owner_pid = std::env::var_os(FAKE_SERVICE_OWNER_PID_ENV);
         unsafe {
             std::env::set_var("SKY_CUA_SERVICE_PATH", &service_script);
             std::env::set_var("SKY_CUA_TEST_SPAWN_COUNT_PATH", &spawn_count_path);
             std::env::set_var(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV, "legacy");
+            std::env::set_var(FAKE_SERVICE_OWNER_PID_ENV, std::process::id().to_string());
         }
 
         let ready_paths = [temp_dir.join("ready-0"), temp_dir.join("ready-1")];
@@ -2184,6 +2411,7 @@ mod tests {
             let result = unsafe { libc::kill(owner_pid as libc::pid_t, libc::SIGTERM) };
             assert_eq!(result, 0, "terminate fake daemon");
         }
+        restore_env(FAKE_SERVICE_OWNER_PID_ENV, old_owner_pid);
         restore_env("SKY_CUA_SERVICE_PATH", old_service_path);
         restore_env("SKY_CUA_TEST_SPAWN_COUNT_PATH", old_count_path);
         restore_env(
@@ -2212,14 +2440,17 @@ mod tests {
         let old_socket_path = std::env::var_os(SERVICE_SOCKET_PATH_ENV);
         let old_browser_control_mode =
             std::env::var_os(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV);
+        let old_owner_pid = std::env::var_os(FAKE_SERVICE_OWNER_PID_ENV);
         unsafe {
             std::env::set_var("SKY_CUA_SERVICE_PATH", &service_script);
             std::env::set_var(SERVICE_SOCKET_PATH_ENV, &socket_path);
             std::env::set_var(sky_cua_platform::config::BROWSER_CONTROL_MODE_ENV, "legacy");
+            std::env::set_var(FAKE_SERVICE_OWNER_PID_ENV, std::process::id().to_string());
         }
 
         let result = run_respawn_test();
 
+        restore_env(FAKE_SERVICE_OWNER_PID_ENV, old_owner_pid);
         restore_env("SKY_CUA_SERVICE_PATH", old_service_path);
         restore_env(SERVICE_SOCKET_PATH_ENV, old_socket_path);
         restore_env(
@@ -2260,11 +2491,14 @@ mod tests {
     }
 
     fn test_temp_dir(stem: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "sky-cua-client-{stem}-{}-{:?}",
-            std::process::id(),
-            thread::current().id()
-        ));
+        // Kept short: macOS per-user temp dirs are ~50 bytes deep and a Unix
+        // socket path must fit in 104 bytes including its terminator.
+        let thread_id = format!("{:?}", thread::current().id());
+        let thread_number = thread_id
+            .trim_start_matches("ThreadId(")
+            .trim_end_matches(')');
+        let path =
+            std::env::temp_dir().join(format!("sc-{stem}-{}-{thread_number}", std::process::id(),));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("create test temp dir");
         path
@@ -2284,24 +2518,26 @@ mod tests {
         }
     }
 
+    type HealthEnv = std::collections::BTreeMap<String, String>;
+
     fn spawn_health_server(
         socket_path: PathBuf,
         mode: PlatformBrowserControlMode,
         requests: usize,
     ) -> thread::JoinHandle<()> {
-        spawn_health_sequence(socket_path, vec![(mode, Default::default()); requests])
+        spawn_health_sequence(
+            socket_path,
+            vec![(mode, Default::default(), Default::default()); requests],
+        )
     }
 
     fn spawn_health_sequence(
         socket_path: PathBuf,
-        responses: Vec<(
-            PlatformBrowserControlMode,
-            std::collections::BTreeMap<String, String>,
-        )>,
+        responses: Vec<(PlatformBrowserControlMode, HealthEnv, HealthEnv)>,
     ) -> thread::JoinHandle<()> {
         let listener = UnixListener::bind(&socket_path).expect("bind health server");
         thread::spawn(move || {
-            for (mode, desktop_env) in responses {
+            for (mode, desktop_env, browser_env) in responses {
                 let (mut stream, _) = listener.accept().expect("accept health request");
                 let mut request = String::new();
                 BufReader::new(stream.try_clone().expect("clone health stream"))
@@ -2316,7 +2552,7 @@ mod tests {
                         mode,
                     )],
                     desktop_env,
-                    browser_env: Default::default(),
+                    browser_env,
                 };
                 serde_json::to_writer(&mut stream, &response).expect("write health response");
                 stream.write_all(b"\n").expect("terminate health response");
@@ -2396,7 +2632,9 @@ mod tests {
                     PlatformBrowserControlMode::Legacy,
                 )],
                 desktop_env: Default::default(),
-                browser_env: Default::default(),
+                browser_env: [("SKY_CUA_BROWSER".to_string(), "brave".to_string())]
+                    .into_iter()
+                    .collect(),
             };
             serde_json::to_writer(&mut stream, &response).expect("write stale health response");
             stream.write_all(b"\n").expect("terminate stale response");
@@ -2458,12 +2696,29 @@ mod tests {
         }
     }
 
+    /// The fake daemon exits once this pid is gone, so a failed test never
+    /// leaves it serving a deleted temp directory forever.
+    const FAKE_SERVICE_OWNER_PID_ENV: &str = "SKY_CUA_TEST_FAKE_SERVICE_OWNER_PID";
+
     const FAKE_SERVICE: &str = r#"#!/usr/bin/env python3
 import json
 import fcntl
 import os
 import socket
 import sys
+import threading
+import time
+
+owner_pid = os.environ.get("SKY_CUA_TEST_FAKE_SERVICE_OWNER_PID")
+if owner_pid:
+    def exit_with_owner():
+        while True:
+            try:
+                os.kill(int(owner_pid), 0)
+            except ProcessLookupError:
+                os._exit(0)
+            time.sleep(0.2)
+    threading.Thread(target=exit_with_owner, daemon=True).start()
 
 if len(sys.argv) < 2 or sys.argv[1] != "daemon":
     raise SystemExit("expected daemon mode")

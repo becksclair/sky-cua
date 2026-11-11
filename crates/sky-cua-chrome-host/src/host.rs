@@ -726,6 +726,7 @@ struct PeerCred {
     uid: u32,
 }
 
+#[cfg(target_os = "linux")]
 fn peer_cred(stream: &UnixStream) -> Result<PeerCred> {
     let mut credential = libc::ucred {
         pid: 0,
@@ -748,6 +749,20 @@ fn peer_cred(stream: &UnixStream) -> Result<PeerCred> {
     Ok(PeerCred {
         uid: credential.uid,
     })
+}
+
+/// BSD-family peer credentials: `getpeereid(2)` reads the effective uid the
+/// kernel recorded for the connecting process at `connect(2)` time, the same
+/// value Linux exposes through `SO_PEERCRED`.
+#[cfg(not(target_os = "linux"))]
+fn peer_cred(stream: &UnixStream) -> Result<PeerCred> {
+    let mut uid: libc::uid_t = 0;
+    let mut gid: libc::gid_t = 0;
+    let result = unsafe { libc::getpeereid(stream.as_raw_fd(), &raw mut uid, &raw mut gid) };
+    if result == -1 {
+        return Err(io::Error::last_os_error()).context("getpeereid failed");
+    }
+    Ok(PeerCred { uid })
 }
 
 fn close_client_socket(client: &Client) {

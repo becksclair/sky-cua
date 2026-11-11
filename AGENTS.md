@@ -3,7 +3,7 @@
 ## Project Snapshot
 
 `sky-cua` is a cross-platform Codex Computer Use plugin built as a Rust workspace plus Python harnesses.
-The core runtime is Rust 2024: `sky-cua-client`, `sky-cua-service`, `sky-cua-platform`, and platform backends such as `sky-cua-linux` and `sky-cua-windows`.
+The core runtime is Rust 2024: `sky-cua-client`, `sky-cua-service`, `sky-cua-platform`, and platform backends such as `sky-cua-linux`, `sky-cua-windows`, and `sky-cua-macos`.
 Python under `scripts/` builds, installs, and live-smokes the plugin through `uv`, Ruff, basedpyright, and pytest.
 Subdirectories have their own `AGENTS.md`; read the nearest one before editing files there.
 
@@ -21,7 +21,11 @@ python3 scripts/build_plugin.py
 `just verify` runs the aggregate headless suite (Rust fmt/clippy/nextest,
 Python ruff/basedpyright/pytest, bun typecheck/test for the three JS projects,
 and the Kotlin companion unit tests when a JDK is present) in one command; see
-the root `justfile`.
+the root `justfile`. Its Rust step, `just verify-rust`, dispatches by host OS:
+`verify-rust-linux` covers `--workspace`; `verify-rust-macos` covers
+`--workspace --exclude sky-cua-linux --exclude sky-cua-cosmic-helper`, because
+those two crates need GStreamer/Wayland system libraries. On macOS replace
+`--workspace` in the commands above and below with that package set.
 
 Run Rust tests with `cargo nextest run`, not `cargo test`. Parts of the
 `sky-cua-service` suite mutate process-global state (`std::env::set_var` for
@@ -96,6 +100,7 @@ parallel structures (`goals/`, `specs/`, `prds/`, `rfcs/`, or similar).
 - Rust workspace: `crates/` -> [crates/AGENTS.md](crates/AGENTS.md)
 - Shared Rust model/contracts: `crates/sky-cua-platform/` -> [crates/sky-cua-platform/AGENTS.md](crates/sky-cua-platform/AGENTS.md)
 - Linux backend: `crates/sky-cua-linux/` -> [crates/sky-cua-linux/AGENTS.md](crates/sky-cua-linux/AGENTS.md)
+- macOS backend: `crates/sky-cua-macos/` -> [crates/sky-cua-macos/AGENTS.md](crates/sky-cua-macos/AGENTS.md)
 - Long-lived daemon: `crates/sky-cua-service/` -> [crates/sky-cua-service/AGENTS.md](crates/sky-cua-service/AGENTS.md)
 - MCP client: `crates/sky-cua-client/` -> [crates/sky-cua-client/AGENTS.md](crates/sky-cua-client/AGENTS.md)
 - Python harnesses: `scripts/` -> [scripts/AGENTS.md](scripts/AGENTS.md)
@@ -109,11 +114,12 @@ parallel structures (`goals/`, `specs/`, `prds/`, `rfcs/`, or similar).
 
 - Run the narrowest relevant crate/package check first, then the root check
   if shared contracts changed.
-- Rust runtime changes: `cargo fmt --check && cargo clippy --workspace
-  --all-targets && cargo nextest run --workspace` (use nextest, not `cargo test`;
-  see Root
-  Setup Commands for why). Add `cargo test --doc` when a change touches
-  doctests.
+- Rust runtime changes: `just verify-rust`, i.e. `cargo fmt --check && cargo
+  clippy --workspace --all-targets -- -D warnings && cargo nextest run
+  --workspace` on Linux, with the macOS package set above on macOS (use
+  nextest, not `cargo test`; see Root Setup Commands for why). A macOS run
+  does not compile or test the Linux backend; say so when a change touches
+  shared code. Add `cargo test --doc` when a change touches doctests.
 - Python harness changes: `uv run ruff format --check scripts && uv run ruff check scripts && uv run basedpyright && uv run pytest`.
 - Packaging changes: `python3 scripts/build_plugin.py` and inspect the
   staged bundle shape.

@@ -115,6 +115,7 @@ pub enum SessionKind {
     Wayland,
     X11,
     Windows,
+    Macos,
     Unsupported,
 }
 
@@ -125,6 +126,7 @@ pub enum CaptureBackendKind {
     PortalScreenshot,
     X11,
     WindowsGdi,
+    ScreenCaptureKit,
     None,
 }
 
@@ -136,6 +138,7 @@ pub enum InputBackendKind {
     XTest,
     SendInput,
     WindowsMessages,
+    CgEvent,
     None,
 }
 
@@ -144,6 +147,7 @@ pub enum InputBackendKind {
 pub enum SemanticBackendKind {
     Atspi,
     Uia,
+    MacosAccessibility,
     None,
 }
 

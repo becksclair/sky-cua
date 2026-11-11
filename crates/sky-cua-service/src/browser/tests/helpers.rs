@@ -15,7 +15,7 @@ use crate::browser::protocol::{
 use crate::browser::sockets::{CODEX_SOCKET_DIR_ENV, SKY_CUA_BROWSER_ENV, SKY_CUA_SOCKET_DIR_ENV};
 
 pub(super) fn unique_test_dir(prefix: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
+    crate::test_paths::socket_temp_root().join(format!(
         "{prefix}-{}-{}",
         std::process::id(),
         SystemTime::now()

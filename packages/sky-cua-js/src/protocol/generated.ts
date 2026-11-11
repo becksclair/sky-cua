@@ -254,6 +254,7 @@ export type CaptureBackendKind =
   | "portal_screenshot"
   | "x11"
   | "windows_gdi"
+  | "screen_capture_kit"
   | "none";
 
 export type DisplayRef = {
@@ -334,7 +335,8 @@ export type BackendServiceErrorCode =
   | "CuaActionOutcomeUnknown"
   | "NotImplemented"
   | "Internal"
-  | "DesktopRequestDeadlineExceeded";
+  | "DesktopRequestDeadlineExceeded"
+  | "PermissionRequired";
 
 export type ServiceErrorCode = CuaJsServiceErrorCode | BackendServiceErrorCode;
 

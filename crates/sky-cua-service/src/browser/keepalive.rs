@@ -367,7 +367,7 @@ mod tests {
 
     #[tokio::test]
     async fn supervisor_keeps_every_responsive_host_socket_alive() {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_paths::socket_temp_root().join(format!(
             "sky-cua-keepalive-multi-host-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -449,7 +449,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_newest_socket_falls_back_to_older_responsive_socket() {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_paths::socket_temp_root().join(format!(
             "sky-cua-keepalive-failover-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -488,7 +488,7 @@ mod tests {
 
     #[tokio::test]
     async fn accepting_but_silent_newest_socket_falls_back_to_older_responsive_socket() {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_paths::socket_temp_root().join(format!(
             "sky-cua-keepalive-silent-failover-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -540,7 +540,7 @@ mod tests {
 
     #[tokio::test]
     async fn repeated_irrelevant_json_cannot_extend_initial_response_deadline() {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::test_paths::socket_temp_root().join(format!(
             "sky-cua-keepalive-junk-failover-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()

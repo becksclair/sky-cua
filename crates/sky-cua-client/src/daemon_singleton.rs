@@ -115,6 +115,7 @@ pub(crate) fn read_owner_pid(socket_path: &Path) -> Result<Option<u32>> {
 /// Whether `pid` is a live `sky-cua-service` process (by `/proc/<pid>/exe` or its
 /// cmdline), so termination/teardown never signals an unrelated or recycled pid —
 /// in particular never the user's real daemon, which lives on a different socket.
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn pid_is_sky_cua_service(pid: u32) -> bool {
     let proc_root = PathBuf::from(format!("/proc/{pid}"));
     let exe_name = std::fs::read_link(proc_root.join("exe"))
@@ -124,8 +125,72 @@ pub(crate) fn pid_is_sky_cua_service(pid: u32) -> bool {
     process_identity_looks_like_sky_cua_service(exe_name.as_deref(), cmdline.as_deref())
 }
 
+/// Whether `pid` is a live `sky-cua-service` process, by the executable path
+/// the kernel records (`proc_pidpath`) or, when that path is unavailable (an
+/// unlinked binary after a rebuild), by the kernel command name, which is the
+/// executable's file name at exec.
+#[cfg(target_os = "macos")]
+pub(crate) fn pid_is_sky_cua_service(pid: u32) -> bool {
+    use sky_cua_platform::process::darwin;
+
+    let Some(info) = darwin::process_info(pid) else {
+        return false;
+    };
+    darwin_identity_looks_like_sky_cua_service(&info, darwin::process_executable_path(pid))
+}
+
+/// The state of one recorded daemon generation (macOS).
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServiceGenerationStatus {
+    /// The exact generation is running and identifies as `sky-cua-service`.
+    Running,
+    /// The generation has exited: the pid is gone or names a later process.
+    Exited,
+    /// The exact generation is running but does not identify as
+    /// `sky-cua-service`.
+    NotService,
+}
+
+/// Classify a recorded generation against the live process table.
+#[cfg(target_os = "macos")]
+pub(crate) fn service_generation_status(
+    generation: &sky_cua_platform::process::darwin::ProcessGeneration,
+) -> ServiceGenerationStatus {
+    use sky_cua_platform::process::darwin;
+
+    match darwin::process_info(generation.pid) {
+        Some(info) if info.generation == *generation => {
+            if darwin_identity_looks_like_sky_cua_service(
+                &info,
+                darwin::process_executable_path(generation.pid),
+            ) {
+                ServiceGenerationStatus::Running
+            } else {
+                ServiceGenerationStatus::NotService
+            }
+        }
+        _ => ServiceGenerationStatus::Exited,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn darwin_identity_looks_like_sky_cua_service(
+    info: &sky_cua_platform::process::darwin::ProcessInfo,
+    executable: Option<PathBuf>,
+) -> bool {
+    const SERVICE: &str = "sky-cua-service";
+    executable
+        .as_deref()
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == SERVICE)
+        || info.comm == SERVICE
+        || info.name == SERVICE
+}
+
 /// Pure identity check over an exe basename and cmdline bytes, split out so it is
 /// unit-testable without a live `/proc`.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn process_identity_looks_like_sky_cua_service(
     exe_name: Option<&OsStr>,
     cmdline: Option<&[u8]>,
