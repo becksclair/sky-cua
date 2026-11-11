@@ -6,7 +6,7 @@ use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use super::element::{
     AxElement, AxErr, as_bool, as_elements, as_point, as_size, as_string, cf_string,
 };
-use super::lane::LaneContext;
+use super::lane::{JobGuard, LaneContext};
 use super::tree::{Names, ax_error};
 use crate::types::MacWindow;
 use crate::window_match::{self, AxWindowCandidate, WindowMatch};
@@ -89,11 +89,16 @@ pub(crate) fn find_window(
 /// application activates. Every step is attempted; any failure is reported.
 pub(crate) fn raise(
     context: &LaneContext,
+    guard: &JobGuard<'_>,
     names: &Names,
     window: &MacWindow,
     app_windows: &[MacWindow],
 ) -> Result<(), BackendError> {
     let element = find_window(context, names, window, app_windows)?;
+    // Finding the window can outlast the caller's wait when the application
+    // answers slowly; a raise sent after that would steal focus from whatever
+    // request runs next.
+    guard.ensure_wanted()?;
     let mut failures = Vec::new();
     if let Err(error) = element.perform(&cf_string("AXRaise")) {
         if error == AxErr::INVALID_ELEMENT {
@@ -101,9 +106,11 @@ pub(crate) fn raise(
         }
         failures.push(format!("AXRaise: {error}"));
     }
+    guard.ensure_wanted()?;
     if let Err(error) = element.set_bool(&cf_string("AXMain"), true) {
         failures.push(format!("AXMain: {error}"));
     }
+    guard.ensure_wanted()?;
     if let Err(error) = context.app.set_bool(&cf_string("AXFrontmost"), true) {
         failures.push(format!("AXFrontmost: {error}"));
     }

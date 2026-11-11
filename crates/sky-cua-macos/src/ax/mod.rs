@@ -29,7 +29,7 @@ use sky_cua_platform::model::{ActionOutcome, ActionRequest, ElementNode};
 use crate::types::MacWindow;
 use actions::Executed;
 use element::AxElement;
-use lane::{DEADLINE_GRACE, LaneContext, Lanes};
+use lane::{DEADLINE_GRACE, JobGuard, LaneContext, Lanes};
 use refs::RefStore;
 use tree::{Names, WalkOutput};
 
@@ -140,9 +140,11 @@ impl AxRuntime {
         let output = self
             .inner
             .lanes
-            .run(pid, budget.deadline + DEADLINE_GRACE, move |context| {
-                read_on_lane(context, &request, &inner)
-            })
+            .run(
+                pid,
+                budget.deadline + DEADLINE_GRACE,
+                move |context, guard| read_on_lane(context, guard, &request, &inner),
+            )
             .await?;
         tracing::debug!(
             pid,
@@ -189,8 +191,8 @@ impl AxRuntime {
         let result = self
             .inner
             .lanes
-            .run(call.target.pid, ACTION_WAIT, move |_| {
-                actions::execute(&element, &action, &lane_mutating)
+            .run(call.target.pid, ACTION_WAIT, move |_, guard| {
+                actions::execute(&element, &action, &lane_mutating, guard)
             })
             .await;
         match result {
@@ -240,8 +242,8 @@ impl AxRuntime {
         let app_windows = app_windows.to_vec();
         self.inner
             .lanes
-            .run(window.pid, RAISE_WAIT, move |context| {
-                window::raise(context, &Names::new(), &window, &app_windows)
+            .run(window.pid, RAISE_WAIT, move |context, guard| {
+                window::raise(context, guard, &Names::new(), &window, &app_windows)
             })
             .await
     }
@@ -285,6 +287,7 @@ struct TreeRequest {
 
 fn read_on_lane(
     context: &LaneContext,
+    guard: &JobGuard<'_>,
     request: &TreeRequest,
     inner: &Inner,
 ) -> Result<WalkOutput, BackendError> {
@@ -318,6 +321,10 @@ fn read_on_lane(
     else {
         return Ok(first);
     };
+    if guard.is_abandoned() {
+        // Waking the tree writes to the application; an expired read must not.
+        return Ok(first);
+    }
     let first_attempt = inner
         .activation_attempted
         .lock()

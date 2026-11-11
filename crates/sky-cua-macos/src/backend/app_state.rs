@@ -337,11 +337,27 @@ fn tree_elements(
             vec![window_element(window, capture)]
         }
         Err(error) => {
+            let reports_coverage = [
+                BackendErrorCode::AccessibilityCoverageLimited.as_str(),
+                BackendErrorCode::AccessibilityUnavailable.as_str(),
+            ]
+            .contains(&error.code);
             diagnostics.push_code(
                 error.code,
                 "macOS Accessibility tree collection failed; using CoreGraphics window fallback tree",
                 Some(error.message),
             );
+            if !reports_coverage {
+                // The original code says why the read failed. Consumers that
+                // decide whether semantics were collected (AppShot) recognise
+                // only the accessibility coverage codes, so a timeout or a
+                // revoked grant must not read as a complete tree.
+                diagnostics.push(
+                    BackendErrorCode::AccessibilityCoverageLimited,
+                    "No macOS Accessibility tree was read for this window; the only element is the CoreGraphics window fallback",
+                    Some(format!("window_id={}", window.window_id)),
+                );
+            }
             vec![window_element(window, capture)]
         }
     }
@@ -506,8 +522,63 @@ mod tests {
         assert_eq!(elements.len(), 1);
         assert_eq!(elements[0].role, "window");
         let diagnostics = diagnostics.finish();
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].code, "PermissionRequired");
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>(),
+            ["PermissionRequired", "AccessibilityCoverageLimited"]
+        );
+    }
+
+    #[test]
+    fn a_timed_out_tree_read_is_reported_as_missing_coverage() {
+        let mut diagnostics = DiagnosticBuilder::new();
+        let elements = tree_elements(
+            &window(),
+            Some(TreeRead {
+                result: Err(BackendError::new(
+                    BackendErrorCode::DesktopRequestDeadlineExceeded,
+                    "pid 1 did not answer macOS Accessibility",
+                )),
+                retried_after: None,
+            }),
+            None,
+            &mut diagnostics,
+        );
+
+        assert_eq!(elements.len(), 1);
+        let codes: Vec<String> = diagnostics
+            .finish()
+            .into_iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                "DesktopRequestDeadlineExceeded",
+                "AccessibilityCoverageLimited"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_coverage_failure_is_not_reported_twice() {
+        let mut diagnostics = DiagnosticBuilder::new();
+        tree_elements(
+            &window(),
+            Some(TreeRead {
+                result: Err(BackendError::new(
+                    BackendErrorCode::AccessibilityCoverageLimited,
+                    "no AX window matched",
+                )),
+                retried_after: None,
+            }),
+            None,
+            &mut diagnostics,
+        );
+
+        assert_eq!(diagnostics.finish().len(), 1);
     }
 
     #[test]

@@ -8,6 +8,7 @@ use sky_cua_platform::model::{ActionName, ActionOutcome, ActionRequest};
 use super::element::{
     AxElement, AxErr, as_bool, as_f64, as_string, cf_number, cf_string, cf_strings, is_number,
 };
+use super::lane::JobGuard;
 use super::refs::AxRef;
 use super::tree::ax_error;
 use super::vocab::{self, ValueKind};
@@ -246,6 +247,19 @@ pub(crate) enum Executed {
     Unsupported,
 }
 
+/// Marks the action as possibly sent, unless its caller has already stopped
+/// waiting, in which case nothing is written.
+///
+/// The caller closes its side before it reads `mutating`, and this stores
+/// `mutating` before its final guard check, so the two cannot both miss each
+/// other: either the write is skipped, or the caller sees `mutating` and
+/// reports an unknown outcome instead of repeating the action physically.
+fn begin_write(mutating: &AtomicBool, guard: &JobGuard<'_>) -> Result<(), BackendError> {
+    guard.ensure_wanted()?;
+    mutating.store(true, Ordering::SeqCst);
+    guard.ensure_wanted()
+}
+
 /// Runs `action` on `element`. `mutating` is set just before the first call
 /// that can change application state, so a lost answer can be reported as
 /// an unknown outcome rather than as "not performed".
@@ -253,6 +267,7 @@ pub(crate) fn execute(
     element: &AxElement,
     action: &AxAction,
     mutating: &AtomicBool,
+    guard: &JobGuard<'_>,
 ) -> Result<Executed, BackendError> {
     let actions = || {
         element
@@ -260,13 +275,13 @@ pub(crate) fn execute(
             .map_err(|error| read_error(error, "action names"))
     };
     let perform = |name: &str| -> Result<(), BackendError> {
-        mutating.store(true, Ordering::SeqCst);
+        begin_write(mutating, guard)?;
         element
             .perform(&cf_string(name))
             .map_err(|error| write_error(error, name))
     };
     let set_bool = |attribute: &str, value: bool| -> Result<(), BackendError> {
-        mutating.store(true, Ordering::SeqCst);
+        begin_write(mutating, guard)?;
         element
             .set_bool(&cf_string(attribute), value)
             .map_err(|error| write_error(error, attribute))
@@ -377,7 +392,7 @@ pub(crate) fn execute(
                 "Performed AX action {name} through macOS Accessibility."
             )))
         }
-        AxAction::SetValue(value) => set_value(element, value, mutating),
+        AxAction::SetValue(value) => set_value(element, value, mutating, guard),
     }
 }
 
@@ -385,6 +400,7 @@ fn set_value(
     element: &AxElement,
     value: &str,
     mutating: &AtomicBool,
+    guard: &JobGuard<'_>,
 ) -> Result<Executed, BackendError> {
     let attribute = cf_string("AXValue");
     match element.is_settable(&attribute) {
@@ -410,7 +426,7 @@ fn set_value(
                 format!("set_value on a numeric {role} element requires a number, got {value:?}"),
             )
         })?;
-        mutating.store(true, Ordering::SeqCst);
+        begin_write(mutating, guard)?;
         element
             .set_attribute(&attribute, &cf_number(number))
             .map_err(|error| write_error(error, "AXValue"))?;
@@ -420,8 +436,8 @@ fn set_value(
     }
     // Text controls in Chromium and AppKit commit edits more reliably when
     // focused first; focus is best effort.
+    begin_write(mutating, guard)?;
     let _ = element.set_bool(&cf_string("AXFocused"), true);
-    mutating.store(true, Ordering::SeqCst);
     element
         .set_attribute(&attribute, &cf_string(value))
         .map_err(|error| write_error(error, "AXValue"))?;

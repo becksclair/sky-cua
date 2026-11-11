@@ -50,6 +50,34 @@ pub(crate) struct LaneContext {
     pub app: AxElement,
 }
 
+/// Lets a running job see that its caller has stopped waiting for it.
+///
+/// Abandoning a lane only detaches it; a job already running keeps going
+/// until its current AX message returns. A job consults its guard before
+/// every write to the application, so an expired request cannot raise a
+/// window, press a control, or set a value after its caller has moved on.
+pub(crate) struct JobGuard<'a> {
+    abandoned: &'a (dyn Fn() -> bool + 'a),
+}
+
+impl JobGuard<'_> {
+    #[must_use]
+    pub(crate) fn is_abandoned(&self) -> bool {
+        (self.abandoned)()
+    }
+
+    /// Fails when the caller has stopped waiting. Call before each AX write.
+    pub(crate) fn ensure_wanted(&self) -> Result<(), BackendError> {
+        if self.is_abandoned() {
+            return Err(BackendError::new(
+                BackendErrorCode::DesktopRequestDeadlineExceeded,
+                "the macOS Accessibility request expired before this write; nothing further was sent",
+            ));
+        }
+        Ok(())
+    }
+}
+
 type Job = Box<dyn FnOnce(&LaneContext) + Send + 'static>;
 
 struct LaneEntry {
@@ -88,9 +116,9 @@ impl Lanes {
     ) -> Result<T, BackendError>
     where
         T: Send + 'static,
-        F: FnOnce(&LaneContext) -> Result<T, BackendError> + Send + 'static,
+        F: FnOnce(&LaneContext, &JobGuard<'_>) -> Result<T, BackendError> + Send + 'static,
     {
-        let (sender, receiver) = oneshot::channel();
+        let (sender, mut receiver) = oneshot::channel();
         let lane_id = self.submit(
             pid,
             Box::new(move |context| {
@@ -98,10 +126,19 @@ impl Lanes {
                 if sender.is_closed() {
                     return;
                 }
-                let _ = sender.send(job(context));
+                let result = {
+                    let abandoned = || sender.is_closed();
+                    job(
+                        context,
+                        &JobGuard {
+                            abandoned: &abandoned,
+                        },
+                    )
+                };
+                let _ = sender.send(result);
             }),
         )?;
-        match tokio::time::timeout(wait, receiver).await {
+        match tokio::time::timeout(wait, &mut receiver).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => {
                 // The job was dropped without answering: the lane thread
@@ -113,6 +150,10 @@ impl Lanes {
                 ))
             }
             Err(_) => {
+                // Close before returning so a job that is still running sees
+                // the expiry at its next guard check, and before the caller
+                // inspects any state the job publishes.
+                receiver.close();
                 self.abandon(pid, lane_id);
                 Err(BackendError::new(
                     BackendErrorCode::DesktopRequestDeadlineExceeded,
@@ -244,7 +285,7 @@ mod tests {
         let stuck = lanes.clone();
         let slow = tokio::spawn(async move {
             stuck
-                .run(-101, Duration::from_millis(50), |_| {
+                .run(-101, Duration::from_millis(50), |_, _| {
                     std::thread::sleep(Duration::from_millis(400));
                     Ok(1)
                 })
@@ -253,7 +294,7 @@ mod tests {
         // Another process answers promptly while -101 is stuck.
         let started = Instant::now();
         let other = lanes
-            .run(-102, Duration::from_secs(1), |context| Ok(context.pid))
+            .run(-102, Duration::from_secs(1), |context, _| Ok(context.pid))
             .await
             .unwrap();
         assert_eq!(other, -102);
@@ -263,22 +304,45 @@ mod tests {
         assert_eq!(error.code, "DesktopRequestDeadlineExceeded");
         // The next request for the stuck pid gets a fresh lane and answers.
         let fresh = lanes
-            .run(-101, Duration::from_secs(1), |_| Ok(2))
+            .run(-101, Duration::from_secs(1), |_, _| Ok(2))
             .await
             .unwrap();
         assert_eq!(fresh, 2);
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn a_running_job_sees_that_its_caller_stopped_waiting() {
+        let lanes = Lanes::default();
+        let (observed, observation) = mpsc::channel();
+        let error = lanes
+            .run::<(), _>(-106, Duration::from_millis(50), move |_, guard| {
+                let before = guard.is_abandoned();
+                // Outlive the caller's wait, as a slow window lookup would.
+                std::thread::sleep(Duration::from_millis(300));
+                let _ = observed.send((before, guard.ensure_wanted().map_err(|error| error.code)));
+                Ok(())
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "DesktopRequestDeadlineExceeded");
+
+        let (before, after) = observation
+            .recv_timeout(Duration::from_secs(2))
+            .expect("the abandoned job still runs to its guard check");
+        assert!(!before, "a job whose caller is waiting is wanted");
+        assert_eq!(after, Err("DesktopRequestDeadlineExceeded"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn a_panicking_job_reports_internal_and_the_lane_is_replaced() {
         let lanes = Lanes::default();
         let error = lanes
-            .run::<(), _>(-103, Duration::from_secs(1), |_| panic!("boom"))
+            .run::<(), _>(-103, Duration::from_secs(1), |_, _| panic!("boom"))
             .await
             .unwrap_err();
         assert_eq!(error.code, "Internal");
         let value = lanes
-            .run(-103, Duration::from_secs(1), |_| Ok(3))
+            .run(-103, Duration::from_secs(1), |_, _| Ok(3))
             .await
             .unwrap();
         assert_eq!(value, 3);
@@ -290,14 +354,14 @@ mod tests {
     async fn idle_lanes_exit_and_are_recreated_on_demand() {
         let lanes = Lanes::default();
         lanes
-            .run(-105, Duration::from_secs(1), |_| Ok(()))
+            .run(-105, Duration::from_secs(1), |_, _| Ok(()))
             .await
             .unwrap();
         assert_eq!(lanes.live(), 1);
         tokio::time::sleep(IDLE_EXIT * 4).await;
         assert_eq!(lanes.live(), 0);
         let value = lanes
-            .run(-105, Duration::from_secs(1), |_| Ok(5))
+            .run(-105, Duration::from_secs(1), |_, _| Ok(5))
             .await
             .unwrap();
         assert_eq!(value, 5);
@@ -306,10 +370,10 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn jobs_for_one_process_run_in_order_on_one_lane() {
         let lanes = Lanes::default();
-        let first = lanes.run(-104, Duration::from_secs(1), |_| {
+        let first = lanes.run(-104, Duration::from_secs(1), |_, _| {
             Ok(std::thread::current().id())
         });
-        let second = lanes.run(-104, Duration::from_secs(1), |_| {
+        let second = lanes.run(-104, Duration::from_secs(1), |_, _| {
             Ok(std::thread::current().id())
         });
         let (first, second) = tokio::join!(first, second);
