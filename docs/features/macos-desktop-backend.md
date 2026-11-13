@@ -132,10 +132,12 @@ physical `set_value` fallback clicks its target first, so the select-all and
 typing that follow replace that element's content and not the content of
 whatever control already held key focus. When the request names an element,
 the fallback runs only if that element is a text field, text area, combo
-box, or search field (it carries text readback or reports editable text): on
-any other element the click would be the control's own action or take no key
-focus, so the request fails with `ActionUnsupportedForEnvironment`. A request
-that names no element is typed at the given point or the current focus. An
+box, or search field that is not flagged `readonly` (it reports editable
+text, or carries text readback): on any other element the click would be the
+control's own action or take no key focus, so the request fails with
+`ActionUnsupportedForEnvironment`. A named element that reports no bounds is
+an `InvalidRequest`, for `set_value` and for a scroll. A request that names
+no element is typed at the given point or the current focus. An
 empty value deletes the selected content.
 
 Physical typing goes through the system text-input path, so application

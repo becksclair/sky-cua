@@ -470,6 +470,12 @@ fn set_value_fallback_is_refused_for_an_element_that_is_not_a_text_control() {
     }
 
     assert!(plan_for(text_field(200.0, 100.0, 40.0, 20.0)).is_ok());
+    let read_only = ElementNode {
+        state_flags: vec!["readonly".to_string()],
+        ..text_field(200.0, 100.0, 40.0, 20.0)
+    };
+    let error = plan_for(read_only).unwrap_err();
+    assert_eq!(error.code, "ActionUnsupportedForEnvironment");
     let editable = ElementNode {
         role: "custom".to_string(),
         supports_editable_text: true,
@@ -491,13 +497,22 @@ fn a_named_target_that_cannot_be_resolved_is_never_dropped() {
             Some(below.clone()),
         );
         let half_a_point = action_request(
-            action,
+            action.clone(),
             serde_json::json!({ "value": "hello", "x": 1.0 }),
             None,
             None,
         );
 
-        for request in [out_of_view, half_a_point] {
+        let no_bounds = action_request(
+            action,
+            serde_json::json!({ "value": "hello" }),
+            Some(capture_with_rect(185.0, 83.0, 673.0, 439.0, 2.0)),
+            Some(ElementNode {
+                bounds: None,
+                ..below.clone()
+            }),
+        );
+        for request in [out_of_view, half_a_point, no_bounds] {
             let error = plan_action(&request).unwrap_err();
             assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
         }
@@ -579,8 +594,8 @@ fn element(x: f64, y: f64, width: f64, height: f64) -> ElementNode {
     }
 }
 
-/// A text field whose Accessibility value is not settable: it has text
-/// readback but does not report editable text.
+/// A text field Accessibility could not classify as settable or read-only:
+/// it has text readback but does not report editable text.
 fn text_field(x: f64, y: f64, width: f64, height: f64) -> ElementNode {
     ElementNode {
         role: "text".to_string(),

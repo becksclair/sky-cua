@@ -114,7 +114,7 @@ pub(super) fn plan_action(request: &ActionRequest) -> Result<ActionPlan, Backend
                 return Err(BackendError::new(
                     BackendErrorCode::ActionUnsupportedForEnvironment,
                     format!(
-                        "set_value was not performed through Accessibility and has no physical fallback for a {} element, which is not a text field; observe again if its value should be settable",
+                        "set_value was not performed through Accessibility and has no physical fallback for this {} element, which is not an editable text field; observe again if its value should be settable",
                         element.role
                     ),
                 ));
@@ -136,9 +136,12 @@ pub(super) fn plan_action(request: &ActionRequest) -> Result<ActionPlan, Backend
 /// focus (a label), and the typing lands in whatever held key focus. Text
 /// readback is present exactly on text fields, text areas, combo boxes, and
 /// search fields; the shared `text` and `combo_box` roles also cover static
-/// labels and pop-up buttons, so the role is not the test.
+/// labels and pop-up buttons, so the role is not the test. A field whose
+/// value Accessibility reports as not settable is flagged `readonly` and is
+/// not typed into either.
 fn accepts_typed_value(element: &ElementNode) -> bool {
-    element.supports_editable_text || element.text.is_some()
+    element.supports_editable_text
+        || (element.text.is_some() && !element.state_flags.iter().any(|flag| flag == "readonly"))
 }
 
 /// Posts `input` through CGEvent. Blocks; run on a blocking thread.
@@ -331,22 +334,25 @@ pub(super) fn desktop_action_point(request: &ActionRequest) -> Result<(f64, f64)
     to_desktop(request, point)
 }
 
-/// The action point of a request that names one (a resolved element with
-/// bounds, or `x`/`y`), else `None`. A named point that cannot be resolved is
-/// an error: the input never falls back to wherever the pointer or the key
-/// focus happens to be.
+/// The action point of a request that names one (a resolved element, or
+/// `x`/`y`), else `None`. A named target that cannot be resolved to a point,
+/// including an element that reports no bounds, is an error: the input never
+/// falls back to wherever the pointer or the key focus happens to be.
 fn optional_action_point(request: &ActionRequest) -> Result<Option<(f64, f64)>, BackendError> {
-    let names_element = request
-        .resolved_element
-        .as_ref()
-        .is_some_and(|element| element.bounds.is_some());
+    let element = request.resolved_element.as_ref();
     let names_point = ["x", "y"].iter().any(|field| {
         request
             .arguments
             .get(field)
             .is_some_and(|value| !value.is_null())
     });
-    if names_element || names_point {
+    if element.is_some_and(|element| element.bounds.is_none()) && !names_point {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            "the target element reports no bounds, so there is no point to act at; give x and y or observe again",
+        ));
+    }
+    if element.is_some() || names_point {
         desktop_action_point(request).map(Some)
     } else {
         Ok(None)
