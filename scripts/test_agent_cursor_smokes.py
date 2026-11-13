@@ -60,7 +60,7 @@ def test_x11_unsupported_smoke_cursor_message_uses_stream_pixels() -> None:
     message = live_agent_cursor_x11_overlay_smoke.cursor_message((330.0, 240.0), sequence=7)
 
     assert message == {
-        "version": 2,
+        "version": 3,
         "kind": "set_cursor",
         "state": {
             "visible": True,

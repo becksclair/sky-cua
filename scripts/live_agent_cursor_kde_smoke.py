@@ -75,7 +75,7 @@ CURSOR_ASSET_HOTSPOT_X = 20
 CURSOR_ASSET_HOTSPOT_Y = 22
 KWIN_EFFECT_NESTED_POINT = (420.0, 260.0)
 #: JSON-lines protocol version spoken by `sky-cua-overlay-host serve`.
-OVERLAY_HOST_PROTOCOL_VERSION = 2
+OVERLAY_HOST_PROTOCOL_VERSION = 3
 #: shared::motion::CURSOR_SETTLE_PX — the mover snaps once within this of its
 #: target, so a settled echo must sit within it.
 MOTION_SETTLE_TOLERANCE_PX = 1.5

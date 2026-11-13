@@ -139,7 +139,7 @@ def probe_overlay_host(env: Mapping[str, str]) -> dict[str, Any]:
 
 def cursor_message(point: tuple[float, float], *, sequence: int) -> dict[str, Any]:
     return {
-        "version": 2,
+        "version": 3,
         "kind": "set_cursor",
         "state": {
             "visible": True,
