@@ -50,8 +50,10 @@ use renderer_selection::SelectedRenderer;
 const MAX_ARRIVAL_WAIT_MS: u64 = 8_000;
 
 /// How long a request that makes the overlay visible waits for a surface to
-/// take its frame before replying anyway.
-const PRESENT_WAIT: Duration = Duration::from_millis(250);
+/// take its frame before replying anyway. A freshly started macOS host needs
+/// about 250 ms before its first panel can take a frame, and the service's
+/// request timeout is 2 s.
+const PRESENT_WAIT: Duration = Duration::from_secs(1);
 const PRESENT_POLL: Duration = Duration::from_millis(1);
 
 /// What a frame did.
@@ -85,6 +87,13 @@ pub struct OverlaySurfaceHost<P: SurfacePlatform> {
     last_motion: Option<MotionFrame>,
     frames_submitted: u64,
     last_frame_submission_us: Option<u128>,
+    /// The latest frame should have been visible but no surface took it. The
+    /// motion echo and the arrival wait never report an arrival meanwhile.
+    awaiting_surfaces: bool,
+    /// A wait for a surface to take a frame already ran out (a sleeping or
+    /// locked display). Later requests do not wait again until a frame lands,
+    /// so a display that shows nothing costs one wait, not one per request.
+    presentation_stalled: bool,
     platform: P,
 }
 
@@ -110,6 +119,8 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             last_motion: None,
             frames_submitted: 0,
             last_frame_submission_us: None,
+            awaiting_surfaces: false,
+            presentation_stalled: false,
             platform,
         };
         host.platform.prime()?;
@@ -256,6 +267,7 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
         }
 
         let deadline = Instant::now() + Duration::from_millis(wait.timeout_ms);
+        let mut unpresented_since: Option<Instant> = None;
         let outcome = loop {
             match self.arrival_status(wait) {
                 ArrivalStatus::Complete(outcome) => break outcome,
@@ -264,6 +276,18 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             let now = Instant::now();
             if now >= deadline {
                 break OverlayArrivalOutcome::DeadlineElapsed;
+            }
+            // Surfaces that stay unable to take a frame (a sleeping or locked
+            // display) cannot prove an arrival. Say so promptly instead of
+            // holding input for the whole deadline.
+            if self.awaiting_surfaces {
+                let waited = now.duration_since(*unpresented_since.get_or_insert(now));
+                if self.presentation_stalled || waited >= PRESENT_WAIT {
+                    self.presentation_stalled = true;
+                    break OverlayArrivalOutcome::Unavailable;
+                }
+            } else {
+                unpresented_since = None;
             }
             self.tick();
             if let ArrivalStatus::Complete(outcome) = self.arrival_status(wait) {
@@ -309,6 +333,10 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             || !self.state.as_ref().is_some_and(|state| state.visible)
         {
             return ArrivalStatus::Complete(OverlayArrivalOutcome::Unavailable);
+        }
+        if self.awaiting_surfaces {
+            // Nothing the driver reports has been shown yet.
+            return ArrivalStatus::Pending;
         }
         match wait.condition {
             OverlayArrivalCondition::GestureFeedbackStarted => {
@@ -419,10 +447,15 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
     /// a surface has actually shown: while the overlay should be visible but
     /// no surface can take a frame yet, the motion driver is not advanced and
     /// this waits, within `PRESENT_WAIT`, for the first frame that lands.
+    /// Once such a wait has run out it is not repeated until a frame lands.
     fn render_for_reply(&mut self) -> Result<()> {
         let deadline = Instant::now() + PRESENT_WAIT;
         loop {
-            if self.render_current()? == FrameOutcome::Settled || Instant::now() >= deadline {
+            if self.render_current()? == FrameOutcome::Settled {
+                return Ok(());
+            }
+            if self.presentation_stalled || Instant::now() >= deadline {
+                self.presentation_stalled = true;
                 return Ok(());
             }
             self.platform.wait(PRESENT_POLL);
@@ -441,6 +474,10 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             .set_hidden(should_hide_system_cursor)
             .context("failed to update the system cursor adapter")?;
         let outcome = self.draw()?;
+        self.awaiting_surfaces = outcome == FrameOutcome::AwaitingSurfaces;
+        if !self.awaiting_surfaces {
+            self.presentation_stalled = false;
+        }
         // A hot-plug the platform saw while committing takes effect now, so
         // the reply for this frame already reports it.
         self.apply_surface_change();
@@ -689,8 +726,12 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             y: f64::from(pos.y),
             heading_deg: f64::from(frame.heading_deg),
             speed: f64::from(frame.speed),
-            settled: frame.settled,
-            pending_gesture_feedback: self.motion.pending_gesture_feedback(),
+            // While no surface has taken the latest frame, the pose is one
+            // nobody was shown (it may predate a hide), so it is not reported
+            // as an arrival.
+            settled: frame.settled && !self.awaiting_surfaces,
+            pending_gesture_feedback: self.motion.pending_gesture_feedback()
+                || self.awaiting_surfaces,
         })
     }
 }

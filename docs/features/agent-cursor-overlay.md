@@ -451,11 +451,16 @@ frames until the window server lists them on screen, because a drawable
 presented to a window that is not being composited is held, and a layer whose
 drawables are all held blocks the next frame. AppKit commits ordering on a
 later run loop turn, so a request that makes the overlay visible runs the run
-loop and waits (up to 250 ms, typically 10 to 20 ms) for the first frame a
-panel actually takes before it replies. The motion driver is not advanced
-for frames nobody can see, so the reply's motion echo, which the service
-releases physical input on, always describes a cursor that is on screen. The
-frame that hides is drawn transparent before the panels are
+loop and waits for the first frame a panel actually takes before it replies:
+typically 10 to 20 ms, about 250 ms for the first show of a freshly started
+host, and at most 1 s. The motion driver is not advanced
+for frames nobody can see, and while no surface has taken the latest frame
+the motion echo reports neither a settled pose nor started feedback, so the
+service never releases physical input on a cursor that is not on screen. If
+the surfaces stay unable to take a frame (a sleeping or locked display), the
+wait runs out once, the arrival wait ends as `unavailable`, and input
+proceeds with that diagnostic; later requests do not wait again until a frame
+lands. The frame that hides is drawn transparent before the panels are
 ordered out, so they hold no stale image when they return.
 
 **System pointer.** Public macOS interfaces let only the frontmost
