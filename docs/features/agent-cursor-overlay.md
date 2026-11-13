@@ -711,8 +711,11 @@ computer-use pointer can be eyeballed over live content or a controlled backdrop
   sharing.** This follows from the capture-exclusion decision above. It also
   means a screenshot cannot be used to judge the overlay visually on macOS;
   the window list, the host's structured replies, and looking at the screen
-  are the evidence. A development build can drop the sharing type to capture
-  it.
+  are the evidence. For visual debugging, start the daemon with the
+  development switch `SKY_CUA_OVERLAY_CAPTURE_EXCLUSION=off`: the panels are
+  then shareable, the host reports `capture_exclusion=false`, and the service
+  falls back to hiding the overlay around its own captures. It is not an
+  operator setting and the installer does not forward it.
 - **macOS: capture exclusion is proven on macOS 27.2 only.** On a system
   that ignored the sharing type, captures would contain the overlay while the
   host still reported exclusion; `SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE=always`

@@ -69,6 +69,13 @@ use presence::{FrameStart, PanelPresence};
 const BARRIER_TIMEOUT: Duration = Duration::from_millis(1500);
 const BARRIER_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
+/// Development switch. `off` creates shareable panels, so screenshots and
+/// recordings show the overlay for visual debugging; the host then reports no
+/// capture exclusion and the service hides the overlay around its own
+/// captures instead. Not an operator setting: the default is the deliberate
+/// product behaviour (see `create_panel`).
+const CAPTURE_EXCLUSION_ENV: &str = "SKY_CUA_OVERLAY_CAPTURE_EXCLUSION";
+
 const SYSTEM_CURSOR_REASON: &str = "macOS lets only the frontmost application hide the pointer through public interfaces, and the click-through overlay never becomes frontmost, so the system pointer stays visible";
 const POINTER_TRACKING_REASON: &str =
     "not used on macOS: the system pointer stays visible, so the agent cursor does not follow it";
@@ -89,6 +96,8 @@ pub struct MacosPanelPlatform {
     /// kept only until the host has dropped the wgpu surfaces made from them.
     retired: Vec<OverlayPanel>,
     presence: PanelPresence,
+    /// Whether the panels are non-shareable, and so left out of captures.
+    capture_excluded: bool,
     /// The visibility the current frame was begun with.
     frame_visible: bool,
     /// Set by the screen-parameters observer; consumed by the next frame.
@@ -139,7 +148,9 @@ impl MacosPanelPlatform {
         app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         app.finishLaunching();
 
-        let panels = create_panels(mtm)?;
+        let capture_excluded =
+            capture_exclusion_enabled(std::env::var(CAPTURE_EXCLUSION_ENV).ok().as_deref());
+        let panels = create_panels(mtm, capture_excluded)?;
         let screens_changed = Rc::new(Cell::new(false));
         let screens_observer = observe_screen_changes(Rc::clone(&screens_changed));
         Ok(Self {
@@ -148,6 +159,7 @@ impl MacosPanelPlatform {
             panels,
             retired: Vec::new(),
             presence: PanelPresence::OrderedOut,
+            capture_excluded,
             frame_visible: false,
             screens_changed,
             screens_observer,
@@ -183,7 +195,7 @@ impl MacosPanelPlatform {
     /// existing panels when no screen is attached, and retries on a later
     /// frame.
     fn rebuild_panels(&mut self) -> bool {
-        let Ok(panels) = create_panels(self.mtm) else {
+        let Ok(panels) = create_panels(self.mtm, self.capture_excluded) else {
             return false;
         };
         self.order_out();
@@ -306,8 +318,7 @@ impl SurfacePlatform for MacosPanelPlatform {
     }
 
     fn excluded_from_capture(&self) -> bool {
-        // Every panel is created non-shareable; see `create_panel`.
-        true
+        self.capture_excluded
     }
 
     fn fail_closed(&mut self) {
@@ -369,18 +380,34 @@ impl SurfacePlatform for MacosPanelPlatform {
     }
 }
 
-fn create_panels(mtm: MainThreadMarker) -> Result<Vec<OverlayPanel>> {
+/// Capture exclusion is on unless the development switch turns it off.
+fn capture_exclusion_enabled(value: Option<&str>) -> bool {
+    !matches!(
+        value
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "off" | "never" | "false" | "0"
+    )
+}
+
+fn create_panels(mtm: MainThreadMarker, capture_excluded: bool) -> Result<Vec<OverlayPanel>> {
     let screens = display::screens(mtm).context("an attached screen has no display identifier")?;
     if screens.is_empty() {
         bail!("no screen is attached");
     }
     screens
         .iter()
-        .map(|screen| create_panel(mtm, screen))
+        .map(|screen| create_panel(mtm, screen, capture_excluded))
         .collect()
 }
 
-fn create_panel(mtm: MainThreadMarker, screen: &ScreenInfo) -> Result<OverlayPanel> {
+fn create_panel(
+    mtm: MainThreadMarker,
+    screen: &ScreenInfo,
+    capture_excluded: bool,
+) -> Result<OverlayPanel> {
     let style = NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel;
     let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
         NSPanel::alloc(mtm),
@@ -402,8 +429,11 @@ fn create_panel(mtm: MainThreadMarker, screen: &ScreenInfo) -> Result<OverlayPan
     // blink it off around every observation. The cost, accepted on purpose,
     // is that the overlay is also absent from the user's own screenshots,
     // recordings, and screen sharing. See "Capture exclusion" in
-    // docs/features/agent-cursor-overlay.md.
-    panel.setSharingType(NSWindowSharingType::None);
+    // docs/features/agent-cursor-overlay.md. `CAPTURE_EXCLUSION_ENV` turns it
+    // off for visual debugging.
+    if capture_excluded {
+        panel.setSharingType(NSWindowSharingType::None);
+    }
     // A panel hides when its application is inactive by default; this
     // application is never active.
     panel.setHidesOnDeactivate(false);
@@ -453,5 +483,20 @@ fn observe_screen_changes(
             None,
             &block,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::capture_exclusion_enabled;
+
+    #[test]
+    fn capture_exclusion_is_on_unless_the_development_switch_turns_it_off() {
+        for value in [None, Some(""), Some("on"), Some("auto"), Some("anything")] {
+            assert!(capture_exclusion_enabled(value), "{value:?}");
+        }
+        for value in ["off", " OFF ", "never", "false", "0"] {
+            assert!(!capture_exclusion_enabled(Some(value)), "{value:?}");
+        }
     }
 }

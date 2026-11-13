@@ -127,8 +127,9 @@ driver ported from the Android companion.
 - The panels are non-shareable on purpose (`NSWindow.sharingType = none`;
   see "Capture exclusion" in `docs/features/agent-cursor-overlay.md`), so
   `screencapture` and ScreenCaptureKit never show the overlay. To capture it
-  for visual work, drop the `setSharingType` call in a development build; do
-  not ship that.
+  for visual work, start the host (or the daemon that spawns it) with
+  `SKY_CUA_OVERLAY_CAPTURE_EXCLUSION=off`. It is a development switch,
+  exempted in `scripts/test_env_key_contract.py`, not an operator setting.
 - The host exits when its parent process id changes. Attaching a debugger
   re-parents it, so launch the host under the debugger instead of attaching.
 - A build into `target/release` replaces the binary a registered release
