@@ -222,7 +222,8 @@ impl WgpuOverlayRenderer {
         &self.info
     }
 
-    /// Render a frame to every active surface.
+    /// Render a frame to every active surface, and return how many surfaces
+    /// took it. An occluded surface is skipped and not counted.
     ///
     /// `surfaces` and `requests` must have the same length; indices correspond
     /// to the host's layer ordering.
@@ -230,7 +231,7 @@ impl WgpuOverlayRenderer {
         &mut self,
         surfaces: &mut [Option<SurfaceGuard>],
         requests: &[SurfaceDrawRequest],
-    ) -> Result<()> {
+    ) -> Result<usize> {
         if requests.len() != surfaces.len() {
             bail!(
                 "draw request count ({}) does not match surface count ({})",
@@ -239,6 +240,7 @@ impl WgpuOverlayRenderer {
             );
         }
 
+        let mut presented = 0;
         for (index, request) in requests.iter().enumerate() {
             let Some(spec) = request else {
                 continue;
@@ -340,9 +342,10 @@ impl WgpuOverlayRenderer {
             }
             self.queue.submit(Some(encoder.finish()));
             frame.present();
+            presented += 1;
         }
 
-        Ok(())
+        Ok(presented)
     }
 
     fn ensure_pipeline(&mut self, format: ::wgpu::TextureFormat) {

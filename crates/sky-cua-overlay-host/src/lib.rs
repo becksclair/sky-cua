@@ -607,7 +607,7 @@ impl OverlayHostBackend {
 
         #[cfg(target_os = "macos")]
         if matches!(mode, "auto" | "" | "macos" | "macos-panel" | "macos_panel") {
-            return match macos_panel::connect() {
+            return match macos_panel::with_autorelease_pool(macos_panel::connect) {
                 Ok(backend) => Self::MacosPanel(Box::new(backend)),
                 Err(error) => Self::Noop(NoopOverlayBackend::with_reason(format!(
                     "macOS overlay panel unavailable: {error:#}"
@@ -626,7 +626,9 @@ impl OverlayHostBackend {
             #[cfg(target_os = "linux")]
             Self::LayerShell(backend) => backend.handle_message(message),
             #[cfg(target_os = "macos")]
-            Self::MacosPanel(backend) => backend.handle_message(message),
+            Self::MacosPanel(backend) => {
+                macos_panel::with_autorelease_pool(|| backend.handle_message(message))
+            }
         }
     }
 
@@ -636,7 +638,7 @@ impl OverlayHostBackend {
             #[cfg(target_os = "linux")]
             Self::LayerShell(backend) => backend.tick(),
             #[cfg(target_os = "macos")]
-            Self::MacosPanel(backend) => backend.tick(),
+            Self::MacosPanel(backend) => macos_panel::with_autorelease_pool(|| backend.tick()),
         }
     }
 
@@ -650,7 +652,9 @@ impl OverlayHostBackend {
             #[cfg(target_os = "linux")]
             Self::LayerShell(backend) => backend.idle(duration),
             #[cfg(target_os = "macos")]
-            Self::MacosPanel(backend) => backend.idle(duration),
+            Self::MacosPanel(backend) => {
+                macos_panel::with_autorelease_pool(|| backend.idle(duration));
+            }
         }
     }
 
@@ -661,7 +665,9 @@ impl OverlayHostBackend {
     pub fn dispatch_native_events(&mut self) {
         match self {
             Self::Noop(_backend) => {}
-            Self::MacosPanel(backend) => backend.platform_mut().dispatch_app_events(),
+            Self::MacosPanel(backend) => macos_panel::with_autorelease_pool(|| {
+                backend.platform_mut().dispatch_app_events();
+            }),
         }
     }
 

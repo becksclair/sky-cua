@@ -140,15 +140,21 @@ fn serve_json_lines() -> Result<()> {
         }
     });
 
+    #[cfg(unix)]
+    let parent = ParentWatch::new();
     loop {
+        // Stdin reaches EOF only when every holder of its write end is gone,
+        // which a starter that died is not guaranteed to be the last of.
+        #[cfg(unix)]
+        if parent.orphaned() {
+            shut_down_backend(&mut backend);
+            return Ok(());
+        }
         let line = match line_rx.recv_timeout(backend.pointer_tick_interval()) {
             Ok(line) => line.context("failed to read overlay host request")?,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 backend.tick();
-                // This loop waits on the request channel, not on the main run
-                // loop, which AppKit needs turned to commit window changes.
-                #[cfg(target_os = "macos")]
-                backend.idle(Duration::from_millis(1));
+                turn_native_loop(&mut backend);
                 continue;
             }
             // Stdin reached EOF: the parent is gone, serve is done.
@@ -169,7 +175,19 @@ fn serve_json_lines() -> Result<()> {
         if shutdown {
             return Ok(());
         }
+        // Also on the request path: a caller that sends faster than the tick
+        // interval never lets the receive time out.
+        turn_native_loop(&mut backend);
     }
+}
+
+/// This transport waits on the request channel, not on the main run loop,
+/// which AppKit needs turned to commit window changes. A no-op elsewhere.
+fn turn_native_loop(backend: &mut OverlayHostBackend) {
+    #[cfg(target_os = "macos")]
+    backend.idle(Duration::from_millis(1));
+    #[cfg(not(target_os = "macos"))]
+    let _ = backend;
 }
 
 fn serve_tcp(addr: String) -> Result<()> {

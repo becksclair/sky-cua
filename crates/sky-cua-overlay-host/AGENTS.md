@@ -126,7 +126,8 @@ driver ported from the Android companion.
   it; keep both.
 - The panels are non-shareable on purpose (`NSWindow.sharingType = none`;
   see "Capture exclusion" in `docs/features/agent-cursor-overlay.md`), so
-  `screencapture` and ScreenCaptureKit never show the overlay. To capture it
+  on macOS 27 and later `screencapture` and ScreenCaptureKit do not show the
+  overlay (the host claims capture exclusion only there). To capture it
   for visual work, start the host (or the daemon that spawns it) with
   `SKY_CUA_OVERLAY_CAPTURE_EXCLUSION=off`. It is a development switch,
   exempted in `scripts/test_env_key_contract.py`, not an operator setting.

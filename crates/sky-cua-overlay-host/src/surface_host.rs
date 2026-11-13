@@ -49,6 +49,23 @@ use renderer_selection::SelectedRenderer;
 /// Upper bound on one held `wait_for_arrival` request.
 const MAX_ARRIVAL_WAIT_MS: u64 = 8_000;
 
+/// How long a request that makes the overlay visible waits for a surface to
+/// take its frame before replying anyway.
+const PRESENT_WAIT: Duration = Duration::from_millis(250);
+const PRESENT_POLL: Duration = Duration::from_millis(1);
+
+/// What a frame did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameOutcome {
+    /// A surface took the frame, or the overlay is hidden and had nothing to
+    /// show.
+    Settled,
+    /// The overlay should be visible, but no surface could take a frame yet
+    /// (a platform still bringing its surfaces on screen, or surfaces the
+    /// windowing system reports as occluded).
+    AwaitingSurfaces,
+}
+
 // Field order is drop order: the renderer and the wgpu surfaces go before the
 // instance, and all of them before the platform's native surfaces.
 #[derive(Debug)]
@@ -186,16 +203,22 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             self.platform.begin_capture_barrier();
         }
         let mut reply = self.render_reply();
-        reply.applied_sequence = barrier;
-        if barrier.is_some()
-            && let Err(error) = self.platform.wait_for_capture_barrier()
-        {
-            reply.ok = false;
-            reply.diagnostics.push(diagnostic(
-                "OverlayCaptureBarrierTimeout",
-                "Overlay host capture barrier timed out before the hidden frame was applied.",
-                Some(error.to_string()),
-            ));
+        if barrier.is_some() {
+            if !reply.ok {
+                // The hidden frame was never committed, so there is nothing
+                // to wait for.
+                self.platform.clear_capture_barrier();
+            } else if let Err(error) = self.platform.wait_for_capture_barrier() {
+                reply.ok = false;
+                reply.diagnostics.push(diagnostic(
+                    "OverlayCaptureBarrierTimeout",
+                    "Overlay host capture barrier timed out before the hidden frame was applied.",
+                    Some(error.to_string()),
+                ));
+            } else {
+                // Reported only once the barrier holds.
+                reply.applied_sequence = barrier;
+            }
         }
         if let Some(reason) = reason.filter(|value| !value.trim().is_empty()) {
             reply.diagnostics.push(diagnostic(
@@ -365,7 +388,7 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
         &mut self,
         mut diagnostics: Vec<DiagnosticEntry>,
     ) -> OverlayHostReply {
-        match self.render_current() {
+        match self.render_for_reply() {
             Ok(()) => self.reply(true, diagnostics),
             Err(error) => {
                 let detail = error.to_string();
@@ -391,7 +414,22 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
         }
     }
 
-    fn render_current(&mut self) -> Result<()> {
+    /// Renders the frame a reply reports on. The reply's motion echo is what
+    /// the service releases physical input on, so it must describe something
+    /// a surface has actually shown: while the overlay should be visible but
+    /// no surface can take a frame yet, the motion driver is not advanced and
+    /// this waits, within `PRESENT_WAIT`, for the first frame that lands.
+    fn render_for_reply(&mut self) -> Result<()> {
+        let deadline = Instant::now() + PRESENT_WAIT;
+        loop {
+            if self.render_current()? == FrameOutcome::Settled || Instant::now() >= deadline {
+                return Ok(());
+            }
+            self.platform.wait(PRESENT_POLL);
+        }
+    }
+
+    fn render_current(&mut self) -> Result<FrameOutcome> {
         self.apply_surface_change();
         if self.open_surface_count() == 0 {
             bail!("overlay surfaces are closed");
@@ -402,11 +440,11 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             .system_cursor_mut()
             .set_hidden(should_hide_system_cursor)
             .context("failed to update the system cursor adapter")?;
-        self.draw()?;
+        let outcome = self.draw()?;
         // A hot-plug the platform saw while committing takes effect now, so
         // the reply for this frame already reports it.
         self.apply_surface_change();
-        Ok(())
+        Ok(outcome)
     }
 
     fn apply_surface_change(&mut self) {
@@ -428,7 +466,7 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
         if let Some(state) = self.state.as_mut() {
             state.visible = false;
         }
-        self.render_current()
+        self.render_current().map(|_| ())
     }
 
     fn follow_tracked_pointer(&mut self) -> Result<()> {
@@ -445,7 +483,7 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             return Ok(());
         }
         apply_system_pointer_position(state, position);
-        self.render_current()
+        self.render_current().map(|_| ())
     }
 
     fn reply(&self, ok: bool, diagnostics: Vec<DiagnosticEntry>) -> OverlayHostReply {
@@ -462,7 +500,7 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
         }
     }
 
-    fn draw(&mut self) -> Result<()> {
+    fn draw(&mut self) -> Result<FrameOutcome> {
         let now_ms = current_epoch_ms();
         if matches!(self.renderer, SelectedRenderer::Wgpu(..)) {
             self.ensure_wgpu_output_coverage()
@@ -481,6 +519,26 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
                 let (x, y) = cursor_point(state)?;
                 Some((x, y, point.coordinate_space.clone()))
             });
+        // A renderer that failed closed presents nothing, so the platform is
+        // not asked to bring its surfaces on screen for it.
+        if let SelectedRenderer::Unsupported { reason } = &self.renderer {
+            bail!(
+                "{}",
+                reason
+                    .as_deref()
+                    .unwrap_or("overlay renderer is unsupported")
+            );
+        }
+        let presenting = self.platform.begin_frame(visible);
+        if visible && !presenting {
+            // The platform is still bringing its surfaces on screen. The
+            // motion driver is not advanced for a frame nobody can see:
+            // otherwise a cold show would snap, and a gesture would start its
+            // feedback, before the cursor exists, and the service would
+            // release input on that.
+            self.platform.finish_frame()?;
+            return Ok(FrameOutcome::AwaitingSurfaces);
+        }
         let bounds_space = self
             .motion
             .upcoming_space(target.as_ref().map(|(_, _, space)| space.clone()));
@@ -520,20 +578,12 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
         // per-surface cursor presence.
         let glow_active = self.glow_active();
 
-        // A renderer that failed closed presents nothing, so the platform is
-        // not asked to bring its surfaces on screen for it.
-        if let SelectedRenderer::Unsupported { reason } = &self.renderer {
-            bail!(
-                "{}",
-                reason
-                    .as_deref()
-                    .unwrap_or("overlay renderer is unsupported")
-            );
-        }
-        if !self.platform.begin_frame(visible) {
-            // The platform has its surfaces off screen; there is nothing to
-            // present, but it still gets its end-of-frame turn.
-            return self.platform.finish_frame();
+        if !presenting {
+            // The overlay is hidden and the platform has its surfaces off
+            // screen; there is nothing to present, but it still gets its
+            // end-of-frame turn.
+            self.platform.finish_frame()?;
+            return Ok(FrameOutcome::Settled);
         }
 
         let mut requests: Vec<SurfaceDrawRequest> = Vec::with_capacity(surface_count);
@@ -570,13 +620,24 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
         }
 
         let frame_started = Instant::now();
-        if let SelectedRenderer::Wgpu(renderer, _) = &mut self.renderer {
-            renderer.draw(&mut self.surface_guards, &requests)?;
+        let presented = match &mut self.renderer {
+            SelectedRenderer::Wgpu(renderer, _) => {
+                renderer.draw(&mut self.surface_guards, &requests)?
+            }
+            SelectedRenderer::Unsupported { .. } => 0,
+        };
+        if presented > 0 {
+            self.last_frame_submission_us = Some(frame_started.elapsed().as_micros());
+            self.frames_submitted = self.frames_submitted.saturating_add(1);
         }
-        self.last_frame_submission_us = Some(frame_started.elapsed().as_micros());
-        self.frames_submitted = self.frames_submitted.saturating_add(1);
 
-        self.platform.finish_frame()
+        self.platform.finish_frame()?;
+        // Every surface skipped the frame (occluded): nothing was shown.
+        Ok(if visible && presented == 0 {
+            FrameOutcome::AwaitingSurfaces
+        } else {
+            FrameOutcome::Settled
+        })
     }
 
     fn should_animate(&self) -> bool {

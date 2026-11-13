@@ -40,7 +40,7 @@ use objc2_app_kit::{
     NSWindowSharingType, NSWindowStyleMask,
 };
 use objc2_core_graphics::CGSessionCopyCurrentDictionary;
-use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol};
+use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol, NSProcessInfo};
 use sky_cua_platform::model::{
     AgentCursorBackendKind, AgentCursorPointerTrackingBackendKind,
     AgentCursorSystemCursorBackendKind,
@@ -68,6 +68,21 @@ use presence::{FrameStart, PanelPresence};
 /// off screen.
 const BARRIER_TIMEOUT: Duration = Duration::from_millis(1500);
 const BARRIER_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+/// The first macOS major version on which a non-shareable window is proven to
+/// stay out of ScreenCaptureKit captures (checked on 27.2). Earlier versions
+/// are unverified, and ScreenCaptureKit is reported to capture such windows
+/// on some of them, so there the host claims no exclusion and the service
+/// keeps hiding the overlay around its captures.
+const CAPTURE_EXCLUSION_VERIFIED_FROM_MACOS: isize = 27;
+
+/// Runs `work` inside an autorelease pool. The host's main thread never runs
+/// `NSApplication::run`, so nothing else drains the temporaries AppKit
+/// autoreleases during the host's own calls; every entry into the backend is
+/// wrapped in a pool instead.
+pub fn with_autorelease_pool<R>(work: impl FnOnce() -> R) -> R {
+    objc2::rc::autoreleasepool(|_| work())
+}
 
 /// Development switch. `off` creates shareable panels, so screenshots and
 /// recordings show the overlay for visual debugging; the host then reports no
@@ -148,8 +163,12 @@ impl MacosPanelPlatform {
         app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         app.finishLaunching();
 
-        let capture_excluded =
-            capture_exclusion_enabled(std::env::var(CAPTURE_EXCLUSION_ENV).ok().as_deref());
+        let capture_excluded = capture_exclusion_enabled(
+            std::env::var(CAPTURE_EXCLUSION_ENV).ok().as_deref(),
+            NSProcessInfo::processInfo()
+                .operatingSystemVersion()
+                .majorVersion,
+        );
         let panels = create_panels(mtm, capture_excluded)?;
         let screens_changed = Rc::new(Cell::new(false));
         let screens_observer = observe_screen_changes(Rc::clone(&screens_changed));
@@ -380,16 +399,18 @@ impl SurfacePlatform for MacosPanelPlatform {
     }
 }
 
-/// Capture exclusion is on unless the development switch turns it off.
-fn capture_exclusion_enabled(value: Option<&str>) -> bool {
-    !matches!(
-        value
+/// Capture exclusion is on where it is proven to work, unless the
+/// development switch turns it off.
+fn capture_exclusion_enabled(switch: Option<&str>, macos_major_version: isize) -> bool {
+    let switched_off = matches!(
+        switch
             .unwrap_or_default()
             .trim()
             .to_ascii_lowercase()
             .as_str(),
         "off" | "never" | "false" | "0"
-    )
+    );
+    !switched_off && macos_major_version >= CAPTURE_EXCLUSION_VERIFIED_FROM_MACOS
 }
 
 fn create_panels(mtm: MainThreadMarker, capture_excluded: bool) -> Result<Vec<OverlayPanel>> {
@@ -493,10 +514,19 @@ mod tests {
     #[test]
     fn capture_exclusion_is_on_unless_the_development_switch_turns_it_off() {
         for value in [None, Some(""), Some("on"), Some("auto"), Some("anything")] {
-            assert!(capture_exclusion_enabled(value), "{value:?}");
+            assert!(capture_exclusion_enabled(value, 27), "{value:?}");
         }
         for value in ["off", " OFF ", "never", "false", "0"] {
-            assert!(!capture_exclusion_enabled(Some(value)), "{value:?}");
+            assert!(!capture_exclusion_enabled(Some(value), 27), "{value:?}");
         }
+    }
+
+    #[test]
+    fn capture_exclusion_is_claimed_only_on_macos_versions_where_it_is_proven() {
+        assert!(capture_exclusion_enabled(None, 27));
+        assert!(capture_exclusion_enabled(None, 28));
+        // Unverified, and reported not to exclude on some of these.
+        assert!(!capture_exclusion_enabled(None, 26));
+        assert!(!capture_exclusion_enabled(None, 15));
     }
 }

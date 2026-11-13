@@ -430,8 +430,13 @@ own screenshots, screen recordings, and screen sharing. Someone recording or
 sharing a session sees the agent's effects but not its cursor or glow.
 Keeping the overlay in recordings would need the capture filter to exclude
 the panels instead (and window captures, which cannot contain other windows,
-to skip the hide); that was not chosen. The exclusion is a property of the
-operating system and is proven on macOS 27.2 only.
+to skip the hide); that was not chosen.
+
+The exclusion is a property of the operating system. It is proven on macOS
+27.2, and ScreenCaptureKit is reported to capture non-shareable windows on
+some earlier versions, so the host claims `capture_exclusion` only on macOS
+27 and later. On earlier versions it reports `false` and the service keeps
+hiding the overlay around its captures.
 
 **Threading and pacing.** AppKit is main-thread only, so the whole host runs
 on the main thread. The socket loop waits in the main run loop: a
@@ -445,8 +450,12 @@ costs no rendering and no compositing. Showing orders the panels in and skips
 frames until the window server lists them on screen, because a drawable
 presented to a window that is not being composited is held, and a layer whose
 drawables are all held blocks the next frame. AppKit commits ordering on a
-later run loop turn, so the first visible frame follows a show on a later
-tick, not in the same request. The frame that hides is drawn transparent before the panels are
+later run loop turn, so a request that makes the overlay visible runs the run
+loop and waits (up to 250 ms, typically 10 to 20 ms) for the first frame a
+panel actually takes before it replies. The motion driver is not advanced
+for frames nobody can see, so the reply's motion echo, which the service
+releases physical input on, always describes a cursor that is on screen. The
+frame that hides is drawn transparent before the panels are
 ordered out, so they hold no stale image when they return.
 
 **System pointer.** Public macOS interfaces let only the frontmost
@@ -731,10 +740,11 @@ computer-use pointer can be eyeballed over live content or a controlled backdrop
   then shareable, the host reports `capture_exclusion=false`, and the service
   falls back to hiding the overlay around its own captures. It is not an
   operator setting and the installer does not forward it.
-- **macOS: capture exclusion is proven on macOS 27.2 only.** On a system
-  that ignored the sharing type, captures would contain the overlay while the
-  host still reported exclusion; `SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE=always`
-  restores the hide there.
+- **macOS: capture exclusion is proven on macOS 27.2 only.** The host claims
+  it from macOS 27 on; 27.0 and 27.1 are assumed to behave like 27.2. Before
+  macOS 27 the overlay blinks off for each capture, as on Linux, and that
+  path is not exercised live.
+  `SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE=always` forces the hide on any version.
 - **macOS: not exercised live.** More than one display, mixed scale factors,
   a real display hot-plug (the replacement path was forced, not triggered by
   hardware), display sleep and the lock screen, other Spaces and full-screen
