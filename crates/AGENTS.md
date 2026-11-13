@@ -17,8 +17,9 @@ stable contracts, platform backends, the daemon, and the MCP client.
 - macOS Accessibility, ScreenCaptureKit, CoreGraphics window-list, and
   CGEvent logic: `crates/sky-cua-macos/src/**` ->
   [sky-cua-macos/AGENTS.md](sky-cua-macos/AGENTS.md).
-- Desktop agent-cursor overlay host (Wayland layer-shell + wgpu renderer +
-  the vehicle-steering motion driver): `crates/sky-cua-overlay-host/` ->
+- Desktop agent-cursor overlay host (platform-neutral surface host with
+  Wayland layer-shell and macOS panel platforms, the wgpu renderer, and the
+  vehicle-steering motion driver): `crates/sky-cua-overlay-host/` ->
   [sky-cua-overlay-host/AGENTS.md](sky-cua-overlay-host/AGENTS.md).
 - Chrome native-messaging host (extension to daemon bridge):
   `crates/sky-cua-chrome-host/`.

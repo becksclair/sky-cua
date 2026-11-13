@@ -122,6 +122,7 @@ KNOWN_NOT_FORWARDED: dict[str, str] = {
     "SKY_CUA_INPUT_HELPER_SOCKET_MODE": "input-helper systemd socket permission, set once at install time alongside SKY_CUA_INPUT_HELPER_SOCKET_GROUP into /etc/sky-cua/input-helper.env; the privileged sky-cua-input-helper.service never inherits from the MCP-launched process tree, so forwarding it through the per-invocation env_vars allowlist would be a no-op, not a real gap",
     "SKY_CUA_MACOS_CAPTURE_PROBE_DIR": "test-only output directory of the ignored macOS live capture probe (sky-cua-macos capture/tests.rs)",
     "SKY_CUA_MCP_HOST": "deprecated client-ingress compatibility fallback; sky-cua-owned adapters set SKY_CUA_MCP_CALLER_PROVENANCE instead",
+    "SKY_CUA_OVERLAY_CAPTURE_EXCLUSION": "macOS overlay-host development switch that makes the panels capturable for visual debugging, not an operator toggle",
     "SKY_CUA_PHONE_COMMAND_TIMEOUT_MS": "internal phone-backend command timeout tuning, not a documented operator override",
     "SKY_CUA_POINTER_TRACKING_DEBUG": "overlay-host pointer-tracking debug logging toggle, not an operator toggle",
     "SKY_CUA_TEST_BRIDGE_REQUEST_TIMEOUT_MS": "test-only (browser/transport.rs test fixture)",

@@ -34,10 +34,24 @@ pass and are the first work to pick up once it is proven.
         window layer
   - [ ] Report pixel-space element bounds on the `observe` path, and keep a
         deadline-truncated tree's text instead of dropping it
-- [ ] macOS agent cursor overlay host — a full port in the existing
-      cross-platform overlay design (the `macos_panel` adapter and
-      `macos_native` system-cursor backend are contract placeholders today;
-      the overlay host binary only compiles to an honest no-op on macOS)
+- [x] macOS agent cursor overlay host — the overlay host's generic logic is
+      a platform-neutral surface host with a Wayland layer-shell platform and
+      a macOS panel platform (`macos_panel`: one click-through, non-shareable
+      panel per screen, the shared WGPU renderer on Metal, the main run loop
+      for pacing). The panels are deliberately excluded from screen captures,
+      so the overlay does not blink for observations and does not appear in
+      the user's recordings. `macos_native` reports that the system pointer
+      cannot be hidden through public interfaces —
+      [`docs/features/agent-cursor-overlay.md`](docs/features/agent-cursor-overlay.md)
+  - [x] Live proof on a real macOS session: the overlay appears, lands on
+        the action point, passes clicks through, stays out of captures, and
+        exits with its service (2026-11-13, single Retina display)
+  - [ ] Live proof on multiple displays, a real display hot-plug, display
+        sleep, other Spaces, and full-screen applications
+  - [x] Live-smoke the refactored Wayland layer-shell platform on KDE:
+        glide, hide-for-capture, and visible-overlay smokes (2026-11-13)
+  - [ ] Live-smoke the refactored layer-shell platform on Hyprland, and run
+        the click-through and KWin effect lanes on KDE
 - [ ] Pointer-preserving input on macOS (process-targeted event delivery) so
       agent actions do not move the user's real cursor or steal focus
 - [ ] macOS session presence (idle display and system sleep assertions) —

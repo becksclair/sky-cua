@@ -11,14 +11,21 @@ use sky_cua_platform::model::{
 pub mod cursor_motion;
 #[cfg(target_os = "linux")]
 mod layer_shell;
+#[cfg(target_os = "macos")]
+mod macos_panel;
 pub mod motion;
 #[cfg(target_os = "linux")]
 mod playground;
 #[cfg(target_os = "linux")]
 mod pointer_tracking;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod renderer;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod surface_host;
 mod system_cursor;
+
+#[cfg(target_os = "macos")]
+pub use macos_panel::run_loop::ReadableWake;
 
 pub const OVERLAY_HOST_PROTOCOL_VERSION: u32 = 3;
 
@@ -129,7 +136,7 @@ pub struct OverlayHostReply {
     pub applied_sequence: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<AgentCursorState>,
-    /// Live drawn-cursor motion pose (layer-shell backend only). `state`
+    /// Live drawn-cursor motion pose (visible-overlay backends only). `state`
     /// carries the target; this carries where the vehicle-steered glyph
     /// actually is, so clients and smokes can assert glide behavior from
     /// structured fields instead of prose.
@@ -513,6 +520,8 @@ pub enum OverlayHostBackend {
     Noop(NoopOverlayBackend),
     #[cfg(target_os = "linux")]
     LayerShell(Box<layer_shell::LayerShellOverlayBackend>),
+    #[cfg(target_os = "macos")]
+    MacosPanel(Box<macos_panel::MacosPanelOverlayBackend>),
 }
 
 impl OverlayHostBackend {
@@ -564,7 +573,7 @@ impl OverlayHostBackend {
                 mode,
                 "layer-shell" | "layer_shell" | "wayland-layer-shell" | "wayland_layer_shell"
             ) {
-                return match layer_shell::LayerShellOverlayBackend::connect() {
+                return match layer_shell::connect() {
                     Ok(backend) => Self::LayerShell(Box::new(backend)),
                     Err(error) => Self::Noop(NoopOverlayBackend::with_reason(format!(
                         "wayland layer-shell unavailable: {error}"
@@ -582,7 +591,7 @@ impl OverlayHostBackend {
             if matches!(mode, "auto" | "") {
                 let mut reasons = Vec::new();
                 if linux_env_value("WAYLAND_DISPLAY").is_some() {
-                    match layer_shell::LayerShellOverlayBackend::connect() {
+                    match layer_shell::connect() {
                         Ok(backend) => return Self::LayerShell(Box::new(backend)),
                         Err(error) => {
                             reasons.push(format!("wayland layer-shell unavailable: {error}"));
@@ -596,6 +605,16 @@ impl OverlayHostBackend {
             }
         }
 
+        #[cfg(target_os = "macos")]
+        if matches!(mode, "auto" | "" | "macos" | "macos-panel" | "macos_panel") {
+            return match macos_panel::with_autorelease_pool(macos_panel::connect) {
+                Ok(backend) => Self::MacosPanel(Box::new(backend)),
+                Err(error) => Self::Noop(NoopOverlayBackend::with_reason(format!(
+                    "macOS overlay panel unavailable: {error:#}"
+                ))),
+            };
+        }
+
         Self::Noop(NoopOverlayBackend::with_reason(format!(
             "unsupported {OVERLAY_BACKEND_ENV}={mode}"
         )))
@@ -606,6 +625,10 @@ impl OverlayHostBackend {
             Self::Noop(backend) => backend.handle_message(message),
             #[cfg(target_os = "linux")]
             Self::LayerShell(backend) => backend.handle_message(message),
+            #[cfg(target_os = "macos")]
+            Self::MacosPanel(backend) => {
+                macos_panel::with_autorelease_pool(|| backend.handle_message(message))
+            }
         }
     }
 
@@ -614,6 +637,37 @@ impl OverlayHostBackend {
             Self::Noop(_backend) => {}
             #[cfg(target_os = "linux")]
             Self::LayerShell(backend) => backend.tick(),
+            #[cfg(target_os = "macos")]
+            Self::MacosPanel(backend) => macos_panel::with_autorelease_pool(|| backend.tick()),
+        }
+    }
+
+    /// Waits out `duration` between ticks. A backend with a native event loop
+    /// services it for that long instead of sleeping, so a serve loop with no
+    /// event source of its own (stdin, TCP) still lets the platform commit
+    /// window changes.
+    pub fn idle(&mut self, duration: std::time::Duration) {
+        match self {
+            Self::Noop(_backend) => std::thread::sleep(duration),
+            #[cfg(target_os = "linux")]
+            Self::LayerShell(backend) => backend.idle(duration),
+            #[cfg(target_os = "macos")]
+            Self::MacosPanel(backend) => {
+                macos_panel::with_autorelease_pool(|| backend.idle(duration));
+            }
+        }
+    }
+
+    /// Delivers the native application's queued events. Called by the macOS
+    /// serve loop after each run loop turn; a no-op for a backend that owns
+    /// no application object.
+    #[cfg(target_os = "macos")]
+    pub fn dispatch_native_events(&mut self) {
+        match self {
+            Self::Noop(_backend) => {}
+            Self::MacosPanel(backend) => macos_panel::with_autorelease_pool(|| {
+                backend.platform_mut().dispatch_app_events();
+            }),
         }
     }
 
@@ -628,6 +682,8 @@ impl OverlayHostBackend {
             Self::Noop(_backend) => IDLE_TICK_INTERVAL,
             #[cfg(target_os = "linux")]
             Self::LayerShell(backend) => backend.pointer_tick_interval(),
+            #[cfg(target_os = "macos")]
+            Self::MacosPanel(backend) => backend.pointer_tick_interval(),
         }
     }
 }
@@ -1116,7 +1172,7 @@ mod tests {
                     arrival_wait: None,
                 })
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             other => panic!("expected noop backend, got {other:?}"),
         };
 

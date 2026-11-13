@@ -71,7 +71,7 @@ HOST_BIN = REPO_ROOT / "target" / "release" / "sky-cua-overlay-host"
 ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "overlay-motion-animations"
 SOCKET_PATH = Path("/tmp/sky-cua-overlay-motion.sock")
 RESTORE_TOKEN_PATH = ARTIFACTS_DIR / ".screencast-restore-token"
-OVERLAY_HOST_PROTOCOL_VERSION = 2
+OVERLAY_HOST_PROTOCOL_VERSION = 3
 #: Opaque to the host; required alongside a fresh ``updated_at_ms`` or the
 #: cursor reads as decayed and renders nothing.
 SNAPSHOT_ID = "overlay-motion-animations"

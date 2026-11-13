@@ -5,8 +5,10 @@
 Partial. The desktop lane is implemented and live-proven on one machine
 (macOS 27.2, Apple Silicon, single built-in Retina display) on 2026-11-11
 from an uncommitted checkout of branch `bex/macos-backend`. The agent cursor
-overlay, session presence, application launch, browser-use, the installer,
-and the CUA action surface are not ported; see "Known limitations".
+overlay was ported and live-proven on the same machine on 2026-11-13; it is
+documented in [`agent-cursor-overlay.md`](agent-cursor-overlay.md). Session
+presence, application launch, browser-use, the installer, and the CUA action
+surface are not ported; see "Known limitations".
 
 ## Summary
 
@@ -224,9 +226,12 @@ service binary into place with a rename, not an in-place overwrite.
 
 ## Known limitations
 
-- Not ported: agent cursor overlay (the overlay host is an intentional no-op
-  on macOS), session presence, `desktop_launch_app`, browser-use, the
+- Not ported: session presence, `desktop_launch_app`, browser-use, the
   installer and standalone release, and the CUA action surface.
+- The agent cursor overlay shows where the agent acts but cannot hide the
+  system pointer, and by a deliberate decision it is left out of every screen
+  capture, the user's own screenshots and recordings included. Both are
+  described in [`agent-cursor-overlay.md`](agent-cursor-overlay.md).
 - The window model is the CoreGraphics normal layer only. An untitled child
   window of 100 x 60 points or more that an application attaches to a
   document (a rename or suggestion popover, a sheet) is listed as its own
@@ -270,5 +275,7 @@ service binary into place with a rename, not an in-place overwrite.
 - ROADMAP: "Phase: macOS parity".
 - [`windows-uia-automation.md`](windows-uia-automation.md) — the backend this
   one mirrors for contract vocabulary.
+- [`agent-cursor-overlay.md`](agent-cursor-overlay.md) — the visible agent
+  cursor, including the macOS panel host.
 - [`service-desktop-request-lane.md`](service-desktop-request-lane.md) —
   server-side request deadlines.

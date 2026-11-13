@@ -17,7 +17,7 @@ use crate::renderer::shaders::{create_effect_bind_group_layout, create_effect_pi
 /// skip with an eprintln instead of failing.
 pub(crate) fn test_device() -> Option<(::wgpu::Device, ::wgpu::Queue)> {
     let instance = ::wgpu::Instance::new(::wgpu::InstanceDescriptor {
-        backends: ::wgpu::Backends::VULKAN | ::wgpu::Backends::GL,
+        backends: crate::renderer::wgpu::overlay_backends(),
         ..::wgpu::InstanceDescriptor::new_without_display_handle()
     });
     let adapter = pollster::block_on(instance.request_adapter(&::wgpu::RequestAdapterOptions {

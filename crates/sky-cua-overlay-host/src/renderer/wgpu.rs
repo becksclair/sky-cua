@@ -14,6 +14,17 @@ use crate::renderer::{
     surface::{SurfaceGuard, choose_surface_format, supports_transparent_alpha_mode},
 };
 
+/// The wgpu backends the overlay host renders with on this OS. The renderer
+/// tests request their headless device from the same set, so they exercise
+/// the backend production uses.
+pub(crate) fn overlay_backends() -> ::wgpu::Backends {
+    if cfg!(target_os = "macos") {
+        ::wgpu::Backends::METAL
+    } else {
+        ::wgpu::Backends::VULKAN | ::wgpu::Backends::GL
+    }
+}
+
 /// Lightweight wrapper around a [`wgpu::Instance`].
 ///
 /// The host creates an instance first, uses it to build [`SurfaceGuard`]s from
@@ -26,7 +37,7 @@ pub struct WgpuOverlayInstance {
 impl WgpuOverlayInstance {
     pub fn new() -> Self {
         let mut instance_descriptor = ::wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_descriptor.backends = ::wgpu::Backends::VULKAN | ::wgpu::Backends::GL;
+        instance_descriptor.backends = overlay_backends();
         let instance = ::wgpu::Instance::new(instance_descriptor);
         Self { instance }
     }
@@ -118,7 +129,7 @@ impl WgpuOverlayRenderer {
                 compatible_surface: Some(first_surface),
             },
         ))
-        .context("failed to find a GPU adapter compatible with layer-shell surfaces")?;
+        .context("failed to find a GPU adapter compatible with the overlay surfaces")?;
 
         // Fail closed if any active output cannot be rendered with this adapter.
         for (index, guard) in active_surfaces.iter().enumerate() {
@@ -200,6 +211,7 @@ impl WgpuOverlayRenderer {
 
     /// Override the render-pass clear color (defaults to transparent). Used by
     /// the effects playground to paint a solid backdrop behind the overlay.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn set_clear_color(&mut self, color: ::wgpu::Color) {
         self.clear_color = color;
     }
@@ -210,7 +222,8 @@ impl WgpuOverlayRenderer {
         &self.info
     }
 
-    /// Render a frame to every active surface.
+    /// Render a frame to every active surface, and return how many surfaces
+    /// took it. An occluded surface is skipped and not counted.
     ///
     /// `surfaces` and `requests` must have the same length; indices correspond
     /// to the host's layer ordering.
@@ -218,7 +231,7 @@ impl WgpuOverlayRenderer {
         &mut self,
         surfaces: &mut [Option<SurfaceGuard>],
         requests: &[SurfaceDrawRequest],
-    ) -> Result<()> {
+    ) -> Result<usize> {
         if requests.len() != surfaces.len() {
             bail!(
                 "draw request count ({}) does not match surface count ({})",
@@ -227,6 +240,7 @@ impl WgpuOverlayRenderer {
             );
         }
 
+        let mut presented = 0;
         for (index, request) in requests.iter().enumerate() {
             let Some(spec) = request else {
                 continue;
@@ -256,7 +270,12 @@ impl WgpuOverlayRenderer {
             let mut attempt = 0;
             let frame = loop {
                 match guard.acquire_frame(&self.device) {
-                    super::surface::SurfaceAcquisitionResult::Success(frame) => break frame,
+                    super::surface::SurfaceAcquisitionResult::Success(frame) => break Some(frame),
+                    // An occluded surface is skipped for this frame and drawn
+                    // again once the windowing system shows it. Treating it
+                    // as an error would fail the renderer closed for good the
+                    // first time a display slept.
+                    super::surface::SurfaceAcquisitionResult::Occluded => break None,
                     super::surface::SurfaceAcquisitionResult::Validation => {
                         bail!(
                             "wgpu validation error while acquiring overlay frame for surface {index}"
@@ -269,6 +288,9 @@ impl WgpuOverlayRenderer {
                         }
                     }
                 }
+            };
+            let Some(frame) = frame else {
+                continue;
             };
 
             let view = frame
@@ -320,9 +342,10 @@ impl WgpuOverlayRenderer {
             }
             self.queue.submit(Some(encoder.finish()));
             frame.present();
+            presented += 1;
         }
 
-        Ok(())
+        Ok(presented)
     }
 
     fn ensure_pipeline(&mut self, format: ::wgpu::TextureFormat) {
