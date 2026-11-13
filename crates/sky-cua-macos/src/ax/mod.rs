@@ -78,6 +78,8 @@ const RAISE_WAIT: Duration = Duration::from_secs(6);
 /// Chromium builds the views tree within ~150 ms (the Linux backend measured
 /// the same on AT-SPI).
 const ACTIVATION_SETTLE: Duration = Duration::from_millis(200);
+/// Attribute writes one activation sends; see `chromium::activate`.
+const ACTIVATION_WRITES: u32 = 2;
 /// Budget a post-activation re-read needs to be worth starting.
 const MIN_REREAD: Duration = Duration::from_millis(250);
 
@@ -292,7 +294,13 @@ fn read_on_lane(
     inner: &Inner,
 ) -> Result<WalkOutput, BackendError> {
     let names = Names::new();
-    let root = window::find_window(context, &names, &request.window, &request.app_windows)?;
+    let root = window::find_window(
+        context,
+        guard,
+        &names,
+        &request.window,
+        &request.app_windows,
+    )?;
     let walk = |deadline: Instant| {
         tree::walk(
             &names,
@@ -325,6 +333,14 @@ fn read_on_lane(
         // Waking the tree writes to the application; an expired read must not.
         return Ok(first);
     }
+    if Instant::now() + ACTIVATION_WRITES * lane::MESSAGING_TIMEOUT
+        > request.deadline + DEADLINE_GRACE
+    {
+        // Each activation write can wait out the messaging timeout. Without
+        // room for both inside the caller's wait the lane would be abandoned
+        // and this tree lost; the next read wakes the application instead.
+        return Ok(first);
+    }
     let first_attempt = inner
         .activation_attempted
         .lock()
@@ -332,7 +348,7 @@ fn read_on_lane(
     if !first_attempt {
         return Ok(first);
     }
-    let accepted = chromium::activate(&context.app);
+    let accepted = chromium::activate(&context.app, guard);
     if let Ok(mut attempted) = inner.activation_attempted.lock() {
         attempted.settle(&process, &accepted);
     }

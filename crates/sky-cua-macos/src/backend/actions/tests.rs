@@ -425,6 +425,78 @@ fn text_actions_require_their_argument() {
 }
 
 #[test]
+fn only_pointer_addressed_input_uses_a_snapshot_point() {
+    let at = Some((1.0, 2.0));
+    let pointed = [
+        PhysicalInput::Move { at: (1.0, 2.0) },
+        PhysicalInput::Click {
+            at: (1.0, 2.0),
+            button: MouseButton::Left,
+            count: 1,
+        },
+        PhysicalInput::Drag {
+            from: (1.0, 2.0),
+            to: (3.0, 4.0),
+        },
+        PhysicalInput::Scroll {
+            at,
+            delta_x: 0,
+            delta_y: 1,
+        },
+        PhysicalInput::SetValue {
+            at,
+            value: String::new(),
+        },
+    ];
+    let keyboard = [
+        PhysicalInput::TypeText("a".to_string()),
+        PhysicalInput::PressKeys(vec!["Return".to_string()]),
+        PhysicalInput::Scroll {
+            at: None,
+            delta_x: 0,
+            delta_y: 1,
+        },
+        PhysicalInput::SetValue {
+            at: None,
+            value: String::new(),
+        },
+    ];
+    assert!(pointed.iter().all(PhysicalInput::uses_snapshot_point));
+    assert!(!keyboard.iter().any(PhysicalInput::uses_snapshot_point));
+}
+
+#[test]
+fn text_too_long_to_type_in_one_request_is_refused_before_any_input() {
+    // Every line break is its own key event, so this is 20,000 events.
+    let long = "a\n".repeat(10_000);
+    for (action, argument) in [
+        (ActionName::TypeText, "text"),
+        (ActionName::SetValue, "value"),
+    ] {
+        let error = plan_action(&action_request(
+            action,
+            serde_json::json!({ argument: long }),
+            None,
+            None,
+        ))
+        .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::InvalidRequest.as_str());
+        assert!(error.message.contains("smaller parts"), "{}", error.message);
+    }
+    // 100,000 characters of prose is 5,000 events and fits.
+    let prose = "a".repeat(100_000);
+    assert!(
+        plan_action(&action_request(
+            ActionName::TypeText,
+            serde_json::json!({ "text": prose }),
+            None,
+            None,
+        ))
+        .is_ok()
+    );
+}
+
+#[test]
 fn set_value_fallback_clicks_its_target_element_first() {
     let request = action_request(
         ActionName::SetValue,

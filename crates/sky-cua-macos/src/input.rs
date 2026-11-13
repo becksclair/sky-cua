@@ -58,6 +58,12 @@ const SCROLL_STEP_GAP: Duration = Duration::from_millis(8);
 /// Gap between keyboard events, so applications that sample modifier state
 /// asynchronously see each transition in order.
 const KEY_EVENT_GAP: Duration = Duration::from_millis(4);
+/// Most key events one text request may post: about 25 s of pacing at
+/// `KEY_EVENT_GAP`. Posting runs on a blocking thread that nothing can
+/// cancel, so text that would outlast the service's request deadline is
+/// refused up front; otherwise it would keep typing into whatever the next
+/// request brings to the front.
+const MAX_TEXT_KEY_EVENTS: usize = 6_250;
 
 pub fn move_pointer(x: f64, y: f64) -> Result<(), BackendError> {
     let poster = Poster::new()?;
@@ -130,13 +136,34 @@ pub fn scroll(at: Option<(f64, f64)>, delta_x: i32, delta_y: i32) -> Result<(), 
     Ok(())
 }
 
+/// Fails when typing `text` would post more key events than one request
+/// may. Call before any input of the request is posted.
+pub fn ensure_text_fits(text: &str) -> Result<(), BackendError> {
+    text_fits(plan::text_segments(text).len())
+}
+
+fn text_fits(key_events: usize) -> Result<(), BackendError> {
+    if key_events > MAX_TEXT_KEY_EVENTS {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidRequest,
+            format!(
+                "the text needs {key_events} key events and one request may post {MAX_TEXT_KEY_EVENTS} (each line break, tab, and run of up to {} characters is one); send it in smaller parts",
+                plan::MAX_UTF16_PER_EVENT
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Types text as Unicode key events, independent of the keyboard layout.
 pub fn type_text(text: &str) -> Result<(), BackendError> {
     if text.is_empty() {
         return Ok(());
     }
+    let segments = plan::text_segments(text);
+    text_fits(segments.len())?;
     let poster = Poster::new()?;
-    for (index, segment) in plan::text_segments(text).into_iter().enumerate() {
+    for (index, segment) in segments.into_iter().enumerate() {
         if index > 0 {
             sleep(KEY_EVENT_GAP);
         }

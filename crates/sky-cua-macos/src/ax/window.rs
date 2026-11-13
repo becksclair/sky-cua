@@ -13,9 +13,12 @@ use crate::window_match::{self, AxWindowCandidate, WindowMatch};
 
 /// Finds the AX element of exactly `window` among its application's
 /// `AXWindows`. Fails closed with `AccessibilityCoverageLimited` when the
-/// correlation is not exact.
+/// correlation is not exact. Stops between windows once the caller has
+/// stopped waiting, so an abandoned lane does not keep querying an
+/// application that is already slow.
 pub(crate) fn find_window(
     context: &LaneContext,
+    guard: &JobGuard<'_>,
     names: &Names,
     window: &MacWindow,
     app_windows: &[MacWindow],
@@ -32,6 +35,7 @@ pub(crate) fn find_window(
     let elements = as_elements(&windows, usize::MAX);
     let mut candidates = Vec::with_capacity(elements.len());
     for element in &elements {
+        guard.ensure_wanted()?;
         // One round trip per window: title, frame, minimized, main.
         let values = match element.copy_multiple(&names.window_batch) {
             Ok(values) => values,
@@ -94,7 +98,7 @@ pub(crate) fn raise(
     window: &MacWindow,
     app_windows: &[MacWindow],
 ) -> Result<(), BackendError> {
-    let element = find_window(context, names, window, app_windows)?;
+    let element = find_window(context, guard, names, window, app_windows)?;
     // Finding the window can outlast the caller's wait when the application
     // answers slowly; a raise sent after that would steal focus from whatever
     // request runs next.

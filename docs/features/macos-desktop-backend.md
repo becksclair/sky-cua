@@ -118,7 +118,10 @@ requests fall through to CGEvent input posted at the HID event tap, after
 the target window is brought forward. If the target window is gone the
 action fails with `SnapshotStale`, and if it cannot be brought to the front
 it fails with `ActionRequiresPhysicalInput`; input is never posted to
-whatever happens to be in front instead. A reply lost after a write was sent is
+whatever happens to be in front instead. For input posted
+at a point, a window that moved or was resized since its snapshot's window
+capture is also `SnapshotStale`, because the point was taken from the old
+frame; keyboard input has no point and is not affected. A reply lost after a write was sent is
 `CuaActionOutcomeUnknown`, because an AX press that opens a modal sheet does
 not reply until the sheet closes.
 
@@ -143,6 +146,10 @@ empty value deletes the selected content.
 
 Physical typing goes through the system text-input path, so application
 features such as automatic capitalisation and autocorrection apply to it.
+One request types at most 6250 key events (each line break, tab, and run of
+up to 20 characters is one, about 25 s of typing); longer text is an
+`InvalidRequest` before any input is posted, because posting cannot be
+cancelled once the request's deadline has passed.
 
 **Permissions.** macOS attributes the daemon to the application that launched
 it (the terminal, Codex, or Claude host), and the daemon keeps that
@@ -204,6 +211,11 @@ it would mark every replacement daemon stale as well. The daemon exits after
   element-targeted click as an AX press; and `activate_window` in both
   directions. The daemon was replaced automatically across four rebuilds with
   one daemon running afterwards.
+- Live check, 2026-11-13, same setup: a click addressed by snapshot pixels
+  succeeds while the window is at its captured frame; after the window is
+  dragged by its title bar the same snapshot's click fails with
+  `SnapshotStale` and a fresh snapshot's click succeeds; `type_text` over
+  the key-event limit is refused.
 
 An isolated daemon for testing uses a private `HOME` and XDG directories and
 a relative `SKY_CUA_SERVICE_SOCKET_PATH`, because an absolute path under a
@@ -228,6 +240,11 @@ service binary into place with a rename, not an in-place overwrite.
   focused.
 - Physical input moves the user's real pointer and requires the target
   window to be frontmost.
+- `expand` and `collapse` are advertised from an element's reported state,
+  without probing whether its expansion attribute is settable (one more
+  round trip per element on every read). An element that reports a state
+  but offers neither a settable attribute nor a press fallback fails the
+  action with `ActionRequiresPhysicalInput`.
 - Element bounds are `desktop_logical` on the `observe` path and
   `stream_pixels` on the `get_app_state` path; both are tagged and both are
   accepted by actions.

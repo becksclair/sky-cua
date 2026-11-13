@@ -8,7 +8,9 @@
 use std::time::{Duration, Instant};
 
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
-use sky_cua_platform::model::{ActionRequest, DiagnosticEntry};
+use sky_cua_platform::model::{
+    ActionRequest, CaptureScope, CoordinateSpace, DiagnosticEntry, RectF,
+};
 
 use crate::ax::AxRuntime;
 use crate::types::MacWindow;
@@ -101,17 +103,24 @@ pub(super) async fn focus_window(
 /// input. A request that names no window posts to the current focus; an
 /// already-focused window is left alone. A vanished window, or one that
 /// could not be brought to the front, fails the action so the input never
-/// lands on whatever window is in front instead. Returns diagnostics for the
-/// focus outcome.
+/// lands on whatever window is in front instead. When the input
+/// `uses_snapshot_point`, a window that moved or was resized since the
+/// snapshot fails it as well, so the input never lands on whatever is at the
+/// snapshot's coordinates now. Returns diagnostics for the focus outcome.
 pub(super) async fn focus_request_window(
     ax: &AxRuntime,
     request: &ActionRequest,
+    uses_snapshot_point: bool,
 ) -> Result<Vec<DiagnosticEntry>, BackendError> {
     let Some(window_id) = request_window_id(request) else {
         return Ok(Vec::new());
     };
     let windows_front_to_back = windows::enumerate_windows();
-    match physical_input_focus_need(window_id, &windows_front_to_back)? {
+    match physical_input_focus_need(
+        window_id,
+        &windows_front_to_back,
+        captured_window_frame(request).filter(|_| uses_snapshot_point),
+    )? {
         FocusNeed::AlreadyFocused => Ok(Vec::new()),
         FocusNeed::Activate(window) => {
             let attempt = focus_window(ax, window, &windows_front_to_back).await;
@@ -127,12 +136,42 @@ enum FocusNeed<'a> {
     Activate(&'a MacWindow),
 }
 
-/// Whether the requested window still exists and must be brought forward.
-/// A window missing from the list is a stale snapshot.
-fn physical_input_focus_need(
+/// The frame the request's snapshot captured its window at, when the capture
+/// was of that window. A display capture says nothing about one window.
+fn captured_window_frame(request: &ActionRequest) -> Option<&RectF> {
+    let capture = request.resolved_capture.as_ref()?;
+    window_capture_frame(&capture.capture_scope, capture.logical_rect.as_ref())
+}
+
+fn window_capture_frame<'a>(
+    scope: &CaptureScope,
+    logical_rect: Option<&'a RectF>,
+) -> Option<&'a RectF> {
+    logical_rect.filter(|frame| {
+        *scope == CaptureScope::Window && frame.space == CoordinateSpace::DesktopLogical
+    })
+}
+
+/// Whether two frames in desktop points are the same frame. The window
+/// server reports both, so they are equal unless the window changed; the
+/// tolerance only absorbs float formatting.
+fn same_frame(a: &RectF, b: &RectF) -> bool {
+    const TOLERANCE: f64 = 0.5;
+    (a.x - b.x).abs() < TOLERANCE
+        && (a.y - b.y).abs() < TOLERANCE
+        && (a.width - b.width).abs() < TOLERANCE
+        && (a.height - b.height).abs() < TOLERANCE
+}
+
+/// Whether the requested window still exists where the snapshot saw it and
+/// must be brought forward. A window missing from the list, or at another
+/// frame than `captured_frame`, is a stale snapshot: every coordinate in the
+/// request was taken from the old frame.
+fn physical_input_focus_need<'a>(
     window_id: u32,
-    windows_front_to_back: &[MacWindow],
-) -> Result<FocusNeed<'_>, BackendError> {
+    windows_front_to_back: &'a [MacWindow],
+    captured_frame: Option<&RectF>,
+) -> Result<FocusNeed<'a>, BackendError> {
     let window = windows_front_to_back
         .iter()
         .find(|window| window.window_id == window_id)
@@ -144,6 +183,24 @@ fn physical_input_focus_need(
                 ),
             )
         })?;
+    if let Some(captured) = captured_frame
+        && !same_frame(captured, &window.bounds)
+    {
+        return Err(BackendError::new(
+            BackendErrorCode::SnapshotStale,
+            format!(
+                "macOS window {window_id} moved or was resized since the snapshot (captured at ({}, {}) {}x{}, now at ({}, {}) {}x{}), so physical input was not sent; observe again with get_app_state before acting",
+                captured.x,
+                captured.y,
+                captured.width,
+                captured.height,
+                window.bounds.x,
+                window.bounds.y,
+                window.bounds.width,
+                window.bounds.height
+            ),
+        ));
+    }
     Ok(if window.focused {
         FocusNeed::AlreadyFocused
     } else {
@@ -312,10 +369,40 @@ mod tests {
     }
 
     #[test]
+    fn a_window_that_moved_or_resized_since_the_snapshot_is_a_stale_snapshot() {
+        let windows = vec![window(30, 7, 0)];
+        let captured_here = desktop_rect(0.0, 0.0, 10.0, 10.0);
+        assert!(physical_input_focus_need(30, &windows, Some(&captured_here)).is_ok());
+
+        for captured_elsewhere in [
+            desktop_rect(40.0, 0.0, 10.0, 10.0),
+            desktop_rect(0.0, 0.0, 10.0, 25.0),
+        ] {
+            let error =
+                physical_input_focus_need(30, &windows, Some(&captured_elsewhere)).unwrap_err();
+            assert_eq!(error.code, BackendErrorCode::SnapshotStale.as_str());
+            assert!(error.message.contains("moved or was resized"));
+        }
+    }
+
+    #[test]
+    fn only_a_window_capture_pins_the_window_frame() {
+        let frame = desktop_rect(5.0, 6.0, 300.0, 200.0);
+        assert_eq!(
+            window_capture_frame(&CaptureScope::Window, Some(&frame)),
+            Some(&frame)
+        );
+        assert_eq!(window_capture_frame(&CaptureScope::Window, None), None);
+        for scope in [CaptureScope::Display, CaptureScope::PrimaryDisplay] {
+            assert_eq!(window_capture_frame(&scope, Some(&frame)), None);
+        }
+    }
+
+    #[test]
     fn vanished_request_window_is_a_stale_snapshot() {
         let windows = vec![window(10, 7, 0)];
 
-        let error = physical_input_focus_need(30, &windows).unwrap_err();
+        let error = physical_input_focus_need(30, &windows, None).unwrap_err();
 
         assert_eq!(error.code, BackendErrorCode::SnapshotStale.as_str());
         assert!(error.message.contains("30"));
@@ -329,11 +416,11 @@ mod tests {
         let windows = vec![window(10, 8, 0), focused];
 
         assert!(matches!(
-            physical_input_focus_need(30, &windows),
+            physical_input_focus_need(30, &windows, None),
             Ok(FocusNeed::AlreadyFocused)
         ));
         assert!(matches!(
-            physical_input_focus_need(10, &windows),
+            physical_input_focus_need(10, &windows, None),
             Ok(FocusNeed::Activate(window)) if window.window_id == 10
         ));
     }

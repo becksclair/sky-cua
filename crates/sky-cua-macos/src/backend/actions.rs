@@ -61,6 +61,18 @@ pub(super) enum PhysicalInput {
     },
 }
 
+impl PhysicalInput {
+    /// Whether the input is posted at a point taken from the snapshot.
+    /// Keyboard input goes to the key focus and has none.
+    pub(super) fn uses_snapshot_point(&self) -> bool {
+        match self {
+            Self::Move { .. } | Self::Click { .. } | Self::Drag { .. } => true,
+            Self::Scroll { at, .. } | Self::SetValue { at, .. } => at.is_some(),
+            Self::TypeText(_) | Self::PressKeys(_) => false,
+        }
+    }
+}
+
 /// What physical input can do for one request.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum ActionPlan {
@@ -103,9 +115,11 @@ pub(super) fn plan_action(request: &ActionRequest) -> Result<ActionPlan, Backend
             from: desktop_drag_from_point(request)?,
             to: desktop_target_point(request)?,
         },
-        ActionName::TypeText => PhysicalInput::TypeText(
-            required_text_arg(request, "text", "type_text requires text")?.to_owned(),
-        ),
+        ActionName::TypeText => {
+            let text = required_text_arg(request, "text", "type_text requires text")?;
+            input::ensure_text_fits(text)?;
+            PhysicalInput::TypeText(text.to_owned())
+        }
         ActionName::PressKey => PhysicalInput::PressKeys(parse_keys(request)?),
         ActionName::SetValue => {
             if let Some(element) = request.resolved_element.as_ref()
@@ -119,8 +133,10 @@ pub(super) fn plan_action(request: &ActionRequest) -> Result<ActionPlan, Backend
                     ),
                 ));
             }
+            let value = required_text_arg(request, "value", "set_value requires value")?;
+            input::ensure_text_fits(value)?;
             PhysicalInput::SetValue {
-                value: required_text_arg(request, "value", "set_value requires value")?.to_owned(),
+                value: value.to_owned(),
                 at: optional_action_point(request)?,
             }
         }

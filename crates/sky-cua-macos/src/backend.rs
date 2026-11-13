@@ -406,7 +406,8 @@ impl DesktopBackend for MacosDesktopBackend {
             return Err(permissions::missing_permission_error(Permission::PostEvent));
         }
 
-        let focus_diagnostics = focus::focus_request_window(&self.ax, &request).await?;
+        let focus_diagnostics =
+            focus::focus_request_window(&self.ax, &request, input.uses_snapshot_point()).await?;
         let mut outcome = tokio::task::spawn_blocking(move || actions::perform(input))
             .await
             .map_err(join_error)??;

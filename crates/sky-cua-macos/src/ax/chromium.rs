@@ -19,6 +19,7 @@ use std::sync::{Mutex, OnceLock};
 use sky_cua_platform::process::darwin::ProcessGeneration;
 
 use super::element::{AxElement, cf_string};
+use super::lane::JobGuard;
 use super::tree::WalkStats;
 
 /// A walk that read at most this many elements is treated as a dormant
@@ -114,11 +115,14 @@ impl ActivationAttempts {
 }
 
 /// Writes both activation attributes on the application element. Returns
-/// which writes the application accepted.
-pub(crate) fn activate(app: &AxElement) -> Vec<&'static str> {
+/// which writes the application accepted. A write is skipped once the
+/// caller has stopped waiting.
+pub(crate) fn activate(app: &AxElement, guard: &JobGuard<'_>) -> Vec<&'static str> {
     ["AXManualAccessibility", "AXEnhancedUserInterface"]
         .into_iter()
-        .filter(|attribute| app.set_bool(&cf_string(attribute), true).is_ok())
+        .filter(|attribute| {
+            !guard.is_abandoned() && app.set_bool(&cf_string(attribute), true).is_ok()
+        })
         .collect()
 }
 
