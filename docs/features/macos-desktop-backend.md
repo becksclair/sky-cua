@@ -68,7 +68,8 @@ application selector ambiguous. The application list is derived from window
 owner process ids. An application selector must match on every field it
 supplies; a `name` that equals an application's name, bundle identifier, or
 executable name outranks one that is only contained in them, a `name` matches
-a window title only when no window matches it by application identity, and a
+a window title only when no window matches it by application identity, a
+`window_title` matches as a case-insensitive substring, and a
 selector that matches no on-screen window is an
 `InvalidRequest`, never a fallback to the focused application. The focused window is the front-most listed window of the
 front process, determined without AppKit run-loop state, which goes stale in
@@ -90,7 +91,8 @@ its own worker thread, created on first use and exiting after 30 s idle. A
 wall-clock budget, returning the partial tree when it expires. A lane that
 does not answer within its deadline plus a grace period is abandoned and the
 next request for that process gets a fresh lane, so an unresponsive
-application stalls only itself. Trees are capped at 1500 elements and
+application stalls only itself. A request whose caller is cancelled abandons
+its lane the same way. Trees are capped at 1500 elements and
 250 children per node, and either cap is reported as
 `AccessibilityTreeTruncated`; text readback is capped at 4096 characters.
 Attributes are read in batches, with role-specific attributes in a second
@@ -128,7 +130,13 @@ point. The same holds for a scroll that names an element or a point: only a
 scroll that names neither is posted at the current pointer position. The
 physical `set_value` fallback clicks its target first, so the select-all and
 typing that follow replace that element's content and not the content of
-whatever control already held key focus.
+whatever control already held key focus. When the request names an element,
+the fallback runs only if that element is a text field, text area, combo
+box, or search field (it carries text readback or reports editable text): on
+any other element the click would be the control's own action or take no key
+focus, so the request fails with `ActionUnsupportedForEnvironment`. A request
+that names no element is typed at the given point or the current focus. An
+empty value deletes the selected content.
 
 Physical typing goes through the system text-input path, so application
 features such as automatic capitalisation and autocorrection apply to it.
@@ -151,7 +159,10 @@ client launch without manual cleanup. The inode change time is not used
 because cargo re-clones an unchanged binary on invocations that do not
 relink, which would restart a daemon serving live sessions. An install that
 preserves a modification time older than the running daemon's start is
-therefore not detected; an installer must restart the daemon itself. The daemon exits after 300 s idle.
+therefore not detected; an installer must restart the daemon itself. A
+modification time in the future is ignored until the clock passes it, because
+it would mark every replacement daemon stale as well. The daemon exits after
+300 s idle.
 
 ## Source paths
 
@@ -227,7 +238,12 @@ service binary into place with a rename, not an in-place overwrite.
 - The permission grant belongs to the host application, so a daemon started
   by one host and reused by another runs with the first host's grants.
 - Rebuild staleness is not detected when `SKY_CUA_SERVICE_PATH` points at a
-  wrapper script, and there is no hosted macOS CI job.
+  wrapper script, because the modification time read is the wrapper's.
+- A daemon is identified by the executable name `sky-cua-service`, as on
+  Linux. A daemon running from a binary with another name is never judged
+  stale by a rebuild and the client refuses to signal it, so replacing it is
+  manual.
+- There is no hosted macOS CI job.
 
 ## Related
 

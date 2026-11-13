@@ -1378,7 +1378,11 @@ fn unix_stream_peer_process(stream: &UnixStream) -> Option<PeerProcess> {
 /// would launch, or `None` when it is not (or the binary cannot be inspected).
 ///
 /// The rule: the daemon is stale when the binary's modification time is
-/// later than the daemon's start. A relink writes a fresh modification time.
+/// later than the daemon's start and not later than now. A relink writes a
+/// fresh modification time. A modification time in the future proves nothing
+/// about the running daemon and would mark every replacement stale as well,
+/// so the client could never converge on a healthy daemon; it is ignored
+/// until the clock passes it.
 ///
 /// Known miss: an install that preserves a modification time older than the
 /// running daemon's start (for example `cp -p` or an archive extraction of an
@@ -1402,7 +1406,11 @@ fn service_binary_rebuilt_detail(
         .ok()?
         .checked_mul(1_000_000_000)?
         .checked_add(u64::try_from(metadata.mtime_nsec()).ok()?)?;
-    if !binary_changed_after_start(changed_at_nanos, generation.started_at_micros) {
+    let now_micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|now| u64::try_from(now.as_micros()).ok())?;
+    if !binary_changed_after_start(changed_at_nanos, generation.started_at_micros, now_micros) {
         return None;
     }
     if crate::daemon_singleton::service_generation_status(generation)
@@ -1420,12 +1428,19 @@ fn service_binary_rebuilt_detail(
 }
 
 /// Whether a binary change at `changed_at_nanos` happened strictly after a
-/// process start at `started_at_micros` (both since the Unix epoch). The
-/// start time has microsecond resolution, so the comparison is at that
-/// resolution: a change within the start microsecond is not "after".
+/// process start at `started_at_micros` and no later than `now_micros` (all
+/// since the Unix epoch). The start time has microsecond resolution, so the
+/// comparison is at that resolution: a change within the start microsecond
+/// is not "after". A change dated after `now_micros` is not counted, because
+/// it would also postdate every daemon started to replace this one.
 #[cfg(any(target_os = "macos", test))]
-fn binary_changed_after_start(changed_at_nanos: u64, started_at_micros: u64) -> bool {
-    changed_at_nanos / 1_000 > started_at_micros
+fn binary_changed_after_start(
+    changed_at_nanos: u64,
+    started_at_micros: u64,
+    now_micros: u64,
+) -> bool {
+    let changed_at_micros = changed_at_nanos / 1_000;
+    changed_at_micros > started_at_micros && changed_at_micros <= now_micros
 }
 
 #[cfg(target_os = "linux")]
@@ -1686,18 +1701,53 @@ mod tests {
     #[test]
     fn binary_change_must_follow_process_start_at_microsecond_resolution() {
         let started_at_micros = 1_700_000_000_000_000;
+        let now_micros = started_at_micros + 60_000_000;
         let same_microsecond = started_at_micros * 1_000 + 999;
         assert!(!binary_changed_after_start(
             same_microsecond,
-            started_at_micros
+            started_at_micros,
+            now_micros
         ));
         assert!(!binary_changed_after_start(
             (started_at_micros - 1) * 1_000,
-            started_at_micros
+            started_at_micros,
+            now_micros
         ));
         assert!(binary_changed_after_start(
             (started_at_micros + 1) * 1_000,
-            started_at_micros
+            started_at_micros,
+            now_micros
+        ));
+    }
+
+    #[test]
+    fn a_future_dated_binary_change_is_not_a_rebuild_until_the_clock_reaches_it() {
+        let started_at_micros = 1_700_000_000_000_000;
+        let now_micros = started_at_micros + 60_000_000;
+        let future_change_micros = now_micros + 3_600_000_000;
+        assert!(!binary_changed_after_start(
+            future_change_micros * 1_000,
+            started_at_micros,
+            now_micros
+        ));
+        // A daemon started to replace this one would be judged the same way,
+        // so it is not rejected as stale either.
+        assert!(!binary_changed_after_start(
+            future_change_micros * 1_000,
+            now_micros,
+            now_micros + 1
+        ));
+        // Once the clock passes the timestamp, the older daemon is replaced
+        // once and its replacement is current.
+        assert!(binary_changed_after_start(
+            future_change_micros * 1_000,
+            started_at_micros,
+            future_change_micros
+        ));
+        assert!(!binary_changed_after_start(
+            future_change_micros * 1_000,
+            future_change_micros,
+            future_change_micros + 1
         ));
     }
 

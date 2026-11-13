@@ -238,6 +238,20 @@ fn select_window_requires_every_supplied_field() {
     let no_safari_inbox = &windows[..2];
     assert!(select_window(no_safari_inbox, &selector).is_none());
 
+    // The title is matched as a case-insensitive substring.
+    for title in ["inbox", "WEBMAIL", "Inbox — Webmail"] {
+        let any_case = AppSelector {
+            app_id: Some("com.apple.Safari".to_string()),
+            window_title: Some(title.to_string()),
+            ..AppSelector::default()
+        };
+        assert_eq!(
+            select_window(&windows, &any_case).map(|window| window.window_id),
+            Some(3),
+            "{title}"
+        );
+    }
+
     let desktop_file_only = AppSelector {
         desktop_file_id: Some("org.example.App.desktop".to_string()),
         ..AppSelector::default()

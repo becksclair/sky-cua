@@ -259,6 +259,26 @@ fn a_binary_only_recloned_after_daemon_start_is_not_stale() {
 }
 
 #[test]
+fn a_future_dated_binary_does_not_mark_a_daemon_stale() {
+    let temp_dir = test_temp_dir("mac-future");
+    let (daemon, generation) = spawn_named_sleeper(&temp_dir, "sky-cua-service");
+    let future_dated = temp_dir.join("built-in-the-future");
+    fs::write(&future_dated, b"new build").expect("write future-dated binary");
+    set_modified(
+        &future_dated,
+        std::time::SystemTime::now() + std::time::Duration::from_secs(3_600),
+    );
+
+    assert_eq!(
+        service_binary_rebuilt_detail(&future_dated, &generation),
+        None,
+        "a modification time in the future would mark every replacement daemon stale too"
+    );
+    stop(daemon);
+    let _ = fs::remove_dir_all(temp_dir);
+}
+
+#[test]
 fn rebuilt_binary_never_marks_a_non_service_peer_stale() {
     let temp_dir = test_temp_dir("mac-rebuilt-other");
     let (other, generation) = spawn_named_sleeper(&temp_dir, "unrelated-helper");

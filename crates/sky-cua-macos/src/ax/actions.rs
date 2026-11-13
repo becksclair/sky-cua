@@ -438,6 +438,8 @@ fn set_value(
     // focused first; focus is best effort.
     begin_write(mutating, guard)?;
     let _ = element.set_bool(&cf_string("AXFocused"), true);
+    // The focus write can itself wait out the messaging timeout.
+    guard.ensure_wanted()?;
     element
         .set_attribute(&attribute, &cf_string(value))
         .map_err(|error| write_error(error, "AXValue"))?;

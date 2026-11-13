@@ -1,6 +1,7 @@
 use super::*;
 use sky_cua_platform::model::{
-    CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace, PixelSize, RectF,
+    CaptureBackendKind, CaptureInfo, CaptureScope, CoordinateSpace, ElementTextReadback, PixelSize,
+    RectF,
 };
 
 #[test]
@@ -429,7 +430,7 @@ fn set_value_fallback_clicks_its_target_element_first() {
         ActionName::SetValue,
         serde_json::json!({ "value": "hello" }),
         Some(capture_with_rect(100.0, 50.0, 800.0, 600.0, 2.0)),
-        Some(element(200.0, 100.0, 40.0, 20.0)),
+        Some(text_field(200.0, 100.0, 40.0, 20.0)),
     );
 
     assert_eq!(
@@ -442,8 +443,45 @@ fn set_value_fallback_clicks_its_target_element_first() {
 }
 
 #[test]
+fn set_value_fallback_is_refused_for_an_element_that_is_not_a_text_control() {
+    let plan_for = |target: ElementNode| {
+        plan_action(&action_request(
+            ActionName::SetValue,
+            serde_json::json!({ "value": "hello" }),
+            Some(capture_with_rect(100.0, 50.0, 800.0, 600.0, 2.0)),
+            Some(target),
+        ))
+    };
+    let button = element(200.0, 100.0, 40.0, 20.0);
+
+    let error = plan_for(button.clone()).unwrap_err();
+    assert_eq!(error.code, "ActionUnsupportedForEnvironment");
+    assert!(error.message.contains("button"), "{}", error.message);
+
+    // A static label and a pop-up button share the text field's and combo
+    // box's roles but carry no text readback.
+    for role in ["text", "combo_box"] {
+        let not_a_field = ElementNode {
+            role: role.to_string(),
+            ..button.clone()
+        };
+        let error = plan_for(not_a_field).unwrap_err();
+        assert_eq!(error.code, "ActionUnsupportedForEnvironment", "{role}");
+    }
+
+    assert!(plan_for(text_field(200.0, 100.0, 40.0, 20.0)).is_ok());
+    let editable = ElementNode {
+        role: "custom".to_string(),
+        supports_editable_text: true,
+        ..button
+    };
+    assert!(plan_for(editable).is_ok());
+}
+
+#[test]
 fn a_named_target_that_cannot_be_resolved_is_never_dropped() {
-    let mut below = element(185.0, 900.0, 100.0, 20.0);
+    // A text field, so `set_value` reaches the point resolution under test.
+    let mut below = text_field(185.0, 900.0, 100.0, 20.0);
     below.bounds.as_mut().unwrap().space = CoordinateSpace::DesktopLogical;
     for action in [ActionName::Scroll, ActionName::SetValue] {
         let out_of_view = action_request(
@@ -538,6 +576,23 @@ fn element(x: f64, y: f64, width: f64, height: f64) -> ElementNode {
             space: CoordinateSpace::StreamPixels,
         }),
         backend_ref: None,
+    }
+}
+
+/// A text field whose Accessibility value is not settable: it has text
+/// readback but does not report editable text.
+fn text_field(x: f64, y: f64, width: f64, height: f64) -> ElementNode {
+    ElementNode {
+        role: "text".to_string(),
+        text: Some(ElementTextReadback {
+            character_count: 0,
+            caret_offset: None,
+            content: Some(String::new()),
+            content_suppressed: false,
+            truncated: false,
+            selections: Vec::new(),
+        }),
+        ..element(x, y, width, height)
     }
 }
 

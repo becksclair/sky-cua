@@ -38,8 +38,11 @@ const CALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) struct Sendable<T>(pub T);
 
 // SAFETY: see the type documentation; the wrapped objects are immutable and
-// ScreenCaptureKit delivers them on arbitrary dispatch queues itself.
-unsafe impl<T> Send for Sendable<T> {}
+// ScreenCaptureKit delivers them on arbitrary dispatch queues itself. `Send`
+// is implemented only for the object types this module moves, so wrapping
+// anything else does not compile.
+unsafe impl Send for Sendable<Retained<SCShareableContent>> {}
+unsafe impl Send for Sendable<(Retained<SCContentFilter>, Retained<SCStreamConfiguration>)> {}
 
 /// A frame captured by ScreenCaptureKit with the desktop rectangle it covers.
 pub(super) struct CapturedFrame {

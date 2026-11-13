@@ -108,6 +108,9 @@ impl Lanes {
     /// Runs `job` on the lane for `pid` and waits up to `wait` for its answer
     /// without blocking the calling task's thread. On expiry the lane is
     /// abandoned and the request fails with `DesktopRequestDeadlineExceeded`.
+    /// Dropping the returned future abandons the lane the same way, so a
+    /// cancelled request never leaves the next one for that process queued
+    /// behind its job.
     pub(crate) async fn run<T, F>(
         &self,
         pid: i32,
@@ -138,12 +141,22 @@ impl Lanes {
                 let _ = sender.send(result);
             }),
         )?;
+        // Armed until the job answers: expiry, a lane panic, and a dropped
+        // future all leave the lane detached.
+        let mut detach = AbandonOnDrop {
+            lanes: self,
+            pid,
+            lane_id,
+            armed: true,
+        };
         match tokio::time::timeout(wait, &mut receiver).await {
-            Ok(Ok(result)) => result,
+            Ok(Ok(result)) => {
+                detach.armed = false;
+                result
+            }
             Ok(Err(_)) => {
                 // The job was dropped without answering: the lane thread
-                // panicked. Make sure the next request gets a fresh lane.
-                self.abandon(pid, lane_id);
+                // panicked, and the next request gets a fresh lane.
                 Err(BackendError::new(
                     BackendErrorCode::Internal,
                     format!("the macOS Accessibility lane for pid {pid} exited without answering"),
@@ -154,7 +167,6 @@ impl Lanes {
                 // the expiry at its next guard check, and before the caller
                 // inspects any state the job publishes.
                 receiver.close();
-                self.abandon(pid, lane_id);
                 Err(BackendError::new(
                     BackendErrorCode::DesktopRequestDeadlineExceeded,
                     format!(
@@ -223,6 +235,22 @@ impl Lanes {
     #[cfg(test)]
     pub(crate) fn live(&self) -> usize {
         self.map.lanes.lock().map(|lanes| lanes.len()).unwrap_or(0)
+    }
+}
+
+/// Detaches a lane when [`Lanes::run`] ends without an answer.
+struct AbandonOnDrop<'a> {
+    lanes: &'a Lanes,
+    pid: i32,
+    lane_id: u64,
+    armed: bool,
+}
+
+impl Drop for AbandonOnDrop<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.lanes.abandon(self.pid, self.lane_id);
+        }
     }
 }
 
@@ -314,11 +342,13 @@ mod tests {
     async fn a_running_job_sees_that_its_caller_stopped_waiting() {
         let lanes = Lanes::default();
         let (observed, observation) = mpsc::channel();
+        // The wait leaves the worker thread ample time to start, because a
+        // job that starts after its caller gave up is skipped, not run.
         let error = lanes
-            .run::<(), _>(-106, Duration::from_millis(50), move |_, guard| {
+            .run::<(), _>(-106, Duration::from_millis(500), move |_, guard| {
                 let before = guard.is_abandoned();
                 // Outlive the caller's wait, as a slow window lookup would.
-                std::thread::sleep(Duration::from_millis(300));
+                wait_until_abandoned(guard);
                 let _ = observed.send((before, guard.ensure_wanted().map_err(|error| error.code)));
                 Ok(())
             })
@@ -331,6 +361,53 @@ mod tests {
             .expect("the abandoned job still runs to its guard check");
         assert!(!before, "a job whose caller is waiting is wanted");
         assert_eq!(after, Err("DesktopRequestDeadlineExceeded"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dropping_the_caller_detaches_the_lane_and_stops_the_job() {
+        let lanes = Lanes::default();
+        let (started, has_started) = mpsc::channel();
+        let (observed, observation) = mpsc::channel();
+        let cancelled = lanes.clone();
+        let caller = tokio::spawn(async move {
+            cancelled
+                .run::<(), _>(-107, Duration::from_secs(30), move |_, guard| {
+                    let _ = started.send(());
+                    wait_until_abandoned(guard);
+                    let _ = observed.send(guard.ensure_wanted().map_err(|error| error.code));
+                    Ok(())
+                })
+                .await
+        });
+        tokio::task::spawn_blocking(move || has_started.recv_timeout(Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .expect("the job starts");
+        assert_eq!(lanes.live(), 1);
+
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        assert_eq!(lanes.live(), 0, "a dropped caller detaches its lane");
+        // The next request for that process is not queued behind the job.
+        let fresh = lanes
+            .run(-107, Duration::from_secs(1), |_, _| Ok(7))
+            .await
+            .unwrap();
+        assert_eq!(fresh, 7);
+        assert_eq!(
+            observation
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the cancelled job reaches its guard check"),
+            Err("DesktopRequestDeadlineExceeded")
+        );
+    }
+
+    /// Blocks the lane thread until the job's caller has stopped waiting.
+    fn wait_until_abandoned(guard: &JobGuard<'_>) {
+        let limit = Instant::now() + Duration::from_secs(10);
+        while !guard.is_abandoned() && Instant::now() < limit {
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

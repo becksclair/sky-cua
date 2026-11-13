@@ -233,7 +233,8 @@ impl NameRule {
 #[must_use]
 pub fn select_window(windows: &[MacWindow], selector: &AppSelector) -> Option<MacWindow> {
     let app_id = normalized_target(selector.app_id.as_deref());
-    let window_title = normalized_target(selector.window_title.as_deref());
+    let window_title =
+        normalized_target(selector.window_title.as_deref()).map(|title| title.to_ascii_lowercase());
     let name = normalized_target(selector.name.as_deref()).map(|name| name.to_ascii_lowercase());
     if app_id.is_none() && window_title.is_none() && name.is_none() {
         return None;
@@ -249,7 +250,7 @@ pub fn select_window(windows: &[MacWindow], selector: &AppSelector) -> Option<Ma
             });
             let title_match = window_title.as_deref().is_none_or(|value| {
                 let title = window.title.as_deref().unwrap_or_default();
-                !title.is_empty() && (title.eq_ignore_ascii_case(value) || title.contains(value))
+                !title.is_empty() && title.to_ascii_lowercase().contains(value)
             });
             let name_match = name
                 .as_deref()

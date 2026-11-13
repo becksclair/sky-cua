@@ -107,12 +107,38 @@ pub(super) fn plan_action(request: &ActionRequest) -> Result<ActionPlan, Backend
             required_text_arg(request, "text", "type_text requires text")?.to_owned(),
         ),
         ActionName::PressKey => PhysicalInput::PressKeys(parse_keys(request)?),
-        ActionName::SetValue => PhysicalInput::SetValue {
-            value: required_text_arg(request, "value", "set_value requires value")?.to_owned(),
-            at: optional_action_point(request)?,
-        },
+        ActionName::SetValue => {
+            if let Some(element) = request.resolved_element.as_ref()
+                && !accepts_typed_value(element)
+            {
+                return Err(BackendError::new(
+                    BackendErrorCode::ActionUnsupportedForEnvironment,
+                    format!(
+                        "set_value was not performed through Accessibility and has no physical fallback for a {} element, which is not a text field; observe again if its value should be settable",
+                        element.role
+                    ),
+                ));
+            }
+            PhysicalInput::SetValue {
+                value: required_text_arg(request, "value", "set_value requires value")?.to_owned(),
+                at: optional_action_point(request)?,
+            }
+        }
     };
     Ok(ActionPlan::Physical(input))
+}
+
+/// Whether clicking `element` and typing can stand in for a value write.
+///
+/// The physical `set_value` fallback clicks its target, selects all, and
+/// types. On anything but a text field the click is the control's own
+/// action (it presses the button, opens the pop-up menu) or takes no key
+/// focus (a label), and the typing lands in whatever held key focus. Text
+/// readback is present exactly on text fields, text areas, combo boxes, and
+/// search fields; the shared `text` and `combo_box` roles also cover static
+/// labels and pop-up buttons, so the role is not the test.
+fn accepts_typed_value(element: &ElementNode) -> bool {
+    element.supports_editable_text || element.text.is_some()
 }
 
 /// Posts `input` through CGEvent. Blocks; run on a blocking thread.
@@ -159,7 +185,12 @@ pub(super) fn perform(input: PhysicalInput) -> Result<ActionOutcome, BackendErro
                 std::thread::sleep(FOCUS_CLICK_SETTLE);
             }
             input::press_keys(&["Cmd".to_string(), "A".to_string()])?;
-            input::type_text(&value)?;
+            if value.is_empty() {
+                // Typing nothing would leave the old content selected.
+                input::press_keys(&["Backspace".to_string()])?;
+            } else {
+                input::type_text(&value)?;
+            }
             let mut outcome =
                 success("macOS used CGEvent focus/select-all/type fallback for set_value");
             outcome.diagnostics.push(
