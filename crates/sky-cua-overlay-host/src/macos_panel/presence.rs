@@ -17,7 +17,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PanelPresence {
     OrderedOut,
-    /// Ordered in, not yet listed on screen by the window server.
+    /// Ordered in, not yet able to take a frame: the window server has not
+    /// listed the panels on screen, or AppKit still reports them occluded.
     OrderingIn,
     OnScreen,
 }
@@ -35,8 +36,9 @@ pub(super) enum FrameStart {
 
 impl PanelPresence {
     /// Decides the start of a frame that wants the overlay `visible`.
-    /// `listed_on_screen` asks the window server whether it lists every panel
-    /// on screen; it is consulted only while the panels are being ordered in.
+    /// `listed_on_screen` asks whether the panels can take a frame now (the
+    /// window server lists them on screen and they are not occluded); it is
+    /// consulted only while the panels are being ordered in.
     pub(super) fn begin_frame(
         self,
         visible: bool,

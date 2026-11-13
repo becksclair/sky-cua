@@ -47,12 +47,16 @@ impl ReadableWake {
         // request was being handled is not missed.
         self.descriptor
             .enable_call_backs(kCFFileDescriptorReadCallBack);
-        // SAFETY: the default-mode constant is a valid mode name.
-        let result = CFRunLoop::run_in_mode(
-            unsafe { kCFRunLoopDefaultMode },
-            timeout.as_secs_f64(),
-            true,
-        );
+        // The turn can run AppKit callbacks, and the host never runs
+        // `NSApplication::run`, so it gets its own autorelease pool.
+        let result = objc2::rc::autoreleasepool(|_| {
+            // SAFETY: the default-mode constant is a valid mode name.
+            CFRunLoop::run_in_mode(
+                unsafe { kCFRunLoopDefaultMode },
+                timeout.as_secs_f64(),
+                true,
+            )
+        });
         if result == CFRunLoopRunResult::Finished {
             // The mode has no sources left, so the run loop returned at once;
             // sleep instead of spinning.

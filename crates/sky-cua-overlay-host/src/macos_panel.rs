@@ -37,7 +37,7 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy,
     NSApplicationDidChangeScreenParametersNotification, NSBackingStoreType, NSColor, NSPanel,
     NSScreenSaverWindowLevel, NSView, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
-    NSWindowSharingType, NSWindowStyleMask,
+    NSWindowOcclusionState, NSWindowSharingType, NSWindowStyleMask,
 };
 use objc2_core_graphics::CGSessionCopyCurrentDictionary;
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol, NSProcessInfo};
@@ -309,10 +309,19 @@ impl SurfacePlatform for MacosPanelPlatform {
         self.retired.clear();
         self.frame_visible = visible;
         let (presence, start) = self.presence.begin_frame(visible, || {
-            // An unavailable window list must not keep the overlay dark; the
-            // renderer's own occlusion check still applies.
+            // An unavailable window list must not keep the overlay dark.
             let window_ids = self.window_ids();
-            display::windows_on_screen(&window_ids).is_none_or(|count| count == window_ids.len())
+            let listed = display::windows_on_screen(&window_ids)
+                .is_none_or(|count| count == window_ids.len());
+            // The renderer skips a window AppKit still reports as occluded,
+            // so a frame can land only once at least one panel is not.
+            listed
+                && self.panels.iter().any(|entry| {
+                    entry
+                        .panel
+                        .occlusionState()
+                        .contains(NSWindowOcclusionState::Visible)
+                })
         });
         self.presence = presence;
         match start {
