@@ -9,7 +9,10 @@
 //! caller may forget its record.
 
 use std::fs;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+#[cfg(target_os = "linux")]
+use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd, OwnedFd};
+#[cfg(target_os = "linux")]
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -110,6 +113,7 @@ pub(super) fn identify(pid: u32) -> Result<ProcessIdentity> {
 /// Whether `actual` (from `/proc/<pid>/exe`) is the `expected` executable. A
 /// binary replaced by a package upgrade while the process runs reads as
 /// `"<path> (deleted)"`; it is still the same recorded process.
+#[cfg(target_os = "linux")]
 pub(super) fn exe_matches(actual: &Path, expected: &Path) -> bool {
     if actual == expected {
         return true;
@@ -123,6 +127,7 @@ pub(super) fn exe_matches(actual: &Path, expected: &Path) -> bool {
 }
 
 /// The NUL-separated arguments of `pid`.
+#[cfg(target_os = "linux")]
 pub(super) fn cmdline_args(pid: u32) -> Result<Vec<String>> {
     let raw = fs::read(format!("/proc/{pid}/cmdline"))
         .with_context(|| format!("cannot read command line for pid {pid}"))?;

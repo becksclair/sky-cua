@@ -1,6 +1,6 @@
-use super::owned_bus::{
-    parse_owned_bus, pid_is_dbus_daemon, read_owned_bus, remove_owned_bus_state,
-};
+#[cfg(target_os = "linux")]
+use super::owned_bus::remove_owned_bus_state;
+use super::owned_bus::{parse_owned_bus, pid_is_dbus_daemon, read_owned_bus};
 use super::*;
 
 #[test]

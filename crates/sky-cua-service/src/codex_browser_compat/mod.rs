@@ -837,6 +837,15 @@ mod tests {
         let server = listener.accept().await.unwrap();
         let backend = Arc::new(FakeBackend::new());
         let connection = tokio::spawn(serve_connection(server, backend.clone()));
+        // Keep the client connected until the server has read its credentials:
+        // Darwin fails LOCAL_PEEREPID with ENOTCONN once the peer has closed.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while backend.state.lock().await.opened.is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .expect("server opens the connection");
         drop(client);
         connection.await.unwrap().unwrap();
         assert_eq!(backend.state.lock().await.opened[0].peer_uid, unsafe {

@@ -266,8 +266,8 @@ struct SocketFixture(PathBuf);
 
 impl SocketFixture {
     fn new(name: &str) -> Self {
-        let dir =
-            std::env::temp_dir().join(format!("sky-cua-integration-{}-{name}", std::process::id()));
+        let dir = crate::test_paths::socket_temp_root()
+            .join(format!("sc-int-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir.join(format!("extension-{name}.sock")))
     }
@@ -2138,7 +2138,8 @@ async fn actor_event_lag_records_diagnostic_and_continues_processing() {
 async fn missing_socket_prunes_stale_actor_registry_entry() {
     use super::integration::{ActorEntry, BrowserControlRuntime};
 
-    let dir = std::env::temp_dir().join(format!("sky-cua-stale-actor-{}", std::process::id()));
+    let dir = crate::test_paths::socket_temp_root()
+        .join(format!("sky-cua-stale-actor-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     unsafe {
         std::env::set_var(crate::browser::sockets::SKY_CUA_SOCKET_DIR_ENV, &dir);
@@ -2175,7 +2176,7 @@ async fn integration_executor_ignores_selected_actor_until_it_is_ready() {
     use super::integration::{ActorEntry, IntegrationExecutor, Shared};
     use super::operation::{DispatchOperation, OperationIdentity};
 
-    let path = std::env::temp_dir().join(format!(
+    let path = crate::test_paths::socket_temp_root().join(format!(
         "sky-cua-unready-actor-{}-{}.sock",
         std::process::id(),
         std::time::SystemTime::now()

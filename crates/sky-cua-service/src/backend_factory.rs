@@ -10,16 +10,21 @@ pub fn create_backend() -> Box<dyn DesktopBackend> {
     Box::new(sky_cua_windows::WindowsDesktopBackend::new())
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+pub fn create_backend() -> Box<dyn DesktopBackend> {
+    Box::new(sky_cua_macos::MacosDesktopBackend::new())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn create_backend() -> Box<dyn DesktopBackend> {
     Box::new(UnsupportedDesktopBackend)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 #[derive(Debug)]
 struct UnsupportedDesktopBackend;
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 #[async_trait::async_trait]
 impl DesktopBackend for UnsupportedDesktopBackend {
     async fn probe_environment(

@@ -5,10 +5,32 @@ release: verify
 # Fast headless verification: Rust + Python + JS. Kotlin runs when a JDK is available.
 verify: verify-rust verify-python verify-js verify-kotlin
 
-verify-rust:
+# A host with no enabled `verify-rust` leaves `verify` with an unknown
+# dependency, which stops every recipe in this file from loading, so Windows
+# keeps the whole-workspace gate it had before the macOS split.
+# Rust gate for the host OS: every crate except the Linux-only ones on macOS, the whole workspace elsewhere.
+[linux]
+[windows]
+verify-rust: verify-rust-linux
+
+# Rust gate for the host OS: every crate except the Linux-only ones on macOS, the whole workspace elsewhere.
+[macos]
+verify-rust: verify-rust-macos
+
+# sky-cua-linux and sky-cua-cosmic-helper need GStreamer and Wayland system
+# libraries, so they build only on Linux.
+macos_rust_packages := "--workspace --exclude sky-cua-linux --exclude sky-cua-cosmic-helper"
+
+verify-rust-linux:
     cargo fmt --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo nextest run --workspace
+
+# rustfmt needs no system libraries, so formatting still covers every crate.
+verify-rust-macos:
+    cargo fmt --check
+    cargo clippy {{ macos_rust_packages }} --all-targets -- -D warnings
+    cargo nextest run {{ macos_rust_packages }}
 
 verify-python:
     uv run ruff format --check scripts

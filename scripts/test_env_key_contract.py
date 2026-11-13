@@ -101,6 +101,9 @@ KNOWN_PYTHON_ONLY: dict[str, str] = {
 # .mcp.json or exempted here with a reason -- the forced decision point this
 # plan exists to create.
 KNOWN_NOT_FORWARDED: dict[str, str] = {
+    "SKY_CUA_AX_PROBE_APPS": "test-only knob of the ignored macOS live probes (sky-cua-macos ax/live_tests.rs)",
+    "SKY_CUA_AX_PROBE_PID": "test-only knob of the ignored macOS live probes (sky-cua-macos ax/live_tests.rs)",
+    "SKY_CUA_AX_PROBE_ROOT": "test-only knob of the ignored macOS live probes (sky-cua-macos ax/live_tests.rs)",
     "SKY_CUA_BROWSER_USE_SESSIONS_DIR": "read only by the standalone chrome-host native-messaging process, launched by the browser itself, not through the MCP host env",
     "SKY_CUA_BROWSER_USE_SOCKET_DIR": "forwarded through the client's dedicated launch-environment repair path (service_launcher.rs), not the generic env_vars allowlist",
     "SKY_CUA_CAPTURE_DIR": "overlay-host motion/gesture capture-harness dev knob (renderer/motion_capture.rs, renderer/shaders.rs), not an operator toggle",
@@ -117,6 +120,7 @@ KNOWN_NOT_FORWARDED: dict[str, str] = {
     "SKY_CUA_DAEMON_LOG_PATH": "set by the client for its own spawned service child (resolved per-endpoint log path); never sourced externally",
     "SKY_CUA_FORCE_PIPEWIRE_CAPTURE_FAILURE": "test-only fault injection (portal/pipewire.rs)",
     "SKY_CUA_INPUT_HELPER_SOCKET_MODE": "input-helper systemd socket permission, set once at install time alongside SKY_CUA_INPUT_HELPER_SOCKET_GROUP into /etc/sky-cua/input-helper.env; the privileged sky-cua-input-helper.service never inherits from the MCP-launched process tree, so forwarding it through the per-invocation env_vars allowlist would be a no-op, not a real gap",
+    "SKY_CUA_MACOS_CAPTURE_PROBE_DIR": "test-only output directory of the ignored macOS live capture probe (sky-cua-macos capture/tests.rs)",
     "SKY_CUA_MCP_HOST": "deprecated client-ingress compatibility fallback; sky-cua-owned adapters set SKY_CUA_MCP_CALLER_PROVENANCE instead",
     "SKY_CUA_PHONE_COMMAND_TIMEOUT_MS": "internal phone-backend command timeout tuning, not a documented operator override",
     "SKY_CUA_POINTER_TRACKING_DEBUG": "overlay-host pointer-tracking debug logging toggle, not an operator toggle",
@@ -127,12 +131,14 @@ KNOWN_NOT_FORWARDED: dict[str, str] = {
     "SKY_CUA_COLD_START_HELPER_READY": "test-only IPC (service_launcher.rs #[cfg(test)])",
     "SKY_CUA_COLD_START_HELPER_RELEASE": "test-only IPC (service_launcher.rs #[cfg(test)])",
     "SKY_CUA_COLD_START_HELPER_SOCKET": "test-only IPC socket (service_launcher.rs #[cfg(test)])",
+    "SKY_CUA_IDENTITY_SLEEPER": "test-only helper-mode switch (service_launcher/tests/macos_lifecycle.rs)",
     "SKY_CUA_LIFECYCLE_LEASE_HELPER_EXPECT": "test-only IPC (daemon_singleton.rs #[cfg(test)])",
     "SKY_CUA_LIFECYCLE_LEASE_HELPER_SOCKET": "test-only IPC socket (daemon_singleton.rs #[cfg(test)])",
     "SKY_CUA_STALE_SERVER_MARK_ON_ACCEPT": "test-only IPC counter (service_launcher.rs #[cfg(test)])",
     "SKY_CUA_STALE_SERVER_OBSERVED": "test-only IPC path (service_launcher.rs #[cfg(test)])",
     "SKY_CUA_STALE_SERVER_READY": "test-only IPC path (service_launcher.rs #[cfg(test)])",
     "SKY_CUA_STALE_SERVER_SOCKET": "test-only IPC socket (service_launcher.rs #[cfg(test)])",
+    "SKY_CUA_TEST_FAKE_SERVICE_OWNER_PID": "test-only fake-daemon watchdog pid (service_launcher.rs #[cfg(test)])",
     "SKY_CUA_TEST_SPAWN_COUNT_PATH": "test-only IPC path (service_launcher.rs #[cfg(test)])",
 }
 

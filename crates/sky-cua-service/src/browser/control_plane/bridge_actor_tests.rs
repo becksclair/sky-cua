@@ -39,10 +39,8 @@ impl SocketFixture {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "sky-cua-bridge-actor-{name}-{}-{suffix}",
-            std::process::id()
-        ));
+        let dir = crate::test_paths::socket_temp_root()
+            .join(format!("sc-bridge-{name}-{}-{suffix}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("extension-123-actor.sock");
         Self { dir, path }

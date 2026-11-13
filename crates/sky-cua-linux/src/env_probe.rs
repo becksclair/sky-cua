@@ -173,7 +173,9 @@ fn select_capture_backend(
                 CaptureBackendKind::None
             }
         }
-        SessionKind::Windows | SessionKind::Unsupported => CaptureBackendKind::None,
+        SessionKind::Windows | SessionKind::Macos | SessionKind::Unsupported => {
+            CaptureBackendKind::None
+        }
     }
 }
 
@@ -215,7 +217,9 @@ fn select_input_backend(
                 InputBackendKind::None
             }
         }
-        SessionKind::Windows | SessionKind::Unsupported => InputBackendKind::None,
+        SessionKind::Windows | SessionKind::Macos | SessionKind::Unsupported => {
+            InputBackendKind::None
+        }
     }
 }
 
@@ -367,7 +371,7 @@ pub fn require_supported_environment(environment: &EnvironmentInfo) -> Result<()
         SessionKind::Unsupported => true,
         SessionKind::X11 => environment.display.is_none(),
         SessionKind::Wayland => environment.wayland_display.is_none(),
-        SessionKind::Windows => false,
+        SessionKind::Windows | SessionKind::Macos => false,
     };
     if missing_display {
         return Err(BackendError::new(

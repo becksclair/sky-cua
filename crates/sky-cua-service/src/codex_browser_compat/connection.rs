@@ -242,6 +242,7 @@ fn peer_codex_app_build_flavor(_pid: i32) -> Result<Option<String>> {
     Ok(None)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn codex_app_build_flavor_from_environ(environment: &[u8]) -> Result<Option<String>> {
     const KEY: &[u8] = b"BROWSER_USE_CODEX_APP_BUILD_FLAVOR=";
     let Some(value) = environment

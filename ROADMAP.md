@@ -8,6 +8,57 @@ see [`docs/features/`](docs/features/). For tactical memory, see
 Closed boxes link to the feature doc that describes the shipped behavior.
 Open boxes link to the active ExecPlan that owns the work.
 
+## Phase: macOS parity
+
+The macOS backend lands in two steps: an initial desktop lane at Windows-v1
+parity, then the follow-ups below, which are deliberately outside the initial
+pass and are the first work to pick up once it is proven.
+
+- [x] Initial macOS desktop backend (`sky-cua-macos`: Accessibility tree and
+      semantic actions on non-blocking per-application worker lanes,
+      ScreenCaptureKit capture, CoreGraphics window and display enumeration,
+      CGEvent input, System Settings permission guidance, automatic
+      replacement of a stale daemon after a rebuild, and a per-platform
+      verification gate) —
+      [`docs/features/macos-desktop-backend.md`](docs/features/macos-desktop-backend.md)
+  - [x] Live proof through the MCP client on a real macOS session: doctor,
+        app and window listing, observe with screenshot, semantic action,
+        pointer and keyboard input (2026-11-11, single Retina display)
+  - [ ] Live proof on multiple displays with mixed scale factors, of the
+        missing-permission guidance, and of the Chromium/Electron tree
+        wake-up against a dormant application
+  - [ ] Dialog-aware window model: attribute sheets, popovers, and other
+        child windows to their parent (focus from Accessibility instead of
+        z-order, child windows included in the parent's capture), and
+        surface app-modal and floating panels that live above the normal
+        window layer
+  - [ ] Report pixel-space element bounds on the `observe` path, and keep a
+        deadline-truncated tree's text instead of dropping it
+- [ ] macOS agent cursor overlay host — a full port in the existing
+      cross-platform overlay design (the `macos_panel` adapter and
+      `macos_native` system-cursor backend are contract placeholders today;
+      the overlay host binary only compiles to an honest no-op on macOS)
+- [ ] Pointer-preserving input on macOS (process-targeted event delivery) so
+      agent actions do not move the user's real cursor or steal focus
+- [ ] macOS session presence (idle display and system sleep assertions) —
+      sketched in [`docs/features/session-presence.md`](docs/features/session-presence.md)
+- [ ] Application launch on macOS (`desktop_launch_app`)
+- [ ] Browser-use on macOS: native-messaging host manifests under
+      `~/Library/Application Support/<browser>/NativeMessagingHosts` and the
+      extension-host payload for `darwin`
+- [ ] macOS installer, standalone release, and `cua_node` target (the build
+      and install scripts hardcode `linux-x64-glibc` and classify a Mac as
+      `linux-arm64`; the `bin/` wrappers only work from a checkout through
+      their `target/release` fallback)
+- [ ] CUA action surface (`execute_cua_action`) and the `@heliasar/sky-cua`
+      Darwin facade, which currently throws `SKY_CUA_TARGET_UNAVAILABLE`
+- [ ] Appshots on macOS (`get_app_state_for_window`; the capability is
+      Linux-gated today)
+- [ ] A sky-cua-owned permission identity (signed application bundle with a
+      stable identity) so Accessibility and Screen Recording grants belong to
+      sky-cua instead of the host application that launched it
+- [ ] Hosted macOS CI job running the macOS verification gate
+
 ## Phase: Linux desktop parity
 
 - [x] Isolated xpra desktop (private X11 desktop the computer-use agent owns;

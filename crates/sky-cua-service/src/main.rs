@@ -23,6 +23,8 @@ mod phone;
 mod phone;
 mod session_store;
 mod snapshot_manager;
+#[cfg(test)]
+mod test_paths;
 
 use anyhow::Result;
 use sky_cua_platform::model::{SessionPresenceAction, SessionPresenceIntent};

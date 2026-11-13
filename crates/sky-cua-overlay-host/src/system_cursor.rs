@@ -157,7 +157,7 @@ impl SystemCursorAdapter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 impl SystemCursorAdapter {
     #[must_use]
     pub(crate) fn test_kwin_effect(hidden: bool) -> Self {

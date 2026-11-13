@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
+#[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
@@ -481,6 +482,7 @@ fn socket_browser_family(socket: &Path) -> Option<BrowserFamily> {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(super) fn socket_host_pid(socket: &Path) -> Option<u32> {
     let file_name = socket.file_name()?.to_str()?;
     let rest = file_name.strip_prefix("extension-")?;
@@ -511,6 +513,7 @@ pub(super) fn browser_family_from_cmdline(cmdline: &str) -> Option<BrowserFamily
     browser_family_from_executable(cmdline.split_whitespace().next()?)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn browser_family_from_executable(executable: &str) -> Option<BrowserFamily> {
     let executable = executable.to_ascii_lowercase();
     if executable.contains("brave") {

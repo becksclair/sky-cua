@@ -18,9 +18,11 @@
 
 /// Close every inherited file descriptor above stdio (fd 3 and up).
 ///
-/// Best effort: uses the `close_range(2)` syscall (Linux 5.9+). On kernels
-/// without it, or on non-Linux platforms, this is a no-op and the previous
-/// inherit-everything behavior remains.
+/// Best effort: uses the `close_range(2)` syscall (Linux 5.9+) and, on macOS,
+/// enumerates the open descriptors with `proc_pidinfo(PROC_PIDLISTFDS)` and
+/// closes each one. On Linux kernels without `close_range`, or on other
+/// platforms, this is a no-op and the previous inherit-everything behavior
+/// remains.
 ///
 /// Must be called before the process opens descriptors it needs (async
 /// runtime, listeners, log files); stdio (0-2) is preserved.
@@ -31,6 +33,57 @@ pub fn close_inherited_fds() {
     unsafe {
         let _ = libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32);
     }
+    #[cfg(target_os = "macos")]
+    for fd in open_fds_above_stdio() {
+        // SAFETY: at this point in startup the process owns nothing above
+        // stdio; every listed descriptor was inherited across exec.
+        unsafe {
+            libc::close(fd);
+        }
+    }
+}
+
+/// Descriptors above stdio that are open in this process right now.
+#[cfg(target_os = "macos")]
+fn open_fds_above_stdio() -> Vec<libc::c_int> {
+    const ENTRY: usize = std::mem::size_of::<libc::proc_fdinfo>();
+    // SAFETY: getpid has no preconditions.
+    let pid = unsafe { libc::getpid() };
+    // A null buffer asks the kernel for the current table size in bytes.
+    // SAFETY: a null buffer with zero size is the documented size query.
+    let needed =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+    let Ok(needed) = usize::try_from(needed) else {
+        return Vec::new();
+    };
+    // Headroom for descriptors opened between the two calls.
+    let capacity = needed / ENTRY + 16;
+    let mut entries = vec![
+        libc::proc_fdinfo {
+            proc_fd: 0,
+            proc_fdtype: 0,
+        };
+        capacity
+    ];
+    // SAFETY: the kernel writes at most `capacity * ENTRY` bytes.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDLISTFDS,
+            0,
+            entries.as_mut_ptr().cast(),
+            libc::c_int::try_from(capacity * ENTRY).unwrap_or(libc::c_int::MAX),
+        )
+    };
+    let Ok(written) = usize::try_from(written) else {
+        return Vec::new();
+    };
+    entries.truncate(written / ENTRY);
+    entries
+        .into_iter()
+        .map(|entry| entry.proc_fd)
+        .filter(|fd| *fd > 2)
+        .collect()
 }
 
 #[cfg(unix)]
@@ -110,5 +163,19 @@ mod tests {
         }
         restore_inherited_nofile_limit();
         assert_eq!(soft_nofile(), before);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn open_fd_listing_tracks_descriptors_above_stdio() {
+        use std::os::fd::AsRawFd;
+
+        let file = std::fs::File::open("/dev/null").expect("open /dev/null");
+        let fd = file.as_raw_fd();
+        let listed = open_fds_above_stdio();
+        assert!(listed.contains(&fd), "fd {fd} missing from {listed:?}");
+        assert!(listed.iter().all(|listed_fd| *listed_fd > 2));
+        drop(file);
+        assert!(!open_fds_above_stdio().contains(&fd));
     }
 }

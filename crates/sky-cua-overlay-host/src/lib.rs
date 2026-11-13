@@ -1130,7 +1130,9 @@ mod tests {
         );
     }
 
+    // The GNOME and X11 mode names are only recognised on Linux.
     #[test]
+    #[cfg(target_os = "linux")]
     fn legacy_gnome_and_x11_modes_report_noop_capabilities() {
         for (mode, reason) in [
             (

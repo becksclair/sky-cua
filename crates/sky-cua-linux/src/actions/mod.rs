@@ -281,9 +281,9 @@ where
             }
             InputBackendKind::XTest => self.runtime.xtest_key_state(key, pressed),
             InputBackendKind::LinuxVirtualInput => self.runtime.virtual_key_state(key, pressed),
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error("held key"))
-            }
+            InputBackendKind::SendInput
+            | InputBackendKind::WindowsMessages
+            | InputBackendKind::CgEvent => Err(non_linux_input_backend_error("held key")),
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 "no physical input backend is available for held key",
@@ -315,9 +315,9 @@ where
                     point.diagnostics(),
                 ))
             }
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error("move"))
-            }
+            InputBackendKind::SendInput
+            | InputBackendKind::WindowsMessages
+            | InputBackendKind::CgEvent => Err(non_linux_input_backend_error("move")),
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 "no physical input backend is available for move",
@@ -575,9 +575,9 @@ where
                     .virtual_click_at(dispatch_point.x, dispatch_point.y, button)?;
                 Ok(success_with_diagnostics(virtual_message, diagnostics))
             }
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error(action_name))
-            }
+            InputBackendKind::SendInput
+            | InputBackendKind::WindowsMessages
+            | InputBackendKind::CgEvent => Err(non_linux_input_backend_error(action_name)),
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 format!("no physical input backend is available for {action_name}"),
@@ -600,7 +600,9 @@ where
                 InputBackendKind::PortalRemoteDesktop => {}
                 InputBackendKind::XTest => self.runtime.xtest_pointer_move_absolute(x, y)?,
                 InputBackendKind::LinuxVirtualInput => {}
-                InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {}
+                InputBackendKind::SendInput
+                | InputBackendKind::WindowsMessages
+                | InputBackendKind::CgEvent => {}
                 InputBackendKind::None => {}
             }
         }
@@ -741,9 +743,9 @@ where
                     diagnostics,
                 ))
             }
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error("scroll"))
-            }
+            InputBackendKind::SendInput
+            | InputBackendKind::WindowsMessages
+            | InputBackendKind::CgEvent => Err(non_linux_input_backend_error("scroll")),
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 "no physical input backend is available for scroll",
@@ -819,9 +821,9 @@ where
                     point.diagnostics(),
                 ))
             }
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error("horizontal scroll"))
-            }
+            InputBackendKind::SendInput
+            | InputBackendKind::WindowsMessages
+            | InputBackendKind::CgEvent => Err(non_linux_input_backend_error("horizontal scroll")),
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 "no physical input backend is available for horizontal scroll",
@@ -966,9 +968,9 @@ where
                     diagnostics,
                 ))
             }
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error("drag"))
-            }
+            InputBackendKind::SendInput
+            | InputBackendKind::WindowsMessages
+            | InputBackendKind::CgEvent => Err(non_linux_input_backend_error("drag")),
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 "no physical input backend is available for drag",
@@ -1032,9 +1034,9 @@ where
                     "Typed text through the Linux virtual input fallback.",
                 ))
             }
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error("type_text"))
-            }
+            InputBackendKind::SendInput
+            | InputBackendKind::WindowsMessages
+            | InputBackendKind::CgEvent => Err(non_linux_input_backend_error("type_text")),
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 "no physical input backend is available for type_text",
@@ -1074,9 +1076,9 @@ where
                     "Pressed the key sequence through the Linux virtual input fallback.",
                 ))
             }
-            InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                Err(windows_input_backend_error("press_key"))
-            }
+            InputBackendKind::SendInput
+            | InputBackendKind::WindowsMessages
+            | InputBackendKind::CgEvent => Err(non_linux_input_backend_error("press_key")),
             InputBackendKind::None => Err(BackendError::new(
                 BackendErrorCode::ActionUnsupportedForEnvironment,
                 "no physical input backend is available for press_key",
@@ -1336,8 +1338,10 @@ where
                             diagnostics,
                         ))
                     }
-                    InputBackendKind::SendInput | InputBackendKind::WindowsMessages => {
-                        Err(windows_input_backend_error("set_value fallback"))
+                    InputBackendKind::SendInput
+                    | InputBackendKind::WindowsMessages
+                    | InputBackendKind::CgEvent => {
+                        Err(non_linux_input_backend_error("set_value fallback"))
                     }
                     InputBackendKind::None => Err(BackendError::new(
                         BackendErrorCode::ActionUnsupportedForEnvironment,
@@ -1429,10 +1433,12 @@ fn canonical_action_aliases(action: &str) -> &'static [&'static str] {
     }
 }
 
-fn windows_input_backend_error(action: &str) -> BackendError {
+fn non_linux_input_backend_error(action: &str) -> BackendError {
     BackendError::new(
         BackendErrorCode::ActionUnsupportedForEnvironment,
-        format!("Windows input backends are unavailable in the Linux backend for {action}"),
+        format!(
+            "Windows and macOS input backends are unavailable in the Linux backend for {action}"
+        ),
     )
 }
 
