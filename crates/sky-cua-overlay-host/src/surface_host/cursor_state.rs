@@ -2,7 +2,10 @@
 //! model), and the compositor pointer-telemetry reconciliation that moves the
 //! stored state target (never the drawn pose — the motion driver owns that).
 
-use super::*;
+use sky_cua_platform::model::{AgentCursorPoint, AgentCursorState, CoordinateSpace};
+
+use super::current_epoch_ms;
+use crate::system_cursor::SystemPointerPosition;
 
 pub(super) fn cursor_point(state: &AgentCursorState) -> Option<(f64, f64)> {
     state

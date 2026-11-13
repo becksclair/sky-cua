@@ -41,7 +41,11 @@ Public model in `crates/sky-cua-platform/src/model.rs`:
 - `cosmic_transparent_xcursor`
 - `x11_xfixes`, `gnome_shell_extension` — historical compatibility values
   for retired visible overlay paths
-- `windows_win32`, `macos_native` — placeholders for future native adapters
+- `macos_native` — reported by the macOS overlay host, always with
+  `system_cursor_hide_supported=false`: public macOS interfaces let only the
+  frontmost application hide the pointer, and the click-through overlay never
+  is frontmost
+- `windows_win32` — placeholder for a future native adapter
 
 ## Behavior
 
@@ -87,7 +91,7 @@ Capability honesty rules:
 - `crates/sky-cua-overlay-host/src/system_cursor.rs` — adapter trait and
   selection plus the Hyprland-config, COSMIC bridge, and transparent-
   Xcursor adapter implementations
-- `crates/sky-cua-overlay-host/src/layer_shell.rs` — Wayland visual overlay
+- `crates/sky-cua-overlay-host/src/layer_shell.rs` — Wayland overlay platform
   and system-cursor adapter selection
 - `resources/kwin/effects/sky-cua-agent-cursor/` — KWin cursor-hide and
   pointer-position shim

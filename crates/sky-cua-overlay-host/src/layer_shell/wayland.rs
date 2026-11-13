@@ -1,8 +1,8 @@
-//! Wayland plumbing for the layer-shell host: surface creation, raw handle
-//! extraction, and the SCTK handler/dispatch impls. Protocol state changes
-//! land here (configure/close, output add/change/destroy, capture-barrier
-//! frame callbacks); the output handlers rebuild the geometry snapshot the
-//! per-frame paths read.
+//! Wayland plumbing for the layer-shell platform: surface creation, raw
+//! handle extraction, and the SCTK handler/dispatch impls. Protocol state
+//! changes land here (configure/close, output add/change/destroy,
+//! capture-barrier frame callbacks); the output handlers rebuild the geometry
+//! snapshot the per-frame paths read.
 
 use super::*;
 
@@ -35,7 +35,7 @@ pub(crate) fn wayland_window_handle(
 pub(super) fn create_cursor_layer(
     compositor: &CompositorState,
     layer_shell: &LayerShell,
-    qh: &QueueHandle<LayerShellApp>,
+    qh: &QueueHandle<LayerShellState>,
     output: Option<&wl_output::WlOutput>,
 ) -> LayerSurface {
     let surface = compositor.create_surface(qh);
@@ -74,14 +74,14 @@ fn requested_layer() -> Layer {
 fn set_empty_input_region(
     compositor: &CompositorState,
     layer: &LayerSurface,
-    qh: &QueueHandle<LayerShellApp>,
+    qh: &QueueHandle<LayerShellState>,
 ) {
     // An empty Wayland input region makes the overlay click-through.
     let region = compositor.wl_compositor().create_region(qh, ());
     layer.set_input_region(Some(&region));
     region.destroy();
 }
-impl CompositorHandler for LayerShellApp {
+impl CompositorHandler for LayerShellState {
     fn scale_factor_changed(
         &mut self,
         _conn: &Connection,
@@ -120,9 +120,7 @@ impl CompositorHandler for LayerShellApp {
                 surface.commit();
             }
         }
-        if self.capture_barrier.is_some() && self.capture_barrier_complete() {
-            self.capture_barrier = None;
-        }
+        self.settle_capture_barrier();
     }
 
     fn surface_enter(
@@ -143,7 +141,7 @@ impl CompositorHandler for LayerShellApp {
     ) {
     }
 }
-impl LayerShellHandler for LayerShellApp {
+impl LayerShellHandler for LayerShellState {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
         if let Some(entry) = self.layers.iter_mut().find(|entry| &entry.layer == layer) {
             entry.closed = true;
@@ -173,7 +171,7 @@ impl LayerShellHandler for LayerShellApp {
         }
     }
 }
-impl OutputHandler for LayerShellApp {
+impl OutputHandler for LayerShellState {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
@@ -184,7 +182,8 @@ impl OutputHandler for LayerShellApp {
         _qh: &QueueHandle<Self>,
         _output: wl_output::WlOutput,
     ) {
-        self.lifecycle_state = AgentOverlayHostLifecycleState::BackendUnsupported;
+        // No layer surface covers the new output, so the host fails closed.
+        self.output_added = true;
         self.refresh_output_geometry();
     }
 
@@ -215,13 +214,11 @@ impl OutputHandler for LayerShellApp {
                 entry.capture_barrier_frames_remaining = 0;
             }
         }
-        if self.capture_barrier.is_some() && self.capture_barrier_complete() {
-            self.capture_barrier = None;
-        }
+        self.settle_capture_barrier();
         self.refresh_output_geometry();
     }
 }
-impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for LayerShellApp {
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for LayerShellState {
     fn event(
         _state: &mut Self,
         _registry: &wl_registry::WlRegistry,
@@ -232,7 +229,7 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for LayerShellApp {
     ) {
     }
 }
-impl Dispatch<wl_region::WlRegion, ()> for LayerShellApp {
+impl Dispatch<wl_region::WlRegion, ()> for LayerShellState {
     fn event(
         _state: &mut Self,
         _region: &wl_region::WlRegion,
@@ -243,6 +240,6 @@ impl Dispatch<wl_region::WlRegion, ()> for LayerShellApp {
     ) {
     }
 }
-delegate_compositor!(LayerShellApp);
-delegate_layer!(LayerShellApp);
-delegate_output!(LayerShellApp);
+delegate_compositor!(LayerShellState);
+delegate_layer!(LayerShellState);
+delegate_output!(LayerShellState);

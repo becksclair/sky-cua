@@ -573,11 +573,13 @@ impl OverlayController {
             return false;
         }
 
+        // A host whose surfaces the windowing system keeps out of captures
+        // stays on screen: hiding it would only blink the overlay. `always`
+        // still forces the hide.
         self.hide_for_capture_mode == CursorMode::Always
-            || self
-                .host_capabilities
-                .as_ref()
-                .is_some_and(|capabilities| capabilities.visible_overlay)
+            || self.host_capabilities.as_ref().is_some_and(|capabilities| {
+                capabilities.visible_overlay && !capabilities.capture_exclusion
+            })
     }
 
     fn send_host_message(
@@ -1833,6 +1835,39 @@ mod tests {
     }
 
     #[test]
+    fn prepare_for_capture_leaves_a_capture_excluded_overlay_on_screen() {
+        let mut controller = OverlayController::new_for_tests();
+        controller.apply_host_reply(OverlayHostReply {
+            motion: None,
+            arrival_wait: None,
+            version: OVERLAY_HOST_PROTOCOL_VERSION,
+            ok: true,
+            capabilities: Some(super::AgentCursorCapabilities {
+                capture_exclusion: true,
+                ..visible_overlay_capabilities("capture-excluded host")
+            }),
+            lifecycle_state: None,
+            applied_sequence: None,
+            state: None,
+            diagnostics: Vec::new(),
+        });
+        controller.set_state(synthetic_state(10, 20));
+
+        let guard = controller.prepare_for_capture();
+
+        assert!(!guard.restore_visible_overlay);
+        assert!(guard.diagnostics.is_empty());
+        assert!(controller.state().expect("state").visible);
+        assert!(controller.restore_after_capture(guard).is_empty());
+
+        // `always` is an explicit request to hide regardless.
+        controller.hide_for_capture_mode = super::CursorMode::Always;
+        let guard = controller.prepare_for_capture();
+        assert!(guard.restore_visible_overlay);
+        assert!(!controller.state().expect("hidden state").visible);
+    }
+
+    #[test]
     fn restore_after_capture_restores_local_visibility_when_host_request_fails() {
         let mut controller =
             OverlayController::new_for_tests_with_failing_host("AgentCursorHostRequestFailed");
@@ -2135,7 +2170,9 @@ mod tests {
             visible_overlay: true,
             screenshot_synthetic_cursor: false,
             click_through: true,
-            capture_exclusion: true,
+            // As the layer-shell host reports it: the compositor includes the
+            // overlay in captures, so the service hides it around each one.
+            capture_exclusion: false,
             pointer_tracking_backend:
                 sky_cua_platform::model::AgentCursorPointerTrackingBackendKind::KwinEffectSignal,
             pointer_tracking_exact: true,

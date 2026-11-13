@@ -57,7 +57,8 @@ impl SurfaceGuard {
         let capabilities = self.capabilities(adapter);
         let format = choose_surface_format(&capabilities.formats)
             .expect("renderer initialization must reject incompatible surface formats");
-        let present_mode = choose_present_mode(&capabilities.present_modes);
+        let present_mode =
+            choose_present_mode(&capabilities.present_modes, PRESENT_WITHOUT_DISPLAY_SYNC);
         let alpha_mode = choose_alpha_mode(&capabilities.alpha_modes);
         let config = ::wgpu::SurfaceConfiguration {
             usage: ::wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -104,9 +105,10 @@ impl SurfaceGuard {
                 }
                 SurfaceAcquisitionResult::Retry("surface lost or outdated")
             }
-            ::wgpu::CurrentSurfaceTexture::Timeout | ::wgpu::CurrentSurfaceTexture::Occluded => {
-                SurfaceAcquisitionResult::Retry("surface timed out or is occluded")
+            ::wgpu::CurrentSurfaceTexture::Timeout => {
+                SurfaceAcquisitionResult::Retry("surface timed out")
             }
+            ::wgpu::CurrentSurfaceTexture::Occluded => SurfaceAcquisitionResult::Occluded,
             ::wgpu::CurrentSurfaceTexture::Validation => SurfaceAcquisitionResult::Validation,
         }
     }
@@ -122,6 +124,10 @@ impl SurfaceGuard {
 pub enum SurfaceAcquisitionResult {
     Success(::wgpu::SurfaceTexture),
     Retry(&'static str),
+    /// The windowing system is not showing the surface (a window that has
+    /// just been ordered in, a sleeping or locked display). There is nothing
+    /// to present to; the frame is skipped, not failed.
+    Occluded,
     Validation,
 }
 
@@ -140,9 +146,26 @@ pub(crate) fn choose_surface_format(
         })
 }
 
-fn choose_present_mode(present_modes: &[::wgpu::PresentMode]) -> ::wgpu::PresentMode {
+/// Whether a surface without `Mailbox` presents unsynchronized instead of
+/// waiting for the display.
+///
+/// The host paces its own frames and serves its socket on the same thread, so
+/// a present should never block. Metal offers no `Mailbox`, and with display
+/// sync on, a drawable presented to a window the window server has only just
+/// started compositing is held; once the layer's drawables are all held, the
+/// next frame blocks the thread for a second (observed live on macOS 27.2,
+/// about once in forty show/hide cycles). The window server composites the
+/// overlay window itself, so unsynchronized presents cannot tear.
+const PRESENT_WITHOUT_DISPLAY_SYNC: bool = cfg!(target_os = "macos");
+
+fn choose_present_mode(
+    present_modes: &[::wgpu::PresentMode],
+    without_display_sync: bool,
+) -> ::wgpu::PresentMode {
     if present_modes.contains(&::wgpu::PresentMode::Mailbox) {
         ::wgpu::PresentMode::Mailbox
+    } else if without_display_sync && present_modes.contains(&::wgpu::PresentMode::Immediate) {
+        ::wgpu::PresentMode::Immediate
     } else {
         ::wgpu::PresentMode::Fifo
     }
@@ -215,9 +238,35 @@ mod tests {
 
     #[test]
     fn present_mode_prefers_mailbox() {
+        for without_display_sync in [false, true] {
+            assert_eq!(
+                choose_present_mode(
+                    &[
+                        ::wgpu::PresentMode::Fifo,
+                        ::wgpu::PresentMode::Immediate,
+                        ::wgpu::PresentMode::Mailbox
+                    ],
+                    without_display_sync
+                ),
+                ::wgpu::PresentMode::Mailbox
+            );
+        }
+    }
+
+    #[test]
+    fn present_mode_without_mailbox_is_immediate_only_when_asked_to_skip_display_sync() {
+        let metal_modes = [::wgpu::PresentMode::Fifo, ::wgpu::PresentMode::Immediate];
         assert_eq!(
-            choose_present_mode(&[::wgpu::PresentMode::Fifo, ::wgpu::PresentMode::Mailbox]),
-            ::wgpu::PresentMode::Mailbox
+            choose_present_mode(&metal_modes, true),
+            ::wgpu::PresentMode::Immediate
+        );
+        assert_eq!(
+            choose_present_mode(&metal_modes, false),
+            ::wgpu::PresentMode::Fifo
+        );
+        assert_eq!(
+            choose_present_mode(&[::wgpu::PresentMode::Fifo], true),
+            ::wgpu::PresentMode::Fifo
         );
     }
 

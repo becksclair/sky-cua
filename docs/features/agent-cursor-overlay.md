@@ -2,9 +2,11 @@
 
 ## Status
 
-Shipped on Linux with WGPU-only production visible rendering on Wayland.
-Windows native overlay deferred until a Windows machine is available for live
-proof. Last verified: 2026-07-02 on the operator KDE Wayland desktop (2560x1440
+Shipped on Linux with WGPU-only production visible rendering on Wayland, and
+on macOS with the same renderer on Metal (live-proven 2026-11-13 on macOS
+27.2, Apple Silicon, one built-in Retina display; see "macOS panel host" and
+Verification). Windows native overlay deferred until a Windows machine is
+available for live proof. Last Linux verification: 2026-07-02 on the operator KDE Wayland desktop (2560x1440
 logical) — phone-parity cursor motion: the structured
 `layer-shell-motion-glide` smoke passed (snap at A, unsettled strictly-between
 mid-flight via the `motion` echo, exact settle at B), the offline dense-frame
@@ -32,7 +34,7 @@ Public model in `crates/sky-cua-platform/src/model.rs`:
 - `AgentCursorPoint { x, y, coordinate_space, mapping_id }`
 - `AgentCursorCapabilities { backend, renderer_backend, visible_overlay, screenshot_synthetic_cursor, click_through, capture_exclusion, pointer_tracking_backend, pointer_tracking_exact, system_cursor_hide_supported, system_cursor_backend, system_cursor_hidden, needs_user_install, reason }`
 - `AgentCursorBackendKind`: production visible rendering currently uses
-  `wayland_layer_shell` or `none`. `x11_shaped_window`,
+  `wayland_layer_shell` on Linux, `macos_panel` on macOS, or `none`. `x11_shaped_window`,
   `gnome_shell_extension`, `cosmic_comp_bridge`, and
   `cosmic_transparent_xcursor` remain serialized compatibility values or
   historical capability values, not selectable production renderers for the
@@ -43,15 +45,19 @@ Public model in `crates/sky-cua-platform/src/model.rs`:
 - `AgentCursorPointerTrackingBackendKind`: `kwin_effect_signal`,
   `privileged_input_helper`, `x11_query`, `none`.
 - `AgentCursorPlane`: `UserVisible`, `ScreenshotSynthetic`
-- `AgentCursorSystemCursorBackend`: see `docs/features/compositor-cursor-hiding.md`
+- `AgentCursorSystemCursorBackend`: see `docs/features/compositor-cursor-hiding.md`.
+  macOS reports `macos_native` with `system_cursor_hide_supported=false`.
+- `capture_exclusion`: the windowing system keeps the overlay out of screen
+  captures while it stays on screen. `true` on macOS, `false` on Wayland. The
+  service does not hide a capture-excluded overlay around a capture.
 - `AppStateSnapshot.agent_cursor`, `ActionOutcome.agent_cursor` (preserved in compact snapshots)
 
 Service IPC variants: `ServiceRequest::AgentCursorStatus`, `SetAgentCursor`,
 `HideAgentCursor`, `ShowAgentCursor`. These are internal and not exposed as
 MCP tools.
 
-Overlay-host JSON-lines protocol on
-`$XDG_RUNTIME_DIR/sky-cua/agent-cursor.sock` with versioned messages
+Overlay-host JSON-lines protocol on `agent-cursor.sock` beside the service
+socket (`$XDG_RUNTIME_DIR/sky-cua/` by default) with versioned messages
 `hello`, `capabilities`, `set_cursor`, `animate_gesture`, `wait_for_arrival`,
 `hide`, `show`, `ping`, `shutdown`. `animate_gesture` carries `AgentOverlayGestureEvent`
 for one-shot tap, drag, swipe, and no-no render effects.
@@ -62,8 +68,8 @@ id, bounded points, duration, and source action metadata. The host deduplicates
 recent event ids, rejects stale sequences, clamps durations from the generated
 spec, and never replays one-shot events after restart.
 
-Every layer-shell reply (including `ping`) carries an optional structured
-`motion` field — `{ x, y, heading_deg, speed, settled,
+Every reply from a visible-overlay backend (including `ping`) carries an
+optional structured `motion` field — `{ x, y, heading_deg, speed, settled,
 pending_gesture_feedback }` — echoing where the vehicle-steered glyph
 actually is, in the mover's coordinate space. `state` remains the target;
 `motion` is the drawn pose. Protocol v3 adds one sequence-aware
@@ -74,9 +80,11 @@ Environment variables (allowlisted in `resources/chrome_preflight.py`):
 
 - `SKY_CUA_AGENT_CURSOR` — `auto` (default), `on`, `off`
 - `SKY_CUA_OVERLAY_BACKEND` — `auto`, `wayland_layer_shell`, `x11`,
-  `gnome_shell_extension`, `none`. `x11` and `gnome_shell_extension` return
-  Noop capabilities with explicit unsupported reasons until WGPU hosts exist.
-- `SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE` — `auto`, `on`, `off`
+  `gnome_shell_extension`, `none` on Linux; `auto`, `macos_panel`, `none` on
+  macOS. `x11` and `gnome_shell_extension` return Noop capabilities with
+  explicit unsupported reasons until WGPU hosts exist.
+- `SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE` — `auto` (default: hide unless the
+  host reports `capture_exclusion`), `always`, `off`
 - `SKY_CUA_OVERLAY_HOST_PATH` — explicit path; defaults to bundled binary
 - `SKY_CUA_SCREENSHOT_CURSOR` — `auto`, `on`, `off`
 
@@ -101,9 +109,14 @@ service cleanup runs lazily before snapshot synthesis, so stale visible cursor
 state is not composited into a later capture.
 
 The overlay host does not run an independent idle-hide policy. Its socket loop
-uses `calloop` timers only to advance frame-paced work such as pointer tracking;
-it keeps the overlay visible until the service sends `hide`, `show`, or
-`shutdown`.
+uses its timer (a `calloop` timer on Linux, the main run loop's timeout on
+macOS) only to advance frame-paced work; it keeps the overlay visible until
+the service sends `hide`, `show`, or `shutdown`.
+
+The one lifecycle rule the host enforces itself is that it does not outlive
+its owner. A service that is killed cannot send `hide` or `shutdown`, so every
+serve loop checks its parent process id on each tick and, when it has changed,
+hides the overlay, restores the system cursor, and exits.
 
 On KDE, the KWin shim keeps a separate 8 second fail-safe solely to restore the
 system compositor cursor if the service or overlay host dies after hiding it.
@@ -118,7 +131,8 @@ method. Hide/Show and the failsafe keep the `StateJson` introspection's
 The overlay has two planes that operate independently:
 
 1. **`UserVisible`** — a native overlay surface the user can see on the
-   desktop. Production drawing is WGPU-only through Wayland layer-shell.
+   desktop. Production drawing is WGPU-only, through Wayland layer-shell on
+   Linux and a click-through panel on macOS.
 2. **`ScreenshotSynthetic`** — a marker composited into the screenshot Codex
    receives. Always available when capture is available, regardless of
    visible-overlay support.
@@ -147,6 +161,10 @@ Backend selection at `auto`:
   visible overlay requires a follow-on WGPU X11 host.
 - `SKY_CUA_LAYER_SHELL_RENDERER=shm` is rejected as a retired legacy renderer;
   production Wayland visuals require WGPU.
+- macOS: `macos_panel` creates one panel per screen and renders with WGPU on
+  Metal. It needs the main thread and a window-server login session; without
+  them (an SSH shell, for example) the host reports Noop capabilities with
+  the reason.
 
 Action-driven cursor placement:
 
@@ -160,12 +178,18 @@ Action-driven cursor placement:
 - Successful pointer actions whose coordinates cannot be mapped clear stale
   cursor state instead of leaking last-cursor pixels.
 
-Capture guard: when `SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE=on`, the overlay
-controller hides the visible overlay just before capture and restores it
-afterward. The service sends a hide sequence, the host presents transparent
-frames on every active surface, and capture waits for the matching applied
-barrier before reading the desktop. The synthetic screenshot cursor is
-composited regardless.
+Capture guard: a capture must not contain the visible overlay. Where the
+host reports `capture_exclusion` (macOS), the windowing system already keeps
+it out, and the overlay stays on screen through the capture. Elsewhere,
+unless `SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE=off`, the overlay controller hides a
+visible overlay just before capture and restores it afterward: the service
+sends a hide sequence and capture waits for the matching applied barrier
+before reading the desktop. On Wayland the host presents transparent frames
+on every active surface and counts compositor frame callbacks.
+`SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE=always` forces the hide on every host; on
+macOS the barrier then orders the panels out and waits until the window
+server's window list no longer has them on screen. The synthetic screenshot
+cursor is composited regardless.
 
 The visible overlay is the input-dispatch clock for coordinate pointer actions.
 When an action is accepted, the service sends both its target and gesture before
@@ -231,8 +255,8 @@ bows the path — the signature curve. Constants come from the shared spec's
 tuning for large desktops, if ever needed, is a `[desktop.motion]` follow-up.
 
 The driver steps exactly once per rendered frame at the top of
-`LayerShellApp::draw` (both the tick timer and message replies route through
-it), with dt from a monotonic clock and effect timelines on epoch
+`OverlaySurfaceHost::draw` (both the tick timer and message replies route
+through it), with dt from a monotonic clock and effect timelines on epoch
 milliseconds. It also eases the glyph rotation toward the travel heading
 (`CURSOR_ROTATE_RATE_DEG_PER_S`, active above
 `CURSOR_ROTATE_MIN_SPEED_DP_PER_S`, back to rest when parked; the no-no wiggle
@@ -251,7 +275,7 @@ same pose; plain hides drop the gesture pipeline and re-bloom the aura on the
 next show.
 
 Multi-output rendering treats every output as a window into the shared
-desktop-logical scene (`layer_shell/motion_adapter.rs`): the mover integrates
+desktop-logical scene (`surface_host/motion_adapter.rs`): the mover integrates
 in global logical space, and the glyph, ripple, and trail are handed to every
 output they reach — each translated (unclipped) into that output's local
 coordinates while the WGSL clips per-pixel. A glide or a boundary-spanning
@@ -351,6 +375,88 @@ overlay is visible) is a separate capability described in
 system-cursor state are independent; failure of one does not disable the
 other.
 
+### Shared host and platform adapters
+
+The host is one platform-neutral core with a native adapter per desktop.
+`OverlaySurfaceHost` owns the protocol, the cursor target state, the motion
+driver, the per-output scene mapping, the renderer, and capability reporting.
+A `SurfacePlatform` owns only what is native: one surface per output, the
+geometry snapshot, the frame hand-off, the capture barrier mechanism, and the
+system-cursor and pointer-telemetry adapters that exist on that desktop.
+Wayland layer-shell and the macOS panel are the two implementations. The
+service side is the same on both: it spawns the host, talks to it over the
+Unix socket, and derives native cursor points from the capture's desktop
+rectangle.
+
+### macOS panel host
+
+**Windows.** One borderless, non-activating `NSPanel` per screen, covering
+the whole screen including the menu bar: transparent, without a shadow,
+non-shareable, `ignoresMouseEvents` (so every click passes through), at
+screen-saver window
+level, set to join every Space and to sit beside full-screen applications,
+and left out of window cycling. The process is an accessory application: no Dock icon,
+no menu bar, never activated. Only public AppKit, CoreGraphics, and
+CoreFoundation interfaces are used.
+
+**Coordinates.** The scene is in `desktop_logical`: global points with a
+top-left origin, as `CGDisplayBounds`, Accessibility, and CGEvent report them.
+Each screen's geometry snapshot comes from `CGDisplayBounds` (origin and
+size), `CGDisplayScreenSize` (density), the backing scale factor (buffer
+scale), and the screen's maximum refresh rate (tick cadence). AppKit frames
+are used only to place a panel on its screen.
+
+**Rendering.** The shared WGPU renderer runs on Metal, attached to each
+panel's content view through the same raw-handle path the Wayland surfaces
+use. WGPU's Metal backend names its transparent alpha mode `PostMultiplied`,
+but Core Animation composites a non-opaque layer as premultiplied, which is
+what the shader emits; the result has no fringes. Presents are unsynchronized
+(`Immediate`): the window server composites the panel, so nothing can tear,
+and a present never blocks the thread that also serves the socket.
+
+**Capture exclusion (a deliberate decision, 2026-11-13).** The panels are
+created with `NSWindow.sharingType = none`, which leaves them out of screen
+captures, and the host reports `capture_exclusion=true`. The service
+therefore does not hide the overlay around a capture, so the cursor and edge
+glow stay steady while the agent observes. The alternative, the Linux
+behaviour of ordering the overlay out for every capture, made it blink off
+for the length of each observation.
+
+The cost was accepted on purpose: the overlay is also absent from the user's
+own screenshots, screen recordings, and screen sharing. Someone recording or
+sharing a session sees the agent's effects but not its cursor or glow.
+Keeping the overlay in recordings would need the capture filter to exclude
+the panels instead (and window captures, which cannot contain other windows,
+to skip the hide); that was not chosen. The exclusion is a property of the
+operating system and is proven on macOS 27.2 only.
+
+**Threading and pacing.** AppKit is main-thread only, so the whole host runs
+on the main thread. The socket loop waits in the main run loop: a
+`CFFileDescriptor` source wakes it when a client connects, and the wait's
+timeout is the frame timer. Frames are paced by deadline at the fastest
+screen's refresh rate while the overlay is visible, and the loop idles at
+100 ms otherwise.
+
+**Showing and hiding.** A hidden overlay has its panels ordered out, so it
+costs no rendering and no compositing. Showing orders the panels in and skips
+frames until the window server lists them on screen, because a drawable
+presented to a window that is not being composited is held, and a layer whose
+drawables are all held blocks the next frame. AppKit commits ordering on a
+later run loop turn, so the first visible frame follows a show on a later
+tick, not in the same request. The frame that hides is drawn transparent before the panels are
+ordered out, so they hold no stale image when they return.
+
+**System pointer.** Public macOS interfaces let only the frontmost
+application hide the pointer, and the overlay never is frontmost. The system
+pointer therefore stays visible, `system_cursor_backend` is `macos_native`
+with `system_cursor_hide_supported=false`, and there is no pointer telemetry:
+the agent cursor shows where the agent acts and does not follow the user's
+pointer.
+
+**Screen changes.** When a display is attached, detached, rearranged, or
+changes mode, the host replaces every panel and its WGPU surface before the
+next frame and keeps its renderer.
+
 ## Source paths
 
 - `crates/sky-cua-platform/src/model.rs` — public types and serialization
@@ -359,11 +465,21 @@ other.
   lives in `overlay/cursor_geometry.rs` and gesture construction in
   `overlay/gesture.rs`
 - `crates/sky-cua-overlay-host/` — overlay host crate
-  - `src/layer_shell.rs` — generic Wayland layer-shell backend (KWin, Hyprland);
-    submodules `layer_shell/geometry.rs` (event-invalidated per-output geometry
-    snapshots so the frame loop never clones `OutputInfo`),
-    `layer_shell/motion_adapter.rs` (motion-frame → per-layer scene mapping),
-    and `layer_shell/wayland.rs` (surface creation + SCTK handlers)
+  - `src/surface_host.rs` — the platform-neutral host; submodules
+    `surface_host/platform.rs` (the `SurfacePlatform` trait),
+    `surface_host/geometry.rs` (the per-output geometry snapshot),
+    `surface_host/motion_adapter.rs` (motion-frame → per-surface scene
+    mapping), `surface_host/capabilities.rs`, and
+    `surface_host/renderer_selection.rs`
+  - `src/layer_shell.rs` — the Wayland layer-shell platform (KWin, Hyprland);
+    `layer_shell/wayland.rs` (surface creation + SCTK handlers),
+    `layer_shell/geometry.rs`, `layer_shell/capture_barrier.rs`
+  - `src/macos_panel.rs` — the macOS panel platform;
+    `macos_panel/presence.rs` (show/hide state machine),
+    `macos_panel/display.rs` (screen geometry and the window-list query),
+    `macos_panel/run_loop.rs` (main run loop integration)
+  - `src/serve.rs`, `src/serve/` — the serve transports and the per-platform
+    socket loops
   - `src/motion.rs` — pure vehicle-steering math (`Mover2D`, angle/path
     helpers), op-for-op port of Android `OverlayMath`
   - `src/cursor_motion.rs` — the stateful `CursorMotionDriver` (target
@@ -482,6 +598,61 @@ Latest accepted artifacts:
 - COSMIC patched bridge: `artifacts/cosmic-framebuffer-cursor-proof/20260515T142538562074Z/host-summary.json`
 - COSMIC transparent Xcursor: `artifacts/cosmic-transparent-xcursor-cursor-proof/20260516T073232164704Z/host-summary.json`
 
+macOS verification:
+
+- `just verify-rust` on macOS compiles and tests the shared host, the
+  renderer (including the GPU conformance and offscreen tests, on Metal), and
+  the macOS platform's pure parts (`macos_panel::presence`,
+  `macos_panel::display`). The Linux side of a shared change is checked with
+  `cargo check --workspace --all-targets`, clippy, and
+  `cargo nextest run -p sky-cua-overlay-host` in an arm64 Linux container;
+  that proves compilation and unit behaviour, not a live Wayland session.
+  The refactored layer-shell platform has not been run on a live compositor
+  since the shared host was split out of it.
+- There is no automated live test. Run the host directly with
+  `sky-cua-overlay-host serve --socket <relative path>` and send protocol
+  messages (one JSON line per connection), or drive it through an isolated
+  daemon as described in
+  [`macos-desktop-backend.md`](macos-desktop-backend.md). Use the debug
+  profile: a build into `target/release` replaces the binary a registered
+  release daemon spawns.
+- Live proof, 2026-11-13, macOS 27.2, Apple Silicon, one built-in Retina
+  display (1728 x 1117 points at 2x, 120 Hz), debug build unless noted:
+  - Host alone: capabilities report `macos_panel`, `wgpu` on Metal, full
+    coverage, `click_through`, and `macos_native` with hide unsupported. A
+    cursor target shows the glyph, smoke aura, and edge glow with no fringes;
+    a second target glides (a mid-flight sample is unsettled at 950 px/s) and
+    settles exactly on the target.
+  - Capture barrier (used only when the hide is forced): a sequence-bearing
+    hide replies with the applied
+    sequence in a median of about 10 ms and the window list shows no panel
+    on screen; 240 hide/show cycles at 0, 30, and 200 ms spacing had no
+    failure and no reply slower than 25 ms.
+  - Through an isolated daemon and a scratch TextEdit document: the first
+    pointer action spawns the host; the agent cursor's native point and the
+    host's settled pose equal the action point; physical input is held until
+    the glide arrives; the click and the typing that follows land in the
+    document through the visible overlay.
+  - Capture exclusion: with the overlay visible, a whole-display capture
+    and five window observations ran while the window list was sampled
+    continuously; the overlay was on screen in every sample, the host kept
+    presenting frames, and the display capture contains no edge glow. Before
+    the panels were made non-shareable, the same capture with the hide
+    disabled contained the glow and the glyph, and with the hide enabled it
+    contained neither.
+  - Lifecycle: the service's idle cleanup hides the overlay about 16 s
+    after the last request and leaves the host running; the host exits with
+    a terminated daemon, and within 0.1 s of a killed one.
+  - Screen change: forced in a development build about once a second for
+    seven seconds; each replacement kept full coverage, the frame rate, the
+    capture barrier, and the glide.
+  - Release build: about 0.3% of one core hidden, about 12% visible with
+    the edge glow animating at the display's 120 frames per second, 0.3 ms
+    median reply latency, and about 90 ms from process start to the first
+    reply.
+  - The stdin/stdout transport shows the overlay and applies the capture
+    barrier as the socket transport does.
+
 ## Pointer playground
 
 `sky-cua-overlay-host playground` is an interactive desktop preview of the agent
@@ -533,6 +704,28 @@ computer-use pointer can be eyeballed over live content or a controlled backdrop
 - **Windows overlay is deferred.** The shared model and IPC contract were
   designed not to make Windows harder, but no Windows live proof exists yet.
   The Windows backend reports `visible_overlay=false` with a clear reason.
+- **macOS: the system pointer stays visible.** Hiding it needs either the
+  frontmost application or a private interface. When physical input moves the
+  real pointer to the action point, the agent cursor and the pointer overlap.
+- **macOS: the overlay is not in screenshots, recordings, or screen
+  sharing.** This follows from the capture-exclusion decision above. It also
+  means a screenshot cannot be used to judge the overlay visually on macOS;
+  the window list, the host's structured replies, and looking at the screen
+  are the evidence. A development build can drop the sharing type to capture
+  it.
+- **macOS: capture exclusion is proven on macOS 27.2 only.** On a system
+  that ignored the sharing type, captures would contain the overlay while the
+  host still reported exclusion; `SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE=always`
+  restores the hide there.
+- **macOS: not exercised live.** More than one display, mixed scale factors,
+  a real display hot-plug (the replacement path was forced, not triggered by
+  hardware), display sleep and the lock screen, other Spaces and full-screen
+  applications, and a session without a window server.
+- **macOS: frames are timer-paced, not display-linked.** Presents are
+  unsynchronized and paced by a deadline timer at the refresh rate, as on
+  Linux, so an occasional frame can land one refresh late.
+- **macOS: no playground.** `sky-cua-overlay-host playground` is
+  Wayland-only.
 - **X11 and GNOME visible overlays are unsupported until WGPU hosts exist.**
   Their old production-visible renderers were retired so callers do not see a
   second visual implementation with weaker effects and capability reporting.
@@ -583,4 +776,6 @@ computer-use pointer can be eyeballed over live content or a controlled backdrop
 - Research: [`docs/research/2026-05-kwin-effect-discovery.md`](../research/2026-05-kwin-effect-discovery.md)
 - Research: [`docs/research/2026-05-x11-shaped-window-vs-layer-shell.md`](../research/2026-05-x11-shaped-window-vs-layer-shell.md)
 - Companion feature: [`docs/features/compositor-cursor-hiding.md`](compositor-cursor-hiding.md)
-- ROADMAP entry: [`ROADMAP.md`](../../ROADMAP.md) under "Linux desktop parity"
+- macOS desktop backend: [`docs/features/macos-desktop-backend.md`](macos-desktop-backend.md)
+- ROADMAP entries: [`ROADMAP.md`](../../ROADMAP.md) under "Linux desktop
+  parity" and "Phase: macOS parity"

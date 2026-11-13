@@ -14,6 +14,7 @@ use sky_cua_platform::config::INPUT_HELPER_SOCKET_ENV;
 use sky_cua_platform::model::AgentCursorPointerTrackingBackendKind;
 use zbus::blocking::Proxy;
 
+use crate::surface_host::geometry::PointerTrackingBounds;
 use crate::system_cursor::SystemPointerPosition;
 
 const KWIN_SERVICE: &str = "org.kde.KWin";
@@ -24,15 +25,6 @@ const HELPER_STREAM_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 const HELPER_PROTOCOL_VERSION: u32 = 1;
 const DEFAULT_INPUT_HELPER_SOCKET: &str = "/run/sky-cua/input-helper.sock";
 const POINTER_TRACKING_DEBUG_ENV: &str = "SKY_CUA_POINTER_TRACKING_DEBUG";
-
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-pub(crate) struct PointerTrackingBounds {
-    pub(crate) x: i32,
-    pub(crate) y: i32,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) scale_milli: u32,
-}
 
 #[derive(Debug)]
 pub(crate) struct PointerTracker {
