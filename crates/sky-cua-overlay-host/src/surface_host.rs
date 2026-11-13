@@ -59,9 +59,11 @@ const PRESENT_POLL: Duration = Duration::from_millis(1);
 /// What a frame did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameOutcome {
-    /// A surface took the frame, or the overlay is hidden and had nothing to
-    /// show.
-    Settled,
+    /// At least one surface took the frame.
+    Presented,
+    /// The overlay is hidden and its surfaces are off screen: there was
+    /// nothing to present.
+    NothingToShow,
     /// The overlay should be visible, but no surface could take a frame yet
     /// (a platform still bringing its surfaces on screen, or surfaces the
     /// windowing system reports as occluded).
@@ -451,7 +453,7 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
     fn render_for_reply(&mut self) -> Result<()> {
         let deadline = Instant::now() + PRESENT_WAIT;
         loop {
-            if self.render_current()? == FrameOutcome::Settled {
+            if self.render_current()? != FrameOutcome::AwaitingSurfaces {
                 return Ok(());
             }
             if self.presentation_stalled || Instant::now() >= deadline {
@@ -475,7 +477,10 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             .context("failed to update the system cursor adapter")?;
         let outcome = self.draw()?;
         self.awaiting_surfaces = outcome == FrameOutcome::AwaitingSurfaces;
-        if !self.awaiting_surfaces {
+        // Only a frame that landed proves the surfaces can take one again. A
+        // hidden frame that presented nothing must not clear the stall, or
+        // every hide and show pair on a dark display would wait again.
+        if outcome == FrameOutcome::Presented {
             self.presentation_stalled = false;
         }
         // A hot-plug the platform saw while committing takes effect now, so
@@ -620,7 +625,7 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             // screen; there is nothing to present, but it still gets its
             // end-of-frame turn.
             self.platform.finish_frame()?;
-            return Ok(FrameOutcome::Settled);
+            return Ok(FrameOutcome::NothingToShow);
         }
 
         let mut requests: Vec<SurfaceDrawRequest> = Vec::with_capacity(surface_count);
@@ -669,11 +674,13 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
         }
 
         self.platform.finish_frame()?;
-        // Every surface skipped the frame (occluded): nothing was shown.
-        Ok(if visible && presented == 0 {
+        Ok(if presented > 0 {
+            FrameOutcome::Presented
+        } else if visible {
+            // Every surface skipped the frame (occluded): nothing was shown.
             FrameOutcome::AwaitingSurfaces
         } else {
-            FrameOutcome::Settled
+            FrameOutcome::NothingToShow
         })
     }
 
