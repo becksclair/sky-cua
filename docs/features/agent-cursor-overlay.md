@@ -6,8 +6,11 @@ Shipped on Linux with WGPU-only production visible rendering on Wayland, and
 on macOS with the same renderer on Metal (live-proven 2026-11-13 on macOS
 27.2, Apple Silicon, one built-in Retina display; see "macOS panel host" and
 Verification). Windows native overlay deferred until a Windows machine is
-available for live proof. Last Linux verification: 2026-07-02 on the operator KDE Wayland desktop (2560x1440
-logical) — phone-parity cursor motion: the structured
+available for live proof. The layer-shell platform was re-checked live on
+KDE on 2026-11-13 after the shared host was split out of it (see
+Verification). The last full Linux acceptance is 2026-07-02 on the operator
+KDE Wayland desktop (2560x1440 logical) — phone-parity cursor motion: the
+structured
 `layer-shell-motion-glide` smoke passed (snap at A, unsettled strictly-between
 mid-flight via the `motion` echo, exact settle at B), the offline dense-frame
 dump shows the momentum bow on redirect and the ripple-free glide until
@@ -607,8 +610,20 @@ macOS verification:
   `cargo check --workspace --all-targets`, clippy, and
   `cargo nextest run -p sky-cua-overlay-host` in an arm64 Linux container;
   that proves compilation and unit behaviour, not a live Wayland session.
-  The refactored layer-shell platform has not been run on a live compositor
-  since the shared host was split out of it.
+- Live KDE check of the layer-shell platform after the shared host was split
+  out of it, 2026-11-13, operator KDE Wayland desktop (2560 x 1600 at scale
+  1.5, Intel graphics on Vulkan), debug build of the branch head:
+  `cargo nextest run -p sky-cua-overlay-host` passes; the structured smokes
+  `live_agent_cursor_kde_smoke.py --mode layer-shell-motion-glide`,
+  `--mode layer-shell-hide-for-capture`, and
+  `--mode layer-shell-debug-visible` pass; and a direct protocol run shows
+  `lifecycle_state=backend_ready` from startup, a glide that is unsettled
+  mid-flight and settles exactly on its target, the capture barrier applying
+  its sequence over ten hide/show cycles (the screenshot taken during the
+  barrier has no edge glow, the one before it does), a tap gesture reaching
+  its arrival, a clean shutdown, and the host exiting 0.08 s after its parent
+  is killed. Not run: the click-through smokes (they inject real input), the
+  KWin effect lanes, and Hyprland.
 - There is no automated live test. Run the host directly with
   `sky-cua-overlay-host serve --socket <relative path>` and send protocol
   messages (one JSON line per connection), or drive it through an isolated

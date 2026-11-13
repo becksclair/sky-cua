@@ -48,8 +48,10 @@ pass and are the first work to pick up once it is proven.
         exits with its service (2026-11-13, single Retina display)
   - [ ] Live proof on multiple displays, a real display hot-plug, display
         sleep, other Spaces, and full-screen applications
-  - [ ] Live-smoke the refactored Wayland layer-shell platform on KDE and
-        Hyprland (compiled and unit-tested from macOS only)
+  - [x] Live-smoke the refactored Wayland layer-shell platform on KDE:
+        glide, hide-for-capture, and visible-overlay smokes (2026-11-13)
+  - [ ] Live-smoke the refactored layer-shell platform on Hyprland, and run
+        the click-through and KWin effect lanes on KDE
 - [ ] Pointer-preserving input on macOS (process-targeted event delivery) so
       agent actions do not move the user's real cursor or steal focus
 - [ ] macOS session presence (idle display and system sleep assertions) —
