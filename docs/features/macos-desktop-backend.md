@@ -136,7 +136,8 @@ box, or search field that is not flagged `readonly` (it reports editable
 text, or carries text readback): on any other element the click would be the
 control's own action or take no key focus, so the request fails with
 `ActionUnsupportedForEnvironment`. A named element that reports no bounds is
-an `InvalidRequest`, for `set_value` and for a scroll. A request that names
+an `InvalidRequest`, for `set_value` and for a scroll, unless the request
+also gives `x` and `y`, which are then the action point. A request that names
 no element is typed at the given point or the current focus. An
 empty value deletes the selected content.
 
