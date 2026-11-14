@@ -135,8 +135,8 @@ driver ported from the Android companion.
   `MacosPanelPlatform::begin_frame` skips it when every panel is occluded,
   by reading `NSWindow.occlusionState` itself. wgpu's Metal backend skips a
   surface on that same property and is the only backend that reports
-  `Occluded` (`wgpu-hal/src/metal/surface.rs`, wgpu 29); re-check that on a
-  wgpu upgrade. If a backend ever skips frames for a reason its platform
+  `Occluded` (the Metal surface code in the wgpu-hal crate, wgpu 29);
+  re-check that on a wgpu upgrade. If a backend ever skips frames for a reason its platform
   cannot read beforehand, split the renderer's draw into acquire and present
   and step motion between them. Note that on Vulkan a frame that is acquired
   and then dropped is not returned to the swapchain.
