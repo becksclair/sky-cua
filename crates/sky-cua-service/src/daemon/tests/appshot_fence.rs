@@ -225,3 +225,28 @@ async fn a_window_targeting_backend_still_requires_the_latest_snapshot() {
     }
     assert!(fence.dispatched().is_empty());
 }
+
+#[tokio::test]
+async fn a_window_targeting_backend_rejects_a_snapshot_that_names_no_window() {
+    let fence = Fence::new("fence-unnamed-window", ActionTargeting::RequestWindow, true);
+    let request =
+        authorized_action_request(&fence.daemon, ActionName::TypeText, json!({"text": "hi"})).await;
+    // The same snapshot id, now without the window the AppShot was taken of:
+    // the backend would post to whatever holds focus.
+    fence
+        .daemon
+        .snapshots
+        .lock()
+        .await
+        .store(snapshot(Some(capture_with_rect()), Vec::new()));
+
+    let response = fence.act(request).await;
+
+    match response {
+        ServiceResponse::AppShotRequired { rejection } => {
+            assert_eq!(rejection.reason, AppShotRejectionReason::WrongTarget);
+        }
+        other => panic!("expected AppShotRequired, got {other:?}"),
+    }
+    assert!(fence.dispatched().is_empty());
+}

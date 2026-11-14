@@ -161,7 +161,9 @@ not reply until the sheet closes.
 **Action fence.** The service accepts a state-changing action only for a
 present, fresh AppShot whose snapshot is the latest. On macOS it then
 requires the AppShot's window to still resolve by its exact `CGWindowID`,
-not to be focused: the backend declares `ActionTargeting::RequestWindow`,
+and the snapshot the action is built from to name that window; it does not
+require the window to be focused. The backend declares
+`ActionTargeting::RequestWindow`,
 because every action is delivered to the window of its own snapshot or
 fails. An agent can therefore observe and act on a window while another
 application stays in front.
@@ -301,6 +303,11 @@ service binary into place with a rename, not an in-place overwrite.
 - Process-targeted keyboard input is confirmed by transport only. An
   application that ignores posted key events while inactive reports success
   and shows no change; observe again to verify.
+- The key window is confirmed once, before the first key is posted. If the
+  application's key window changes while a long text is being typed, the
+  rest of the text goes to the new key window of the same application. The
+  foreground path has the same property for a focus change, across
+  applications.
 - `expand` and `collapse` are advertised from an element's reported state,
   without probing whether its expansion attribute is settable (one more
   round trip per element on every read). An element that reports a state

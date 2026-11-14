@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use sky_cua_platform::DESKTOP_LAUNCH_ENV_KEYS;
-use sky_cua_platform::backend::{ActionTargeting, DesktopBackend};
+use sky_cua_platform::backend::DesktopBackend;
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AppShotCapture, AppStateSnapshot, BROWSER_CONTROL_CAPABILITY_V1,
@@ -861,34 +861,25 @@ impl ServiceDaemon {
         response
     }
 
-    /// Whether an action may be dispatched for an AppShot of `target`, whose
-    /// window is known by `focus_window_ids`. What that takes depends on
-    /// `targeting`: an action that goes to the focused window needs the
-    /// AppShot's window focused now, and an action the backend delivers to
-    /// the request's own window needs that window to still exist.
-    async fn appshot_window_accepts_actions(
-        &self,
-        targeting: ActionTargeting,
-        target: Option<&WindowTarget>,
-        focus_window_ids: &[String],
-    ) -> bool {
-        match targeting {
-            ActionTargeting::FocusedWindow => {
-                matches!(
-                    self.backend.focused_window().await,
-                    Ok(Some(focused)) if focus_window_ids.contains(&focused.window_id)
-                )
-            }
-            ActionTargeting::RequestWindow => {
-                let Some(target) = target else {
-                    return false;
-                };
-                matches!(
-                    self.backend.resolve_window_target(target).await,
-                    Ok(window) if target.window_id.as_deref() == Some(window.window_id.as_str())
-                )
-            }
-        }
+    /// Whether the window known by `focus_window_ids` is focused now: what
+    /// an action that goes to the focused window needs of its AppShot.
+    async fn appshot_window_is_focused(&self, focus_window_ids: &[String]) -> bool {
+        matches!(
+            self.backend.focused_window().await,
+            Ok(Some(focused)) if focus_window_ids.contains(&focused.window_id)
+        )
+    }
+
+    /// Whether `target` still resolves to the same window: what an action
+    /// the backend delivers to the request's own window needs of its AppShot.
+    async fn appshot_window_exists(&self, target: Option<&WindowTarget>) -> bool {
+        let Some(target) = target else {
+            return false;
+        };
+        matches!(
+            self.backend.resolve_window_target(target).await,
+            Ok(window) if target.window_id.as_deref() == Some(window.window_id.as_str())
+        )
     }
 
     async fn validate_cua_context_appshot(
@@ -953,13 +944,7 @@ impl ServiceDaemon {
         // A CUA action names no window, so it can only go to the focused one,
         // whatever the backend declares for `execute_action`.
         if reason == sky_cua_platform::model::AppShotRejectionReason::WrongTarget
-            && self
-                .appshot_window_accepts_actions(
-                    ActionTargeting::FocusedWindow,
-                    target.as_ref(),
-                    &focus_window_ids,
-                )
-                .await
+            && self.appshot_window_is_focused(&focus_window_ids).await
         {
             return None;
         }
