@@ -715,3 +715,44 @@ fn capture_with_rect(x: f64, y: f64, width: f64, height: f64, scale: f64) -> Cap
         model_image_encode_ms: None,
     }
 }
+
+#[test]
+fn only_keyboard_input_without_a_menu_shortcut_reaches_an_inactive_application() {
+    let keys =
+        |keys: &[&str]| PhysicalInput::PressKeys(keys.iter().map(ToString::to_string).collect());
+    let reaches = |input: PhysicalInput| input.reaches_inactive_application().unwrap();
+
+    assert!(reaches(PhysicalInput::TypeText("text".to_string())));
+    assert!(reaches(keys(&["Shift", "Tab"])));
+
+    // Each of these needs its window in front: delivery must never give them
+    // the process route, or pointer input would land on whatever is there.
+    for input in [
+        PhysicalInput::Move { at: (1.0, 2.0) },
+        PhysicalInput::Click {
+            at: (1.0, 2.0),
+            button: MouseButton::Left,
+            count: 1,
+        },
+        PhysicalInput::Scroll {
+            at: None,
+            delta_x: 0,
+            delta_y: 3,
+        },
+        PhysicalInput::Drag {
+            from: (1.0, 2.0),
+            to: (3.0, 4.0),
+        },
+        PhysicalInput::SetValue {
+            at: None,
+            value: "value".to_string(),
+        },
+        keys(&["Cmd", "A"]),
+        keys(&["Ctrl", "Tab"]),
+    ] {
+        assert!(!reaches(input.clone()), "{input:?}");
+    }
+
+    let invalid = keys(&["Shift", "Nope"]).reaches_inactive_application();
+    assert_eq!(invalid.unwrap_err().code, "InvalidRequest");
+}

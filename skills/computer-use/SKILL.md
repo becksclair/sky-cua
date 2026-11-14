@@ -88,7 +88,7 @@ Load `references/platform-linux.md` only for Linux, KDE/KWin, XWayland, or nativ
 - Otherwise click to focus, select all with `Cmd+A` or `Ctrl+A` as appropriate, type, and verify with a fresh snapshot.
 - In a native file chooser, use focus/select for a file entry and activate Open/Choose separately. If only activate is available and it commits/closes the chooser, treat that activation as the commit and proceed directly to fresh closure/page verification rather than attempting a second commit.
 - Do not pre-call activate-window before targeted desktop capture.
-- Targeted capture already activates and focus-verifies where the backend can prove it.
+- Targeted capture already activates and focus-verifies on backends that act on the focused window; macOS captures the window where it is and brings it forward only for input that needs it.
 - Use activate-window only when focus is needed without a fresh image.
 
 ## Completion

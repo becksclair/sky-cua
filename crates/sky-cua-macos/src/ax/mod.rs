@@ -74,6 +74,8 @@ pub struct AxTree {
 const ACTION_WAIT: Duration = Duration::from_secs(6);
 /// Window lookup plus three writes.
 const RAISE_WAIT: Duration = Duration::from_secs(6);
+/// Window lookup plus one read.
+const KEY_WINDOW_WAIT: Duration = Duration::from_secs(6);
 /// Pause after activating a dormant Chromium tree before re-reading it;
 /// Chromium builds the views tree within ~150 ms (the Linux backend measured
 /// the same on AT-SPI).
@@ -246,6 +248,23 @@ impl AxRuntime {
             .lanes
             .run(window.pid, RAISE_WAIT, move |context, guard| {
                 window::raise(context, guard, &Names::new(), &window, &app_windows)
+            })
+            .await
+    }
+
+    /// Whether `window` is the window its application hands key events to,
+    /// so keyboard input posted to the process lands in it.
+    pub async fn window_receives_keys(
+        &self,
+        window: &MacWindow,
+        app_windows: &[MacWindow],
+    ) -> Result<bool, BackendError> {
+        let window = window.clone();
+        let app_windows = app_windows.to_vec();
+        self.inner
+            .lanes
+            .run(window.pid, KEY_WINDOW_WAIT, move |context, guard| {
+                window::receives_keys(context, guard, &Names::new(), &window, &app_windows)
             })
             .await
     }

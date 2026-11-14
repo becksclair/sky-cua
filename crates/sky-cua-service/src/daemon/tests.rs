@@ -26,6 +26,8 @@ use sky_cua_platform::model::{
 };
 use tokio::sync::Notify;
 
+mod appshot_fence;
+
 use super::capture_reuse::reuse_unchanged_capture;
 use super::desktop::action_requires_snapshot_context;
 use super::session_presence::request_should_hold_presence;

@@ -2,16 +2,18 @@
 //!
 //! Mirrors the Windows backend method by method. CoreGraphics supplies the
 //! window and display lists, ScreenCaptureKit the screenshots, the AX runtime
-//! the semantic tree and actions, and CGEvent the physical input. Every
+//! the semantic tree and actions, and CGEvent the physical input, which
+//! `delivery` routes to the target process or through the HID tap. Every
 //! backend kind reported in `EnvironmentInfo` follows the live TCC grant
 //! state, never an assumption.
 
 mod actions;
 mod app_state;
+mod delivery;
 mod focus;
 
 use async_trait::async_trait;
-use sky_cua_platform::backend::DesktopBackend;
+use sky_cua_platform::backend::{ActionTargeting, DesktopBackend};
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode, DiagnosticBuilder};
 use sky_cua_platform::model::{
     AccessibilitySetupReport, ActionOutcome, ActionRequest, AppInfo, AppSelector, AppStateSnapshot,
@@ -31,6 +33,9 @@ use crate::windows;
 
 /// Reported in `EnvironmentInfo.compositor`.
 const COMPOSITOR: &str = "macos-window-server";
+
+/// Diagnostic code for a targeted screenshot of a window that is not focused.
+const WINDOW_CAPTURED_IN_PLACE: &str = "WindowCapturedInPlace";
 
 #[derive(Debug, Default)]
 pub struct MacosDesktopBackend {
@@ -160,6 +165,14 @@ fn join_error(error: tokio::task::JoinError) -> BackendError {
 
 #[async_trait]
 impl DesktopBackend for MacosDesktopBackend {
+    /// Semantic actions go to retained elements of the snapshot's window,
+    /// and `delivery` posts physical input to that window's process or
+    /// brings the window forward first and fails when it cannot. No action
+    /// depends on which window was focused when the service dispatched it.
+    fn action_targeting(&self) -> ActionTargeting {
+        ActionTargeting::RequestWindow
+    }
+
     /// Runs once at daemon startup. It never prompts: a routine start must
     /// not raise consent dialogs or open System Settings. Missing grants are
     /// logged with their System Settings guidance; `setup_accessibility` is
@@ -301,50 +314,22 @@ impl DesktopBackend for MacosDesktopBackend {
 
         let mut focused_app = None;
         let (source, scope) = if let Some(target) = target {
-            let windows_front_to_back = windows::enumerate_windows();
-            let window = windows::resolve_window_target(&windows_front_to_back, &target)?;
-            if window.focused {
-                // ScreenCaptureKit captures the window wherever it is, so a
-                // window that is already focused is not re-activated.
-                diagnostics.push_code(
-                    "WindowFocusVerified",
-                    format!(
-                        "macOS window {} was already focused before screenshot capture.",
-                        window.window_id
-                    ),
-                    None,
-                );
+            let window = windows::resolve_window_target(&windows::enumerate_windows(), &target)?;
+            // ScreenCaptureKit captures the window wherever it is in the
+            // window stack, so a capture never brings it to the front.
+            let (code, state) = if window.focused {
+                ("WindowFocusVerified", "was already focused")
             } else {
-                diagnostics.push_code(
-                    "WindowFocusRequested",
-                    format!(
-                        "Requested foreground focus for macOS window {}.",
-                        window.window_id
-                    ),
-                    None,
-                );
-                match focus::focus_window(&self.ax, &window, &windows_front_to_back).await {
-                    Ok(report) => {
-                        for diagnostic in report.diagnostics() {
-                            diagnostics.push_code(
-                                diagnostic.code,
-                                diagnostic.message,
-                                diagnostic.details,
-                            );
-                        }
-                    }
-                    // ScreenCaptureKit captures the window without focus, so
-                    // a declined activation degrades the snapshot, not fails it.
-                    Err(error) => diagnostics.push_code(
-                        error.code,
-                        format!(
-                            "macOS window {} could not be brought to the front; capturing it in place",
-                            window.window_id
-                        ),
-                        Some(error.message),
-                    ),
-                }
-            }
+                (
+                    WINDOW_CAPTURED_IN_PLACE,
+                    "was captured in place, without being brought to the front",
+                )
+            };
+            diagnostics.push_code(
+                code,
+                format!("macOS window {} {state}.", window.window_id),
+                None,
+            );
             focused_app = Some(windows::window_to_focused_app(
                 &window,
                 &environment.displays,
@@ -406,12 +391,12 @@ impl DesktopBackend for MacosDesktopBackend {
             return Err(permissions::missing_permission_error(Permission::PostEvent));
         }
 
-        let focus_diagnostics =
-            focus::focus_request_window(&self.ax, &request, input.uses_snapshot_point()).await?;
-        let mut outcome = tokio::task::spawn_blocking(move || actions::perform(input))
+        let delivery = delivery::prepare(&self.ax, &request, &input).await?;
+        let route = delivery.route;
+        let mut outcome = tokio::task::spawn_blocking(move || actions::perform(input, route))
             .await
             .map_err(join_error)??;
-        let mut diagnostics = focus_diagnostics;
+        let mut diagnostics = delivery.diagnostics;
         diagnostics.append(&mut outcome.diagnostics);
         if let Some(reference) = ax_fallback_ref {
             diagnostics.push(DiagnosticEntry {

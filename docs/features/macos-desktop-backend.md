@@ -46,9 +46,17 @@ Identifiers callers can rely on:
   and are valid only for recent tree reads of that process. The format is not
   stable.
 
-Diagnostics specific to this backend: `AccessibilityTreeTruncated` (the
-element or depth cap stopped the walk), `WindowFocusVerified` (the target was
-already focused, so a capture did not activate it), and `WindowFocusRequested`.
+Diagnostics specific to this backend:
+
+- `AccessibilityTreeTruncated`: the element or depth cap stopped the walk.
+- `WindowFocusVerified`: a targeted capture's window was already focused.
+- `WindowCapturedInPlace`: a targeted capture's window was not focused and
+  was captured where it is.
+- `ProcessTargetedInput`: keyboard input was posted to the target window's
+  process and the window was not brought to the front.
+- `ProcessTargetedInputUnavailable`: keyboard input that could have been
+  posted to the process was not, with the reason in `details`; the window
+  was brought to the front instead.
 
 MCP tool schemas are unchanged. `setup_desktop` with operation
 `accessibility` requests every missing permission.
@@ -111,21 +119,52 @@ of occlusion, no shadow, no cursor) or one whole display. The reported
 `logical_rect` is the frame ScreenCaptureKit captured. Shareable content is
 reused for up to 5 s, and only when a fresh CoreGraphics read confirms the
 window is still on screen, owned by the same process, and at the same frame.
-A capture of an already-focused window does not activate it.
+A capture never activates its window or changes the window order.
 
 **Actions.** Semantic AX actions are tried first: focus, press, toggle,
 expand and collapse, select, value writes, the context-menu action, and named
 actions. A plain single left click on an element is an AX press. Other
-requests fall through to CGEvent input posted at the HID event tap, after
-the target window is brought forward. If the target window is gone the
-action fails with `SnapshotStale`, and if it cannot be brought to the front
-it fails with `ActionRequiresPhysicalInput`; input is never posted to
-whatever happens to be in front instead. For input posted
-at a point, a window that moved or was resized since its snapshot's window
-capture is also `SnapshotStale`, because the point was taken from the old
-frame; keyboard input has no point and is not affected. A reply lost after a write was sent is
+requests fall through to CGEvent input, delivered in one of two ways.
+
+Keyboard input for a window that is not focused is posted to that window's
+process with `CGEventPostToPid`. The window stays where it is in the window
+order, the user's frontmost application keeps key focus, and the real
+pointer does not move. This covers `type_text`, and `press_key` for a chord
+that holds neither Command nor Control. Two conditions fall back to the
+foreground path, each with a `ProcessTargetedInputUnavailable` diagnostic:
+
+- The window is not its application's `AXFocusedWindow`. A process hands
+  posted key events to its own key window, so input for any other window of
+  that application would be typed into the wrong one.
+- Accessibility could not confirm that, for example because the grant is
+  missing or the window could not be correlated.
+
+A chord that holds Command or Control always takes the foreground path. An
+application that is not active does not match key events against its menus,
+so a menu shortcut posted to its process does nothing; which chords are menu
+shortcuts depends on the application, and nearly all of them hold one of
+those two modifiers.
+
+Everything else is posted at the HID event tap after the target window is
+brought forward: pointer input, the `set_value` fallback, the chords above,
+and keyboard input that names no window, which goes to the current focus.
+If the target window is gone the action fails with `SnapshotStale`, and if
+it cannot be brought to the front it fails with
+`ActionRequiresPhysicalInput`; input is never posted to whatever happens to
+be in front instead. For input posted at a point, a window that moved or
+was resized since its snapshot's window capture is also `SnapshotStale`,
+because the point was taken from the old frame; keyboard input has no point
+and is not affected. A reply lost after a write was sent is
 `CuaActionOutcomeUnknown`, because an AX press that opens a modal sheet does
 not reply until the sheet closes.
+
+**Action fence.** The service accepts a state-changing action only for a
+present, fresh AppShot whose snapshot is the latest. On macOS it then
+requires the AppShot's window to still resolve by its exact `CGWindowID`,
+not to be focused: the backend declares `ActionTargeting::RequestWindow`,
+because every action is delivered to the window of its own snapshot or
+fails. An agent can therefore observe and act on a window while another
+application stays in front.
 
 An element's action point is the centre of the part of it that is visible in
 the capture. AX reports a scrolled view's full document frame, so the raw
@@ -218,6 +257,17 @@ it would mark every replacement daemon stale as well. The daemon exits after
   dragged by its title bar the same snapshot's click fails with
   `SnapshotStale` and a fresh snapshot's click succeeds; `type_text` over
   the key-event limit is refused.
+- Live check, 2026-11-14, same setup, with TextEdit in the background and
+  another application frontmost throughout: `observe` of a TextEdit window
+  reported `WindowCapturedInPlace`; `desktop_keyboard` `type_text`,
+  `press_key` Shift+Left, and `press_key` Return each reported
+  `ProcessTargetedInput` and changed the document as expected; the frontmost
+  application and the window order did not change, and TextEdit's other
+  windows were untouched. Typing into a TextEdit window that was not the
+  application's key window reported `ProcessTargetedInputUnavailable`,
+  brought the window to the front, and succeeded. Before the action fence
+  followed `ActionTargeting`, the same sequence was rejected with
+  `AppShotRequired` (`wrong_target`).
 
 An isolated daemon for testing uses a private `HOME` and XDG directories and
 a relative `SKY_CUA_SERVICE_SOCKET_PATH`, because an absolute path under a
@@ -243,8 +293,14 @@ service binary into place with a rename, not an in-place overwrite.
 - `activate_window` reports success with a `WindowFocusUnverified`
   diagnostic when macOS accepts the request but the window does not become
   focused.
-- Physical input moves the user's real pointer and requires the target
-  window to be frontmost.
+- Pointer input, the `set_value` fallback, and chords that hold Command or
+  Control move the user's real pointer or bring the target window to the
+  front. Process-targeted delivery covers keyboard input only; see
+  [`2026-11-macos-per-window-targeting.md`](../research/2026-11-macos-per-window-targeting.md)
+  for what pointer delivery needs.
+- Process-targeted keyboard input is confirmed by transport only. An
+  application that ignores posted key events while inactive reports success
+  and shows no change; observe again to verify.
 - `expand` and `collapse` are advertised from an element's reported state,
   without probing whether its expansion attribute is settable (one more
   round trip per element on every read). An element that reports a state

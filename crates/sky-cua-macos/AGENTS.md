@@ -8,7 +8,9 @@ window-list, and CGEvent details inside this crate and expose only
 ## Layout
 
 - `backend.rs` — `MacosDesktopBackend`, the `DesktopBackend` implementation
-  that composes the modules below.
+  that composes the modules below. `backend/delivery.rs` chooses how one
+  physical input reaches its window: posted to the window's process, or
+  through the HID tap after the window is brought to the front.
 - `ax/` — Accessibility runtime: per-application worker lanes, tree reads,
   semantic actions, and retained element handles.
 - `windows.rs`, `displays.rs` — CoreGraphics window and display enumeration
@@ -17,7 +19,8 @@ window-list, and CGEvent details inside this crate and expose only
   `CGWindowID` (no private symbols).
 - `capture.rs` — ScreenCaptureKit window and display capture, prepared through
   `sky-cua-capture`.
-- `input.rs`, `keymap.rs` — CGEvent pointer and keyboard injection.
+- `input.rs`, `keymap.rs` — CGEvent pointer and keyboard injection, on the
+  HID tap or to one process.
 - `permissions.rs` — TCC status, System Settings guidance, doctor reporting.
 - `coords.rs` — the single place that converts between global points and
   model-image pixels.
@@ -38,6 +41,12 @@ window-list, and CGEvent details inside this crate and expose only
 - Window identity uses public APIs only. Ambiguous correlation fails closed;
   it never substitutes a different window.
 - Prefer AX semantic actions; CGEvent input is the physical fallback.
+- Leave the user's frontmost application and pointer alone whenever the
+  input still reaches its target. A capture never activates a window.
+  Keyboard input goes to the target process when its window is the
+  application's key window; only input that would not take effect there
+  brings the window forward. A fallback to the foreground path is always
+  reported as a diagnostic.
 - Missing TCC permissions are reported as structured diagnostics that name
   the System Settings pane; nothing is inferred from prose.
 - Keep fallback roles blunt: real window bounds are useful, fabricated widget

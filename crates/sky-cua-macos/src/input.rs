@@ -5,22 +5,30 @@
 //! origin (`DesktopLogical`).
 //!
 //! Event source and tap: events are created from a
-//! `kCGEventSourceStateHIDSystemState` source and posted at `kCGHIDEventTap`,
-//! the point where hardware events enter the window server. From there they
-//! take the same path as a physical device: they move the visible cursor,
-//! update the global button and modifier state, pass through every
-//! session-level event tap, and are routed to whatever window is under the
-//! pointer or holds key focus. That routing is independent of the posting
-//! process, which matters because the daemon is never the active application
-//! and owns no windows. `kCGSessionEventTap` enters after the HID-level state
-//! update, and `CGEventPostToPid` bypasses window-server routing (no hover,
-//! no focus change on click), so neither suits a physical-input fallback. The
-//! HID-system state source matches that tap; a private-state source would
-//! keep its own button and modifier bookkeeping that diverges from what the
-//! window server sees. The source's local-event suppression interval is set
-//! to zero so the user's own keyboard and mouse are never suppressed after an
-//! injected event. Every event's flags are set explicitly, so modifiers the
-//! user physically holds never leak into injected clicks or keystrokes.
+//! `kCGEventSourceStateHIDSystemState` source and, on [`Route::HidTap`],
+//! posted at `kCGHIDEventTap`, the point where hardware events enter the
+//! window server. From there they take the same path as a physical device:
+//! they move the visible cursor, update the global button and modifier state,
+//! pass through every session-level event tap, and are routed to whatever
+//! window is under the pointer or holds key focus. That routing is
+//! independent of the posting process, which matters because the daemon is
+//! never the active application and owns no windows. `kCGSessionEventTap`
+//! enters after the HID-level state update, so it does not suit a
+//! physical-input fallback. The HID-system state source matches the HID tap; a
+//! private-state source would keep its own button and modifier bookkeeping
+//! that diverges from what the window server sees. The source's local-event
+//! suppression interval is set to zero so the user's own keyboard and mouse
+//! are never suppressed after an injected event. Every event's flags are set
+//! explicitly, so modifiers the user physically holds never leak into
+//! injected clicks or keystrokes.
+//!
+//! [`Route::Process`] posts keyboard events with `CGEventPostToPid` instead.
+//! They bypass window-server routing and arrive in one process's event queue,
+//! so that process need not be the active application and the user's key
+//! focus is untouched. The process hands them to the first responder of its
+//! key window; see [`chord_reaches_inactive_application`] for the chords that
+//! do not survive that path. Pointer events are never posted this way: a
+//! process ignores a mouse event that is not addressed to one of its windows.
 
 mod plan;
 
@@ -66,7 +74,7 @@ const KEY_EVENT_GAP: Duration = Duration::from_millis(4);
 const MAX_TEXT_KEY_EVENTS: usize = 6_250;
 
 pub fn move_pointer(x: f64, y: f64) -> Result<(), BackendError> {
-    let poster = Poster::new()?;
+    let poster = Poster::new(Route::HidTap)?;
     poster.mouse(CGEventType::MouseMoved, (x, y), CGMouseButton::Left, 0)
 }
 
@@ -78,7 +86,7 @@ pub fn click(x: f64, y: f64, button: MouseButton, count: u32) -> Result<(), Back
             "click count must be at least 1",
         ));
     }
-    let poster = Poster::new()?;
+    let poster = Poster::new(Route::HidTap)?;
     let (down, up, cg_button) = button_events(button);
     poster.mouse(CGEventType::MouseMoved, (x, y), CGMouseButton::Left, 0)?;
     sleep(HOVER_DWELL);
@@ -97,7 +105,7 @@ pub fn click(x: f64, y: f64, button: MouseButton, count: u32) -> Result<(), Back
 
 /// Presses at `from`, moves through interpolated points, and releases at `to`.
 pub fn drag(from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
-    let poster = Poster::new()?;
+    let poster = Poster::new(Route::HidTap)?;
     poster.mouse(CGEventType::MouseMoved, from, CGMouseButton::Left, 0)?;
     sleep(HOVER_DWELL);
     poster.mouse(CGEventType::LeftMouseDown, from, CGMouseButton::Left, 1)?;
@@ -121,7 +129,7 @@ pub fn drag(from: (f64, f64), to: (f64, f64)) -> Result<(), BackendError> {
 /// toward the top) and positive `delta_x` moves the content right (the view
 /// scrolls toward the left).
 pub fn scroll(at: Option<(f64, f64)>, delta_x: i32, delta_y: i32) -> Result<(), BackendError> {
-    let poster = Poster::new()?;
+    let poster = Poster::new(Route::HidTap)?;
     if let Some(point) = at {
         poster.mouse(CGEventType::MouseMoved, point, CGMouseButton::Left, 0)?;
         sleep(HOVER_DWELL);
@@ -155,14 +163,38 @@ fn text_fits(key_events: usize) -> Result<(), BackendError> {
     Ok(())
 }
 
+/// Where posted events enter the system; see the module docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    /// The HID event tap: the events act on whatever is under the pointer or
+    /// holds key focus, exactly as a physical device would.
+    HidTap,
+    /// The event queue of the process with this pid. Keyboard events only.
+    Process(i32),
+}
+
+/// Whether a chord posted on [`Route::Process`] takes effect in an
+/// application that is not active.
+///
+/// An inactive application still hands key events to its first responder, so
+/// text, navigation keys, and the Shift and Option chords a text view binds
+/// itself all work. It does not match key events against its menus, so a
+/// menu shortcut does nothing. Which chords are menu shortcuts depends on the
+/// application; they hold Command almost always and Control sometimes, so a
+/// chord holding either is treated as one.
+pub fn chord_reaches_inactive_application(keys: &[String]) -> Result<bool, BackendError> {
+    let modifiers = keymap::parse_chord(keys)?.modifiers;
+    Ok(!modifiers.command && !modifiers.control)
+}
+
 /// Types text as Unicode key events, independent of the keyboard layout.
-pub fn type_text(text: &str) -> Result<(), BackendError> {
+pub fn type_text(route: Route, text: &str) -> Result<(), BackendError> {
     if text.is_empty() {
         return Ok(());
     }
     let segments = plan::text_segments(text);
     text_fits(segments.len())?;
-    let poster = Poster::new()?;
+    let poster = Poster::new(route)?;
     for (index, segment) in segments.into_iter().enumerate() {
         if index > 0 {
             sleep(KEY_EVENT_GAP);
@@ -180,9 +212,9 @@ pub fn type_text(text: &str) -> Result<(), BackendError> {
 }
 
 /// Presses one chord; see `keymap::parse_chord` for accepted key names.
-pub fn press_keys(keys: &[String]) -> Result<(), BackendError> {
+pub fn press_keys(route: Route, keys: &[String]) -> Result<(), BackendError> {
     let chord = keymap::parse_chord(keys)?;
-    let poster = Poster::new()?;
+    let poster = Poster::new(route)?;
     let strokes = plan::chord_plan(&chord);
     for (index, stroke) in strokes.iter().enumerate() {
         if index > 0 {
@@ -215,31 +247,35 @@ fn button_events(button: MouseButton) -> (CGEventType, CGEventType, CGMouseButto
     }
 }
 
-/// An event source configured for posting; see the module docs.
+/// An event source configured for posting on one route; see the module docs.
 struct Poster {
     source: CFRetained<CGEventSource>,
+    route: Route,
 }
 
 impl Poster {
     /// Checks the event-synthesis grant and creates the event source.
-    fn new() -> Result<Self, BackendError> {
+    fn new(route: Route) -> Result<Self, BackendError> {
         if !permissions::status().post_event {
             return Err(permissions::missing_permission_error(Permission::PostEvent));
         }
-        Self::unchecked()
+        Self::unchecked(route)
     }
 
     /// Creates the event source without the permission check. Building events
     /// needs no grant; only posting does.
-    fn unchecked() -> Result<Self, BackendError> {
+    fn unchecked(route: Route) -> Result<Self, BackendError> {
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
             .ok_or_else(|| null_event("CGEventSourceCreate"))?;
         CGEventSource::set_local_events_suppression_interval(Some(&source), 0.0);
-        Ok(Self { source })
+        Ok(Self { source, route })
     }
 
     fn post(&self, event: &CGEvent) {
-        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(event));
+        match self.route {
+            Route::HidTap => CGEvent::post(CGEventTapLocation::HIDEventTap, Some(event)),
+            Route::Process(pid) => CGEvent::post_to_pid(pid, Some(event)),
+        }
     }
 
     fn mouse(
@@ -371,7 +407,7 @@ mod tests {
 
     #[test]
     fn builds_mouse_events_with_click_state_and_location() {
-        let poster = Poster::unchecked().unwrap();
+        let poster = Poster::unchecked(Route::HidTap).unwrap();
         let event = poster
             .mouse_event(
                 CGEventType::RightMouseDown,
@@ -392,7 +428,7 @@ mod tests {
 
     #[test]
     fn builds_unicode_key_events_with_the_full_payload() {
-        let poster = Poster::unchecked().unwrap();
+        let poster = Poster::unchecked(Route::HidTap).unwrap();
         let units: Vec<u16> = "héllo 😀 wörld!!".encode_utf16().collect();
         assert!(units.len() <= plan::MAX_UTF16_PER_EVENT);
         let event = poster.key_event(0, true, 0, Some(&units)).unwrap();
@@ -413,7 +449,7 @@ mod tests {
 
     #[test]
     fn builds_chord_strokes_with_explicit_flags_and_types() {
-        let poster = Poster::unchecked().unwrap();
+        let poster = Poster::unchecked(Route::HidTap).unwrap();
         let keys = vec!["Ctrl".to_string(), "Shift".to_string(), "Tab".to_string()];
         let strokes = plan::chord_plan(&keymap::parse_chord(&keys).unwrap());
         let events: Vec<_> = strokes
@@ -451,7 +487,7 @@ mod tests {
 
     #[test]
     fn builds_line_scroll_events() {
-        let poster = Poster::unchecked().unwrap();
+        let poster = Poster::unchecked(Route::HidTap).unwrap();
         let event = poster.scroll_event(Some((10.0, 20.0)), -3, 2).unwrap();
         assert_eq!(CGEvent::r#type(Some(&event)), CGEventType::ScrollWheel);
         assert_eq!(
@@ -476,7 +512,40 @@ mod tests {
 
     #[test]
     fn invalid_chord_is_rejected_before_posting() {
-        let error = press_keys(&["Ctrl".to_string(), "Nope".to_string()]).unwrap_err();
+        let error =
+            press_keys(Route::HidTap, &["Ctrl".to_string(), "Nope".to_string()]).unwrap_err();
         assert_eq!(error.code, "InvalidRequest");
+    }
+
+    #[test]
+    fn menu_shortcut_chords_do_not_reach_an_inactive_application() {
+        let reaches = |keys: &[&str]| {
+            let keys: Vec<String> = keys.iter().map(ToString::to_string).collect();
+            chord_reaches_inactive_application(&keys).unwrap()
+        };
+        for chord in [
+            &["Return"][..],
+            &["Shift", "Tab"],
+            &["Alt", "Left"],
+            &["Shift", "Alt", "Right"],
+            &["F5"],
+        ] {
+            assert!(reaches(chord), "{chord:?}");
+        }
+        for chord in [
+            &["Cmd", "A"][..],
+            &["Cmd", "Shift", "Z"],
+            &["Ctrl", "Tab"],
+            &["Ctrl", "Alt", "Left"],
+        ] {
+            assert!(!reaches(chord), "{chord:?}");
+        }
+        let invalid = vec!["Shift".to_string(), "Nope".to_string()];
+        assert_eq!(
+            chord_reaches_inactive_application(&invalid)
+                .unwrap_err()
+                .code,
+            "InvalidRequest"
+        );
     }
 }

@@ -58,7 +58,14 @@ pass and are the first work to pick up once it is proven.
   - [ ] Live-smoke the refactored layer-shell platform on Hyprland, and run
         the click-through and KWin effect lanes on KDE
 - [ ] Pointer-preserving input on macOS (process-targeted event delivery) so
-      agent actions do not move the user's real cursor or steal focus
+      agent actions do not move the user's real cursor or steal focus —
+      findings in [`docs/research/2026-11-macos-per-window-targeting.md`](docs/research/2026-11-macos-per-window-targeting.md)
+  - [x] Targeted captures leave the window where it is, and keyboard input
+        for an unfocused window is posted to its process (2026-11-14)
+  - [ ] Pointer input to an unfocused window: window-addressed mouse events,
+        synthetic activation, and a rule for the priming click
+  - [ ] Menu shortcuts (Command and Control chords) to an unfocused window
+  - [ ] Agent cursor overlay scoped to the target window and ordered with it
 - [ ] macOS session presence (idle display and system sleep assertions) —
       sketched in [`docs/features/session-presence.md`](docs/features/session-presence.md)
 - [ ] Application launch on macOS (`desktop_launch_app`)

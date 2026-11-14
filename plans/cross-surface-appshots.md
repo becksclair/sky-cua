@@ -44,6 +44,15 @@ receive the same behavior without AppServer or host-composer hooks.
   Explicit open/navigation/activation transitions return a destination AppShot.
 - Decision: a missing or invalid AppShot fence fails before dispatch and
   includes a fresh recovery AppShot.
+- Decision (2026-11-14): what the desktop fence verifies about the AppShot's
+  window follows the backend's declared `ActionTargeting`. A backend whose
+  input goes to the focused window (the default; Linux and Windows) needs
+  that window focused at dispatch. A backend that delivers each action to
+  the request's own window and fails otherwise (macOS) needs the window to
+  still resolve by its exact ID, so an agent can act on a window that is not
+  focused. The snapshot binding is the same in both, and CUA actions, which
+  name no window, keep the focused-window check. Rationale: the service
+  keeps one readable fence, and the backend states the fact only it knows.
 
 ## Outcomes & Retrospective
 

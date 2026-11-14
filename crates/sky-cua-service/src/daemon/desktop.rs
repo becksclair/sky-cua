@@ -633,12 +633,15 @@ impl ServiceDaemon {
         };
 
         // A valid appshot is accepted only when its snapshot is still latest;
-        // target verification is performed against the focused window below.
+        // its window is then verified the way the backend's targeting needs.
         if reason == AppShotRejectionReason::WrongTarget
-            && let Ok(Some(focused)) = self.backend.focused_window().await
-            && focus_window_ids
-                .iter()
-                .any(|window_id| window_id == &focused.window_id)
+            && self
+                .appshot_window_accepts_actions(
+                    self.backend.action_targeting(),
+                    target.as_ref(),
+                    &focus_window_ids,
+                )
+                .await
         {
             return None;
         }

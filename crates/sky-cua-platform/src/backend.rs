@@ -10,10 +10,30 @@ use crate::model::{
     WindowInfo, WindowTarget, WindowTargetingSetupReport,
 };
 
+/// Which window a backend's `execute_action` acts on, and so what the
+/// service must verify about an action's AppShot window before dispatch.
+/// CUA actions carry no window and always go to the focused one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionTargeting {
+    /// Input goes to whichever window has focus. The service must see the
+    /// AppShot's window focused before it dispatches.
+    FocusedWindow,
+    /// The backend delivers each action to the window of the request's own
+    /// snapshot (`resolved_focused_app.window_handle`), brings that window
+    /// forward itself when an input needs it, and fails the action
+    /// otherwise. The service only needs the window to still exist.
+    RequestWindow,
+}
+
 #[async_trait]
 pub trait DesktopBackend: Send + Sync {
     async fn prepare_automation_permissions(&self) -> Result<(), BackendError> {
         Ok(())
+    }
+
+    /// How this backend targets actions; see [`ActionTargeting`].
+    fn action_targeting(&self) -> ActionTargeting {
+        ActionTargeting::FocusedWindow
     }
 
     async fn probe_environment(&self) -> Result<EnvironmentInfo, BackendError>;

@@ -287,6 +287,12 @@ fn decode_ax_value<T>(value: &CFType, kind: AXValueType, out: &mut T) -> bool {
     unsafe { ax_value.value(kind, NonNull::from(out).cast::<c_void>()) }
 }
 
+/// The element of an attribute whose value is one element, such as
+/// `AXFocusedWindow`.
+pub(crate) fn as_element(value: CFRetained<CFType>) -> Option<AxElement> {
+    value.downcast::<AXUIElement>().ok().map(AxElement)
+}
+
 /// The elements of an `AXChildren`/`AXWindows`-style array value, capped.
 pub(crate) fn as_elements(value: &CFType, cap: usize) -> Vec<AxElement> {
     as_elements_capped(value, cap).0

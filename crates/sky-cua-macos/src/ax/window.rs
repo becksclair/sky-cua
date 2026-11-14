@@ -1,10 +1,10 @@
-//! AX window lookup by CoreGraphics identity, and window raising. Runs on a
-//! lane thread only.
+//! AX window lookup by CoreGraphics identity, window raising, and the key
+//! window check. Runs on a lane thread only.
 
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 
 use super::element::{
-    AxElement, AxErr, as_bool, as_elements, as_point, as_size, as_string, cf_string,
+    AxElement, AxErr, as_bool, as_element, as_elements, as_point, as_size, as_string, cf_string,
 };
 use super::lane::{JobGuard, LaneContext};
 use super::tree::{Names, ax_error};
@@ -131,4 +131,30 @@ pub(crate) fn raise(
             ),
         ))
     }
+}
+
+/// Whether `window` is the window its application hands key events to: the
+/// application's `AXFocusedWindow`. An application that is not active still
+/// reports one, and it is where key events posted to the process arrive. An
+/// application that reports none has no key window.
+pub(crate) fn receives_keys(
+    context: &LaneContext,
+    guard: &JobGuard<'_>,
+    names: &Names,
+    window: &MacWindow,
+    app_windows: &[MacWindow],
+) -> Result<bool, BackendError> {
+    let element = find_window(context, guard, names, window, app_windows)?;
+    guard.ensure_wanted()?;
+    let focused = match context.app.copy_attribute(&cf_string("AXFocusedWindow")) {
+        Ok(focused) => focused,
+        Err(error) if error.is_unsupported() => return Ok(false),
+        Err(error) => {
+            return Err(ax_error(
+                error,
+                &format!("failed to read AXFocusedWindow of pid {}", context.pid),
+            ));
+        }
+    };
+    Ok(as_element(focused).is_some_and(|focused| focused == element))
 }
