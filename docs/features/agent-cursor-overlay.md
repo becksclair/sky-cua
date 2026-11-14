@@ -483,6 +483,12 @@ to the 100 ms idle interval. When a panel is uncovered, frames resume within
 one idle interval and the cursor glides to its latest target with no
 feedback.
 
+The same holds whenever an arrival wait ends as `unavailable` because no
+surface is taking frames, including a show that follows an earlier stall and
+does not wait again: the service sends its input on that answer, so the
+gesture is abandoned at once. A later arrival wait for an abandoned gesture
+also ends as `unavailable`, never as an arrival.
+
 A sleeping display is different: it does not occlude the panels, frames keep
 landing, and motion keeps advancing.
 
@@ -723,6 +729,11 @@ macOS verification:
   - Gesture gliding when the cover landed, with no request during the
     cover: abandoned by the frame timer alone; after uncovering the cursor
     returned to its state target with no feedback.
+  - Hide and show under one cover, then a tap, uncovered 0.5 s later: the
+    arrival wait ended `unavailable` in 0.2 ms and the tap never played;
+    the cursor settled on the later target.
+  - Tap abandoned under cover, arrival wait sent 0.4 s after uncovering:
+    `unavailable`, not an arrival.
   - Cost while covered: 159 wakeups/s and 1.2% of a core in the first
     second, then 11 wakeups/s and 0.2%; 136 wakeups/s and about 15% while
     shown.

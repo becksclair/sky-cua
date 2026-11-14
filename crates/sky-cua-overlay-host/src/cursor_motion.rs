@@ -251,11 +251,12 @@ impl CursorMotionDriver {
     /// Drops the gesture pipeline while the cursor stays shown: the running
     /// feedback and a gesture still waiting for arrival. The mover and the
     /// cloud are untouched, so the cursor carries on to its latest state
-    /// target. For gestures whose moment has passed unseen.
-    pub fn abandon_gestures(&mut self) {
+    /// target. For gestures whose moment has passed unseen. Returns whether
+    /// a gesture was dropped before its feedback had started.
+    pub fn abandon_gestures(&mut self) -> bool {
         self.cancel_active_feedback();
-        self.pending = None;
         self.rest_aim = None;
+        self.pending.take().is_some()
     }
 
     fn cancel_active_feedback(&mut self) {
@@ -970,7 +971,7 @@ mod tests {
         let mut driver = placed_at(base, 100.0, 100.0);
         driver.start_gesture(tap(1500.0, 1500.0));
         let before = driver.step(input_at(base, 1, Some((100.0, 100.0))));
-        driver.abandon_gestures();
+        assert!(driver.abandon_gestures(), "a waiting gesture was dropped");
         assert!(!driver.pending_gesture_feedback());
         let mut last = before.clone();
         for frame_idx in 2..600u64 {
@@ -995,7 +996,10 @@ mod tests {
         let mut driver = placed_at(base, 500.0, 500.0);
         driver.start_gesture(tap(500.0, 500.0));
         assert!(driver.step(input_at(base, 1, None)).feedback.is_some());
-        driver.abandon_gestures();
+        assert!(
+            !driver.abandon_gestures(),
+            "feedback that had started is not a gesture dropped unplayed"
+        );
         assert!(driver.step(input_at(base, 2, None)).feedback.is_none());
     }
 

@@ -75,6 +75,9 @@ pub struct OverlaySurfaceHost<P: SurfacePlatform> {
     last_frame_submission_us: Option<u128>,
     /// Whether visible frames are reaching a surface.
     presentation: Presentation,
+    /// Sequence of the latest gesture abandoned before its feedback started.
+    /// An arrival wait for it never reports an arrival.
+    unplayed_gesture: Option<u64>,
     platform: P,
 }
 
@@ -101,6 +104,7 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             frames_submitted: 0,
             last_frame_submission_us: None,
             presentation: Presentation::default(),
+            unplayed_gesture: None,
             platform,
         };
         host.platform.prime()?;
@@ -259,6 +263,9 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             // the lock screen) cannot prove an arrival. Say so promptly
             // instead of holding input for the whole deadline.
             if self.presentation.wait_exhausted() {
+                // The service sends its input on this answer, so a gesture
+                // still waiting to play has missed its moment.
+                self.abandon_gestures();
                 break OverlayArrivalOutcome::Unavailable;
             }
             self.tick();
@@ -315,7 +322,11 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
                 let highest = self.gesture_tracker.highest_sequence;
                 if highest > wait.sequence {
                     ArrivalStatus::Complete(OverlayArrivalOutcome::Superseded)
-                } else if highest < wait.sequence {
+                } else if highest < wait.sequence
+                    // Abandoned unplayed: nothing is pending, but its
+                    // feedback never started either.
+                    || self.unplayed_gesture == Some(wait.sequence)
+                {
                     ArrivalStatus::Complete(OverlayArrivalOutcome::Unavailable)
                 } else if self.motion.pending_gesture_feedback() {
                     ArrivalStatus::Pending
@@ -458,16 +469,23 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             self.motion.skip_frame();
         }
         if self.presentation.surfaces_gone() {
-            // The service stopped waiting for these surfaces and has already
-            // sent the input a gesture stood for. Feedback that plays when
-            // they return would show an action that is over, on a UI that
-            // has moved on; the cursor goes to its latest target instead.
-            self.motion.abandon_gestures();
+            self.abandon_gestures();
         }
         // A hot-plug the platform saw while committing takes effect now, so
         // the reply for this frame already reports it.
         self.apply_surface_change();
         Ok(outcome)
+    }
+
+    /// Gives up on gestures the service is no longer holding its input for:
+    /// it has stopped waiting for these surfaces and sent the input a gesture
+    /// stood for. Feedback that played when the surfaces return would show an
+    /// action that is over, on a UI that has moved on; the cursor goes to its
+    /// latest target instead.
+    fn abandon_gestures(&mut self) {
+        if self.motion.abandon_gestures() {
+            self.unplayed_gesture = Some(self.gesture_tracker.highest_sequence);
+        }
     }
 
     fn apply_surface_change(&mut self) {
