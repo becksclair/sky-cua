@@ -457,11 +457,40 @@ host, and at most 1 s. The motion driver is not advanced
 for frames nobody can see, and while no surface has taken the latest frame
 the motion echo reports neither a settled pose nor started feedback, so the
 service never releases physical input on a cursor that is not on screen. If
-the surfaces stay unable to take a frame (a sleeping or locked display), the
-wait runs out once, the arrival wait ends as `unavailable`, and input
-proceeds with that diagnostic; later requests do not wait again until a frame
-lands. The frame that hides is drawn transparent before the panels are
-ordered out, so they hold no stale image when they return.
+the surfaces stay unable to take a frame, the wait runs out once, the arrival
+wait ends as `unavailable`, and input proceeds with that diagnostic; later
+requests do not wait again until a frame lands. The frame that hides is drawn
+transparent before the panels are ordered out, so they hold no stale image
+when they return.
+
+**Covered panels.** Panels that are on screen stop taking frames when an
+opaque window covers every one of them, as the lock screen does. The host
+checks for that before each visible frame, on the same AppKit occlusion state
+the renderer skips on, and does not advance the motion driver while it holds:
+the cursor stays at the last pose that was shown, and none of the covered
+time is integrated when frames resume. Requests in between behave as
+described above, with the 1 s counted from the last frame that landed, so a
+request that arrives later into the cover waits less, and not at all after
+the first second.
+
+Once the panels have gone 1 s without taking a frame, the host stops treating
+the overlay as something a person is watching. It abandons its gesture
+pipeline, both a gesture still gliding to its point and feedback already
+playing: the service has by then stopped waiting and sent the input the
+gesture stood for, and feedback played when the panels return would show an
+action that is over, on a UI that has moved on. It also drops its frame timer
+to the 100 ms idle interval. When a panel is uncovered, frames resume within
+one idle interval and the cursor glides to its latest target with no
+feedback.
+
+The same holds whenever an arrival wait ends as `unavailable` because no
+surface is taking frames, including a show that follows an earlier stall and
+does not wait again: the service sends its input on that answer, so the
+gesture is abandoned at once. A later arrival wait for an abandoned gesture
+also ends as `unavailable`, never as an arrival.
+
+A sleeping display is different: it does not occlude the panels, frames keep
+landing, and motion keeps advancing.
 
 **System pointer.** Public macOS interfaces let only the frontmost
 application hide the pointer, and the overlay never is frontmost. The system
@@ -486,7 +515,8 @@ next frame and keeps its renderer.
     `surface_host/platform.rs` (the `SurfacePlatform` trait),
     `surface_host/geometry.rs` (the per-output geometry snapshot),
     `surface_host/motion_adapter.rs` (motion-frame → per-surface scene
-    mapping), `surface_host/capabilities.rs`, and
+    mapping), `surface_host/presentation.rs` (whether visible frames are
+    reaching a surface), `surface_host/capabilities.rs`, and
     `surface_host/renderer_selection.rs`
   - `src/layer_shell.rs` — the Wayland layer-shell platform (KWin, Hyprland);
     `layer_shell/wayland.rs` (surface creation + SCTK handlers),
@@ -681,6 +711,39 @@ macOS verification:
     reply.
   - The stdin/stdout transport shows the overlay and applies the capture
     barrier as the socket transport does.
+- Live proof of covered panels and display sleep, 2026-11-14, same Mac,
+  host alone, debug build. The cover is an opaque window above the
+  screen-saver level:
+  - Motion holds: with the cursor parked at (400, 400) and the display
+    covered, a new target at (1200, 700) replied unsettled and eight samples
+    over 2 s all reported (400, 400). After the cover was removed the pose
+    moved within 160 ms, glided, and settled on the target 1.7 s later. The
+    build before this change reported the pose advancing to the target while
+    covered and already parked there when uncovered.
+  - Request wait: a request sent 2 s into a cover replied in 1 ms; requests
+    sent 0.3 s and 0.6 s into one waited 0.9 s and 0.6 s.
+  - Gesture sent while covered: a tap at (1200, 700) replied in 1.3 ms and
+    its arrival wait ended `unavailable` in 0.9 ms. A later target at
+    (900, 500) followed. After uncovering, the cursor glided to (900, 500),
+    never moved toward the tap point, and reported no pending feedback.
+  - Gesture gliding when the cover landed, with no request during the
+    cover: abandoned by the frame timer alone; after uncovering the cursor
+    returned to its state target with no feedback.
+  - Hide and show under one cover, then a tap, uncovered 0.5 s later: the
+    arrival wait ended `unavailable` in 0.2 ms and the tap never played;
+    the cursor settled on the later target.
+  - Tap abandoned under cover, arrival wait sent 0.4 s after uncovering:
+    `unavailable`, not an arrival.
+  - Cost while covered: 159 wakeups/s and 1.2% of a core in the first
+    second, then 11 wakeups/s and 0.2%; 136 wakeups/s and about 15% while
+    shown.
+  - Coming under cover: sampled every 2 ms across five covers, AppKit's
+    occlusion state flipped between covered and shown for about 350 ms
+    before settling. In two of the five, a frame started in a shown interval
+    blocked the host for 1 s; the build before this change did the same.
+  - Display sleep (`pmset displaysleepnow`, display confirmed asleep): a
+    new target replied in 0.4 ms, and the pose advanced and settled while
+    the display slept, so the panels were still taking frames.
 
 ## Pointer playground
 
@@ -752,8 +815,14 @@ computer-use pointer can be eyeballed over live content or a controlled backdrop
   `SKY_CUA_OVERLAY_HIDE_FOR_CAPTURE=always` forces the hide on any version.
 - **macOS: not exercised live.** More than one display, mixed scale factors,
   a real display hot-plug (the replacement path was forced, not triggered by
-  hardware), display sleep and the lock screen, other Spaces and full-screen
+  hardware), the real lock screen (covering was exercised with an opaque
+  window above the screen-saver level), other Spaces and full-screen
   applications, and a session without a window server.
+- **macOS: the host can block for a second when its visible panels become
+  covered.** While a cover comes up, AppKit's occlusion state can flip back
+  to visible for a few tens of milliseconds although the window server is no
+  longer compositing the panels, and a frame started then waits for a
+  drawable. A request that arrives in that second is answered late.
 - **macOS: frames are timer-paced, not display-linked.** Presents are
   unsynchronized and paced by a deadline timer at the refresh rate, as on
   Linux, so an occasional frame can land one refresh late.

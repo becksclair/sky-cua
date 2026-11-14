@@ -219,13 +219,7 @@ impl CursorMotionDriver {
     /// touched, so a redirect mid-flight keeps its momentum (the signature
     /// curve).
     pub fn start_gesture(&mut self, gesture: MotionGesture) {
-        if let Some(active) = self.active.take()
-            && active.gesture.kind == AgentOverlayGestureKind::NoNo
-        {
-            // The wiggle owned the rotation; resume ambient easing from
-            // the rest pose, as the phone does when the animator ends.
-            self.rotation_deg = 0.0;
-        }
+        self.cancel_active_feedback();
         self.rest_aim = None;
         self.pending = if gesture.points.is_empty() {
             None
@@ -240,11 +234,7 @@ impl CursorMotionDriver {
     /// cloud. The in-flight feedback tail is dropped either way (phone
     /// parity: `hideForCapture` cancels the running animator).
     pub fn hide(&mut self, capture: bool) {
-        if let Some(active) = self.active.take()
-            && active.gesture.kind == AgentOverlayGestureKind::NoNo
-        {
-            self.rotation_deg = 0.0;
-        }
+        self.cancel_active_feedback();
         if capture {
             self.capture_suspended = true;
         } else {
@@ -256,6 +246,37 @@ impl CursorMotionDriver {
             // next cold show's cloud re-bloom.
             self.capture_suspended = false;
         }
+    }
+
+    /// Drops the gesture pipeline while the cursor stays shown: the running
+    /// feedback and a gesture still waiting for arrival. The mover and the
+    /// cloud are untouched, so the cursor carries on to its latest state
+    /// target. For gestures whose moment has passed unseen. Returns whether
+    /// a gesture was dropped before its feedback had started.
+    pub fn abandon_gestures(&mut self) -> bool {
+        self.cancel_active_feedback();
+        self.rest_aim = None;
+        self.pending.take().is_some()
+    }
+
+    fn cancel_active_feedback(&mut self) {
+        if let Some(active) = self.active.take()
+            && active.gesture.kind == AgentOverlayGestureKind::NoNo
+        {
+            // The wiggle owned the rotation; resume ambient easing from
+            // the rest pose, as the phone does when the animator ends.
+            self.rotation_deg = 0.0;
+        }
+    }
+
+    /// Marks a frame that wanted the cursor visible but that no surface could
+    /// show. Nothing is advanced or dropped; only the dt baseline is reset, so
+    /// the time until the next shown frame never integrates into the glide or
+    /// the cloud bloom. Feedback timelines run on epoch time and are not
+    /// paused; the host abandons them (see [`Self::abandon_gestures`]) once
+    /// the surfaces have stayed away.
+    pub fn skip_frame(&mut self) {
+        self.last_step = None;
     }
 
     /// Advances the driver by one frame. Call exactly once per rendered
@@ -903,6 +924,83 @@ mod tests {
             driver.pending_gesture_feedback(),
             "capture hide must keep the pending gesture"
         );
+    }
+
+    #[test]
+    fn a_skipped_frame_resumes_without_integrating_the_time_nobody_saw() {
+        let base = Instant::now();
+        let mut driver = placed_at(base, 100.0, 100.0);
+        driver.start_gesture(tap(1500.0, 1500.0));
+        let mut frame = driver.step(input_at(base, 1, None));
+        for frame_idx in 2..=10u64 {
+            frame = driver.step(input_at(base, frame_idx, None));
+        }
+        let shown_pos = frame.pos.unwrap();
+        let shown_cloud = frame.cloud_alpha;
+        assert!(frame.speed > 0.0, "test needs a mid-flight skip");
+        assert!(shown_cloud < 1.0, "test needs a mid-bloom skip");
+
+        // The surfaces stop taking frames for ten seconds.
+        driver.skip_frame();
+        let resumed_frame = 10 + 10_000 / FRAME_MS;
+        let resume = driver.step(input_at(base, resumed_frame, None));
+        assert_eq!(
+            resume.pos.unwrap(),
+            shown_pos,
+            "the first shown frame must continue from the last shown pose"
+        );
+        assert_eq!(
+            resume.cloud_alpha, shown_cloud,
+            "the bloom must not finish while nobody could see it"
+        );
+        assert!(
+            driver.pending_gesture_feedback(),
+            "a skipped frame must keep the pending gesture"
+        );
+
+        let next = driver.step(input_at(base, resumed_frame + 1, None));
+        assert_ne!(next.pos.unwrap(), shown_pos, "the glide must carry on");
+    }
+
+    #[test]
+    fn abandoning_gestures_drops_pending_and_active_feedback_and_keeps_the_cursor() {
+        let base = Instant::now();
+
+        // A gesture still gliding to its point: never fires, and the cursor
+        // goes to the latest state target instead.
+        let mut driver = placed_at(base, 100.0, 100.0);
+        driver.start_gesture(tap(1500.0, 1500.0));
+        let before = driver.step(input_at(base, 1, Some((100.0, 100.0))));
+        assert!(driver.abandon_gestures(), "a waiting gesture was dropped");
+        assert!(!driver.pending_gesture_feedback());
+        let mut last = before.clone();
+        for frame_idx in 2..600u64 {
+            last = driver.step(input_at(base, frame_idx, Some((400.0, 300.0))));
+            assert!(
+                last.feedback.is_none(),
+                "an abandoned gesture must never play"
+            );
+            if last.settled {
+                break;
+            }
+        }
+        assert!(last.settled, "the cursor must reach the state target");
+        let pos = last.pos.unwrap();
+        assert!((pos.x - 400.0).abs() < 1.0 && (pos.y - 300.0).abs() < 1.0);
+        assert!(
+            last.cloud_alpha >= before.cloud_alpha,
+            "abandoning gestures must not re-bloom the cloud"
+        );
+
+        // Feedback already playing is cut as well.
+        let mut driver = placed_at(base, 500.0, 500.0);
+        driver.start_gesture(tap(500.0, 500.0));
+        assert!(driver.step(input_at(base, 1, None)).feedback.is_some());
+        assert!(
+            !driver.abandon_gestures(),
+            "feedback that had started is not a gesture dropped unplayed"
+        );
+        assert!(driver.step(input_at(base, 2, None)).feedback.is_none());
     }
 
     #[test]

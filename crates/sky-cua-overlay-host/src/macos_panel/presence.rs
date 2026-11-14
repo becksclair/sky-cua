@@ -9,6 +9,13 @@
 //! still, so the panels are drawn only after the window server itself lists
 //! them on screen.
 //!
+//! Panels that are on screen can still become occluded: an opaque window
+//! above them, as the lock screen puts up, leaves them ordered in but not
+//! composited, and the renderer skips an occluded window. A frame that wants
+//! the overlay visible is therefore skipped whenever no panel is unoccluded,
+//! before the host advances its motion driver for it. A sleeping display does
+//! not occlude them; frames keep landing on it.
+//!
 //! Hidden panels are ordered out, so a hidden overlay costs neither GPU work
 //! nor window-server compositing. The frame that hides is still drawn,
 //! transparent, before the panels are ordered out, so they hold no stale
@@ -36,20 +43,29 @@ pub(super) enum FrameStart {
 
 impl PanelPresence {
     /// Decides the start of a frame that wants the overlay `visible`.
-    /// `listed_on_screen` asks whether the panels can take a frame now (the
-    /// window server lists them on screen and they are not occluded); it is
-    /// consulted only while the panels are being ordered in.
+    ///
+    /// `unoccluded` asks whether AppKit reports at least one panel as not
+    /// occluded; it is cheap and consulted on every visible frame once the
+    /// panels are ordered in. `listed_on_screen` asks whether the window
+    /// server lists the panels on screen; it allocates and is consulted only
+    /// while the panels are being ordered in, after `unoccluded` passed.
     pub(super) fn begin_frame(
         self,
         visible: bool,
+        unoccluded: impl Fn() -> bool,
         listed_on_screen: impl FnOnce() -> bool,
     ) -> (Self, FrameStart) {
         match self {
+            // Every panel got covered under a visible overlay: none can take
+            // the frame, and they stay ordered in for when one is uncovered.
+            Self::OnScreen if visible && !unoccluded() => (Self::OnScreen, FrameStart::Skip),
             // A hiding frame is drawn too: it is the transparent one.
             Self::OnScreen => (Self::OnScreen, FrameStart::Draw),
             Self::OrderedOut if visible => (Self::OrderingIn, FrameStart::OrderIn),
             Self::OrderedOut => (Self::OrderedOut, FrameStart::Skip),
-            Self::OrderingIn if visible && listed_on_screen() => (Self::OnScreen, FrameStart::Draw),
+            Self::OrderingIn if visible && unoccluded() && listed_on_screen() => {
+                (Self::OnScreen, FrameStart::Draw)
+            }
             Self::OrderingIn => (Self::OrderingIn, FrameStart::Skip),
         }
     }
@@ -66,34 +82,60 @@ mod tests {
     use super::{FrameStart, PanelPresence};
 
     fn never_asked() -> bool {
-        panic!("the window list is consulted only while ordering in")
+        panic!("this frame must not consult the windowing system")
     }
 
     #[test]
     fn showing_orders_in_then_waits_for_the_window_server_before_drawing() {
-        let (presence, start) = PanelPresence::OrderedOut.begin_frame(true, never_asked);
+        let (presence, start) =
+            PanelPresence::OrderedOut.begin_frame(true, never_asked, never_asked);
         assert_eq!(
             (presence, start),
             (PanelPresence::OrderingIn, FrameStart::OrderIn)
         );
         assert!(!presence.orders_out_after_frame(true));
 
-        // Not listed yet: no present, and the panels stay ordered in.
-        let (presence, start) = presence.begin_frame(true, || false);
+        // Still occluded: no present, the window list is not queried, and
+        // the panels stay ordered in.
+        let (presence, start) = presence.begin_frame(true, || false, never_asked);
         assert_eq!(
             (presence, start),
             (PanelPresence::OrderingIn, FrameStart::Skip)
         );
         assert!(!presence.orders_out_after_frame(true));
 
-        let (presence, start) = presence.begin_frame(true, || true);
+        // Unoccluded but not listed yet: still no present.
+        let (presence, start) = presence.begin_frame(true, || true, || false);
+        assert_eq!(
+            (presence, start),
+            (PanelPresence::OrderingIn, FrameStart::Skip)
+        );
+
+        let (presence, start) = presence.begin_frame(true, || true, || true);
         assert_eq!(
             (presence, start),
             (PanelPresence::OnScreen, FrameStart::Draw)
         );
 
         // Once on screen the window list is not consulted again.
-        let (presence, start) = presence.begin_frame(true, never_asked);
+        let (presence, start) = presence.begin_frame(true, || true, never_asked);
+        assert_eq!(
+            (presence, start),
+            (PanelPresence::OnScreen, FrameStart::Draw)
+        );
+    }
+
+    #[test]
+    fn covered_panels_skip_visible_frames_and_stay_ordered_in() {
+        let (presence, start) = PanelPresence::OnScreen.begin_frame(true, || false, never_asked);
+        assert_eq!(
+            (presence, start),
+            (PanelPresence::OnScreen, FrameStart::Skip)
+        );
+        assert!(!presence.orders_out_after_frame(true));
+
+        // A panel is uncovered: frames resume without ordering in again.
+        let (presence, start) = presence.begin_frame(true, || true, never_asked);
         assert_eq!(
             (presence, start),
             (PanelPresence::OnScreen, FrameStart::Draw)
@@ -102,7 +144,10 @@ mod tests {
 
     #[test]
     fn hiding_draws_the_transparent_frame_then_orders_out() {
-        let (presence, start) = PanelPresence::OnScreen.begin_frame(false, never_asked);
+        // Occlusion is not asked about: a hiding frame is attempted either
+        // way, and the panels are ordered out after it.
+        let (presence, start) =
+            PanelPresence::OnScreen.begin_frame(false, never_asked, never_asked);
         assert_eq!(
             (presence, start),
             (PanelPresence::OnScreen, FrameStart::Draw)
@@ -112,8 +157,9 @@ mod tests {
 
     #[test]
     fn hiding_before_the_panels_reach_the_screen_presents_nothing() {
-        // The window list must not promote a panel the frame wants hidden.
-        let (presence, start) = PanelPresence::OrderingIn.begin_frame(false, || true);
+        // Nothing may promote a panel the frame wants hidden.
+        let (presence, start) =
+            PanelPresence::OrderingIn.begin_frame(false, never_asked, never_asked);
         assert_eq!(
             (presence, start),
             (PanelPresence::OrderingIn, FrameStart::Skip)
@@ -123,7 +169,8 @@ mod tests {
 
     #[test]
     fn a_hidden_overlay_that_is_already_off_screen_does_nothing() {
-        let (presence, start) = PanelPresence::OrderedOut.begin_frame(false, never_asked);
+        let (presence, start) =
+            PanelPresence::OrderedOut.begin_frame(false, never_asked, never_asked);
         assert_eq!(
             (presence, start),
             (PanelPresence::OrderedOut, FrameStart::Skip)

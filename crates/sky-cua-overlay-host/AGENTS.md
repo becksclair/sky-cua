@@ -38,6 +38,10 @@ driver ported from the Android companion.
     mechanism, surface-set changes, and the system-cursor and
     pointer-telemetry adapters. A new desktop is a new implementation of this
     trait, not a copy of the host.
+  - `surface_host/presentation.rs` — `Presentation`, the pure record of
+    whether visible frames are reaching a surface. It decides when a request
+    stops waiting for a frame and when the surfaces count as gone (gestures
+    abandoned, frame timer idled).
   - `surface_host/geometry.rs` — `OutputGeometry`, the per-output snapshot
     the 60-240 Hz draw path reads. Platforms rebuild it only on output
     events; per-frame code must never query the windowing system for
@@ -124,6 +128,26 @@ driver ported from the Android companion.
   thread for a second. `PanelPresence` plus the unsynchronized present mode
   (`PRESENT_WITHOUT_DISPLAY_SYNC` in `renderer/surface.rs`) are what prevent
   it; keep both.
+- The motion driver must not advance for a visible frame no surface can
+  take. The host cannot learn that from the renderer in time (it steps motion
+  before the renderer acquires frames), so it is ruled out beforehand: the
+  host skips the frame when no surface is drawable, and
+  `MacosPanelPlatform::begin_frame` skips it when every panel is occluded,
+  by reading `NSWindow.occlusionState` itself. wgpu's Metal backend skips a
+  surface on that same property and is the only backend that reports
+  `Occluded` (the Metal surface code in the wgpu-hal crate, wgpu 29);
+  re-check that on a wgpu upgrade. If a backend ever skips frames for a reason its platform
+  cannot read beforehand, split the renderer's draw into acquire and present
+  and step motion between them. Note that on Vulkan a frame that is acquired
+  and then dropped is not returned to the swapchain.
+- A sleeping display does not occlude the panels (frames keep landing); an
+  opaque window above them does. While such a cover comes up, the occlusion
+  state flips between covered and visible for a few hundred milliseconds,
+  and a frame started in a visible interval can block the main thread for a
+  second waiting for a drawable (seen in about one cover in three). Not
+  drawing again until the panels have stayed unoccluded for a short time
+  would likely avoid it; that is untested, and it must not delay a cold
+  show.
 - The panels are non-shareable on purpose (`NSWindow.sharingType = none`;
   see "Capture exclusion" in `docs/features/agent-cursor-overlay.md`), so
   on macOS 27 and later `screencapture` and ScreenCaptureKit do not show the

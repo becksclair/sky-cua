@@ -308,21 +308,28 @@ impl SurfacePlatform for MacosPanelPlatform {
         // The host has replaced its wgpu surfaces by the time it draws.
         self.retired.clear();
         self.frame_visible = visible;
-        let (presence, start) = self.presence.begin_frame(visible, || {
-            // An unavailable window list must not keep the overlay dark.
-            let window_ids = self.window_ids();
-            let listed = display::windows_on_screen(&window_ids)
-                .is_none_or(|count| count == window_ids.len());
-            // The renderer skips a window AppKit still reports as occluded,
-            // so a frame can land only once at least one panel is not.
-            listed
-                && self.panels.iter().any(|entry| {
+        let (presence, start) = self.presence.begin_frame(
+            visible,
+            // The renderer skips a window AppKit reports as occluded (wgpu's
+            // Metal backend reads this same property before it asks for a
+            // drawable), so a frame can land only while at least one panel is
+            // not. AppKit updates the property on run loop turns, and none
+            // happens between here and the draw.
+            || {
+                self.panels.iter().any(|entry| {
                     entry
                         .panel
                         .occlusionState()
                         .contains(NSWindowOcclusionState::Visible)
                 })
-        });
+            },
+            || {
+                // An unavailable window list must not keep the overlay dark.
+                let window_ids = self.window_ids();
+                display::windows_on_screen(&window_ids)
+                    .is_none_or(|count| count == window_ids.len())
+            },
+        );
         self.presence = presence;
         match start {
             FrameStart::Draw => true,

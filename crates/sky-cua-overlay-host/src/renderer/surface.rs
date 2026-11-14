@@ -125,8 +125,9 @@ pub enum SurfaceAcquisitionResult {
     Success(::wgpu::SurfaceTexture),
     Retry(&'static str),
     /// The windowing system is not showing the surface (a window that has
-    /// just been ordered in, a sleeping or locked display). There is nothing
-    /// to present to; the frame is skipped, not failed.
+    /// just been ordered in, or one covered by an opaque window such as the
+    /// lock screen). There is nothing to present to; the frame is skipped,
+    /// not failed. Only the Metal backend reports it.
     Occluded,
     Validation,
 }

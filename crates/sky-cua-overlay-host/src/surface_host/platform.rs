@@ -110,8 +110,16 @@ pub trait SurfacePlatform: std::fmt::Debug {
 
     /// Called once per frame before any surface is prepared. `visible` is
     /// whether the overlay holds a visible state. Returns whether the host
-    /// should render this frame; a platform that takes its surfaces off
-    /// screen while hidden returns `false` to skip the GPU work entirely.
+    /// should render this frame.
+    ///
+    /// The host advances its motion driver only after this returns `true`,
+    /// so a platform must return `false` for a visible frame that none of
+    /// its surfaces can take (surfaces still coming on screen, or all of
+    /// them covered): the driver then stays where the last shown frame
+    /// left it. The host itself covers the case its slots already show,
+    /// that no surface is drawable. A platform that takes its surfaces off
+    /// screen while hidden also returns `false` for hidden frames, to skip
+    /// the GPU work entirely.
     fn begin_frame(&mut self, visible: bool) -> bool;
 
     /// Per-surface hand-off before the renderer draws into it.

@@ -46,8 +46,13 @@ pass and are the first work to pick up once it is proven.
   - [x] Live proof on a real macOS session: the overlay appears, lands on
         the action point, passes clicks through, stays out of captures, and
         exits with its service (2026-11-13, single Retina display)
-  - [ ] Live proof on multiple displays, a real display hot-plug, display
-        sleep, other Spaces, and full-screen applications
+  - [x] Live proof of display sleep and of covered panels: motion holds
+        while every panel is covered, gestures are abandoned and the frame
+        timer idles after a second, and the cursor glides to its latest
+        target when a panel is uncovered; a sleeping display keeps taking
+        frames (2026-11-14)
+  - [ ] Live proof on multiple displays, a real display hot-plug, the real
+        lock screen, other Spaces, and full-screen applications
   - [x] Live-smoke the refactored Wayland layer-shell platform on KDE:
         glide, hide-for-capture, and visible-overlay smokes (2026-11-13)
   - [ ] Live-smoke the refactored layer-shell platform on Hyprland, and run
