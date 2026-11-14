@@ -274,7 +274,7 @@ impl WgpuOverlayRenderer {
                     // An occluded surface is skipped for this frame and drawn
                     // again once the windowing system shows it. Treating it
                     // as an error would fail the renderer closed for good the
-                    // first time a display slept.
+                    // first time its window was covered.
                     super::surface::SurfaceAcquisitionResult::Occluded => break None,
                     super::surface::SurfaceAcquisitionResult::Validation => {
                         bail!(

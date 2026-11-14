@@ -35,6 +35,7 @@ mod cursor_state;
 pub(crate) mod geometry;
 mod motion_adapter;
 pub(crate) mod platform;
+mod presentation;
 mod renderer_selection;
 
 use cursor_state::{
@@ -44,31 +45,14 @@ use geometry::{
     FALLBACK_PX_PER_MM, PointerTrackingBounds, box_reaches_output, translate_to_output_local,
 };
 use platform::{SurfaceChange, SurfacePlatform, SurfaceSlot};
+use presentation::{FrameOutcome, Presentation};
 use renderer_selection::SelectedRenderer;
 
 /// Upper bound on one held `wait_for_arrival` request.
 const MAX_ARRIVAL_WAIT_MS: u64 = 8_000;
 
-/// How long a request that makes the overlay visible waits for a surface to
-/// take its frame before replying anyway. A freshly started macOS host needs
-/// about 250 ms before its first panel can take a frame, and the service's
-/// request timeout is 2 s.
-const PRESENT_WAIT: Duration = Duration::from_secs(1);
+/// How often a request that waits for a surface to take its frame looks again.
 const PRESENT_POLL: Duration = Duration::from_millis(1);
-
-/// What a frame did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FrameOutcome {
-    /// At least one surface took the frame.
-    Presented,
-    /// The overlay is hidden and its surfaces are off screen: there was
-    /// nothing to present.
-    NothingToShow,
-    /// The overlay should be visible, but no surface could take a frame yet
-    /// (a platform still bringing its surfaces on screen, or surfaces the
-    /// windowing system reports as occluded).
-    AwaitingSurfaces,
-}
 
 // Field order is drop order: the renderer and the wgpu surfaces go before the
 // instance, and all of them before the platform's native surfaces.
@@ -89,13 +73,8 @@ pub struct OverlaySurfaceHost<P: SurfacePlatform> {
     last_motion: Option<MotionFrame>,
     frames_submitted: u64,
     last_frame_submission_us: Option<u128>,
-    /// The latest frame should have been visible but no surface took it. The
-    /// motion echo and the arrival wait never report an arrival meanwhile.
-    awaiting_surfaces: bool,
-    /// A wait for a surface to take a frame already ran out (a sleeping or
-    /// locked display). Later requests do not wait again until a frame lands,
-    /// so a display that shows nothing costs one wait, not one per request.
-    presentation_stalled: bool,
+    /// Whether visible frames are reaching a surface.
+    presentation: Presentation,
     platform: P,
 }
 
@@ -121,8 +100,7 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             last_motion: None,
             frames_submitted: 0,
             last_frame_submission_us: None,
-            awaiting_surfaces: false,
-            presentation_stalled: false,
+            presentation: Presentation::default(),
             platform,
         };
         host.platform.prime()?;
@@ -269,27 +247,19 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
         }
 
         let deadline = Instant::now() + Duration::from_millis(wait.timeout_ms);
-        let mut unpresented_since: Option<Instant> = None;
         let outcome = loop {
             match self.arrival_status(wait) {
                 ArrivalStatus::Complete(outcome) => break outcome,
                 ArrivalStatus::Pending => {}
             }
-            let now = Instant::now();
-            if now >= deadline {
+            if Instant::now() >= deadline {
                 break OverlayArrivalOutcome::DeadlineElapsed;
             }
-            // Surfaces that stay unable to take a frame (a sleeping or locked
-            // display) cannot prove an arrival. Say so promptly instead of
-            // holding input for the whole deadline.
-            if self.awaiting_surfaces {
-                let waited = now.duration_since(*unpresented_since.get_or_insert(now));
-                if self.presentation_stalled || waited >= PRESENT_WAIT {
-                    self.presentation_stalled = true;
-                    break OverlayArrivalOutcome::Unavailable;
-                }
-            } else {
-                unpresented_since = None;
+            // Surfaces that stay unable to take a frame (covered, as under
+            // the lock screen) cannot prove an arrival. Say so promptly
+            // instead of holding input for the whole deadline.
+            if self.presentation.wait_exhausted() {
+                break OverlayArrivalOutcome::Unavailable;
             }
             self.tick();
             if let ArrivalStatus::Complete(outcome) = self.arrival_status(wait) {
@@ -336,7 +306,7 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
         {
             return ArrivalStatus::Complete(OverlayArrivalOutcome::Unavailable);
         }
-        if self.awaiting_surfaces {
+        if self.presentation.awaiting() {
             // Nothing the driver reports has been shown yet.
             return ArrivalStatus::Pending;
         }
@@ -382,7 +352,14 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
     /// 4.2 ms on a 240 Hz screen) instead of a fixed 60 Hz; otherwise
     /// `IDLE_TICK_INTERVAL`. The refresh rate is clamped to [60, 240] Hz and
     /// defaults to 60 Hz when no refresh rate is advertised.
+    ///
+    /// A visible overlay whose surfaces are gone also idles: each tick only
+    /// asks whether one can take a frame again, so frames resume within one
+    /// idle interval of a surface coming back.
     pub(crate) fn pointer_tick_interval(&self) -> Duration {
+        if self.presentation.surfaces_gone() {
+            return crate::IDLE_TICK_INTERVAL;
+        }
         // Reads the platform's geometry snapshot: this is re-derived on every
         // timer fire and must not query the windowing system.
         let max_mhz = (0..self.platform.surface_count())
@@ -448,16 +425,14 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
     /// the service releases physical input on, so it must describe something
     /// a surface has actually shown: while the overlay should be visible but
     /// no surface can take a frame yet, the motion driver is not advanced and
-    /// this waits, within `PRESENT_WAIT`, for the first frame that lands.
-    /// Once such a wait has run out it is not repeated until a frame lands.
+    /// this waits for the first frame that lands, until the surfaces have
+    /// been away for `PRESENT_WAIT`. Once that wait has run out it is not
+    /// repeated until a frame lands.
     fn render_for_reply(&mut self) -> Result<()> {
-        let deadline = Instant::now() + PRESENT_WAIT;
         loop {
-            if self.render_current()? != FrameOutcome::AwaitingSurfaces {
-                return Ok(());
-            }
-            if self.presentation_stalled || Instant::now() >= deadline {
-                self.presentation_stalled = true;
+            if self.render_current()? != FrameOutcome::AwaitingSurfaces
+                || self.presentation.wait_exhausted()
+            {
                 return Ok(());
             }
             self.platform.wait(PRESENT_POLL);
@@ -476,12 +451,18 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             .set_hidden(should_hide_system_cursor)
             .context("failed to update the system cursor adapter")?;
         let outcome = self.draw()?;
-        self.awaiting_surfaces = outcome == FrameOutcome::AwaitingSurfaces;
-        // Only a frame that landed proves the surfaces can take one again. A
-        // hidden frame that presented nothing must not clear the stall, or
-        // every hide and show pair on a dark display would wait again.
-        if outcome == FrameOutcome::Presented {
-            self.presentation_stalled = false;
+        self.presentation.record(outcome, Instant::now());
+        if outcome == FrameOutcome::AwaitingSurfaces {
+            // The time until a surface takes a frame again is time nobody
+            // saw; it must not integrate into the glide when frames resume.
+            self.motion.skip_frame();
+        }
+        if self.presentation.surfaces_gone() {
+            // The service stopped waiting for these surfaces and has already
+            // sent the input a gesture stood for. Feedback that plays when
+            // they return would show an action that is over, on a UI that
+            // has moved on; the cursor goes to its latest target instead.
+            self.motion.abandon_gestures();
         }
         // A hot-plug the platform saw while committing takes effect now, so
         // the reply for this frame already reports it.
@@ -572,12 +553,13 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             );
         }
         let presenting = self.platform.begin_frame(visible);
-        if visible && !presenting {
-            // The platform is still bringing its surfaces on screen. The
-            // motion driver is not advanced for a frame nobody can see:
-            // otherwise a cold show would snap, and a gesture would start its
-            // feedback, before the cursor exists, and the service would
-            // release input on that.
+        if visible && (!presenting || self.active_surface_count() == 0) {
+            // No surface can take this frame: the platform is still bringing
+            // its surfaces on screen, every one of them is covered, or none
+            // is drawable. The motion driver is not advanced for a frame
+            // nobody can see: otherwise a cold show would snap, and a gesture
+            // would start its feedback, before the cursor exists, and the
+            // service would release input on that.
             self.platform.finish_frame()?;
             return Ok(FrameOutcome::AwaitingSurfaces);
         }
@@ -677,7 +659,10 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
         Ok(if presented > 0 {
             FrameOutcome::Presented
         } else if visible {
-            // Every surface skipped the frame (occluded): nothing was shown.
+            // Every surface skipped the frame (occluded) although the
+            // platform expected one to take it, so motion has already
+            // advanced for it. `SurfacePlatform::begin_frame` is meant to
+            // rule this out; reporting the frame as unshown is the backstop.
             FrameOutcome::AwaitingSurfaces
         } else {
             FrameOutcome::NothingToShow
@@ -736,9 +721,9 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             // While no surface has taken the latest frame, the pose is one
             // nobody was shown (it may predate a hide), so it is not reported
             // as an arrival.
-            settled: frame.settled && !self.awaiting_surfaces,
+            settled: frame.settled && !self.presentation.awaiting(),
             pending_gesture_feedback: self.motion.pending_gesture_feedback()
-                || self.awaiting_surfaces,
+                || self.presentation.awaiting(),
         })
     }
 }
