@@ -2,6 +2,7 @@
 //! check, and the priming point. Runs on a lane thread only.
 
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+use sky_cua_platform::model::RectF;
 
 use super::element::{
     AxElement, AxErr, as_bool, as_element, as_elements, as_point, as_size, as_string, cf_string,
@@ -182,11 +183,7 @@ pub(crate) fn priming_point(
         Err(error) if error.is_unsupported() => None,
         Err(error) => return Err(ax_error(error, "failed to read AXActivationPoint")),
     };
-    let bounds = &window.bounds;
-    let inside = |(x, y): &(f64, f64)| {
-        *x >= bounds.x && *x < bounds.right() && *y >= bounds.y && *y < bounds.bottom()
-    };
-    let Some((x, y)) = point.filter(inside) else {
+    let Some((x, y)) = point.filter(|&point| contains(&window.bounds, point)) else {
         return Ok(None);
     };
     guard.ensure_wanted()?;
@@ -209,8 +206,44 @@ pub(crate) fn priming_point(
     let actions = under
         .action_names()
         .map_err(|error| ax_error(error, "failed to read the actions at the activation point"))?;
-    let inert = actions
+    Ok(only_inert(&actions).then_some((x, y)))
+}
+
+fn contains(bounds: &RectF, (x, y): (f64, f64)) -> bool {
+    x >= bounds.x && x < bounds.right() && y >= bounds.y && y < bounds.bottom()
+}
+
+/// Whether a left click on an element offering `actions` does nothing. An
+/// element with no actions, such as the window or a hosting view, is inert.
+fn only_inert(actions: &[String]) -> bool {
+    actions
         .iter()
-        .all(|action| INERT_ACTIONS.contains(&action.as_str()));
-    Ok(inert.then_some((x, y)))
+        .all(|action| INERT_ACTIONS.contains(&action.as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coords::desktop_rect;
+
+    #[test]
+    fn a_priming_point_must_lie_inside_the_window() {
+        let bounds = desktop_rect(100.0, 50.0, 400.0, 300.0);
+
+        assert!(contains(&bounds, (130.0, 66.0)));
+        assert!(contains(&bounds, (100.0, 50.0)));
+        assert!(!contains(&bounds, (500.0, 66.0)));
+        assert!(!contains(&bounds, (130.0, 350.0)));
+        assert!(!contains(&bounds, (99.0, 66.0)));
+    }
+
+    #[test]
+    fn only_an_element_whose_actions_are_all_inert_can_be_primed() {
+        let actions = |names: &[&str]| names.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+        assert!(only_inert(&[]));
+        assert!(only_inert(&actions(&["AXRaise", "AXShowMenu"])));
+        assert!(!only_inert(&actions(&["AXPress"])));
+        assert!(!only_inert(&actions(&["AXRaise", "AXPress"])));
+    }
 }

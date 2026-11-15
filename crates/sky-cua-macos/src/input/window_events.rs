@@ -30,6 +30,7 @@ use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 
 use super::{CLICK_HOLD, MULTI_CLICK_GAP};
 use crate::permissions::{self, Permission};
+use crate::windows;
 
 /// `NSEventSubtypeApplicationActivated` and `...Deactivated`.
 const APPLICATION_ACTIVATED: i16 = 1;
@@ -110,54 +111,57 @@ pub fn click(
             "CGEventSetWindowLocation is not available on this macOS version",
         )
     })?;
-    // Every event is built before the first is posted, so a failure never
-    // leaves the application activated, a button held, or a delivered click
-    // reported as failed.
+    // The activation sequence is built before anything is posted, and each
+    // click's pair before that click, so a failure never leaves the
+    // application activated or a button held.
     objc2::rc::autoreleasepool(|_| {
         let mouse = |event_type, point, click_state| {
             mouse_event(address, event_type, point, click_state, set_location)
+        };
+        let click_pair = |point, click_state| -> Result<_, BackendError> {
+            Ok((
+                mouse(NSEventType::LeftMouseDown, point, click_state)?,
+                mouse(NSEventType::LeftMouseUp, point, click_state)?,
+            ))
         };
         let primed = match activation {
             Activation::None => None,
             Activation::Primed { at: inert } => Some((
                 application_event(APPLICATION_ACTIVATED, address.window_id)?,
-                mouse(NSEventType::LeftMouseDown, inert, 1)?,
-                mouse(NSEventType::LeftMouseUp, inert, 1)?,
+                click_pair(inert, 1)?,
                 application_event(APPLICATION_DEACTIVATED, 0)?,
             )),
         };
-        let clicks = (1..=i64::from(count))
-            .map(|click_state| {
-                Ok((
-                    mouse(NSEventType::LeftMouseDown, at, click_state)?,
-                    mouse(NSEventType::LeftMouseUp, at, click_state)?,
-                ))
-            })
-            .collect::<Result<Vec<_>, BackendError>>()?;
 
         let pid = address.pid;
-        let deactivate = primed.map(|(activate, down, up, deactivate)| {
-            post(activate, pid);
-            sleep(ACTIVATION_SETTLE);
+        let press = |(down, up)| {
             post(down, pid);
             sleep(CLICK_HOLD);
             post(up, pid);
+        };
+        let deactivate = primed.map(|(activate, priming, deactivate)| {
+            post(activate, pid);
+            sleep(ACTIVATION_SETTLE);
+            press(priming);
             sleep(PRIMING_SETTLE);
             deactivate
         });
-        for (index, (down, up)) in clicks.into_iter().enumerate() {
-            if index > 0 {
+        let clicked = (1..=i64::from(count)).try_for_each(|click_state| {
+            if click_state > 1 {
                 sleep(MULTI_CLICK_GAP);
             }
-            post(down, pid);
-            sleep(CLICK_HOLD);
-            post(up, pid);
-        }
+            press(click_pair(at, click_state)?);
+            Ok(())
+        });
         if let Some(deactivate) = deactivate {
             sleep(DEACTIVATION_DELAY);
-            post(deactivate, pid);
+            // An application the user brought forward meanwhile is really
+            // active; telling it otherwise would take its key focus away.
+            if windows::front_process_pid() != Some(pid) {
+                post(deactivate, pid);
+            }
         }
-        Ok(())
+        clicked
     })
 }
 
