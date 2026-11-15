@@ -147,6 +147,7 @@ pub fn action_outcome() -> ActionOutcome {
 
 pub fn cursor_state() -> AgentCursorState {
     AgentCursorState {
+        window_handle: None,
         visible: true,
         sequence: 1,
         model_point: Some(AgentCursorPoint {

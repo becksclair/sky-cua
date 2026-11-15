@@ -545,6 +545,7 @@ fn window_targeting_report_includes_permissions_hint_when_present() {
 #[test]
 fn agent_cursor_contract_serializes_snake_case_and_skips_absent_optional_fields() {
     let state = AgentCursorState {
+        window_handle: None,
         visible: true,
         sequence: 7,
         model_point: Some(AgentCursorPoint {
@@ -722,6 +723,7 @@ fn app_state_snapshot_accepts_old_wire_shape_without_agent_cursor() {
 #[test]
 fn agent_cursor_service_requests_preserve_json_wire_shape() {
     let state = AgentCursorState {
+        window_handle: None,
         visible: true,
         sequence: 1,
         model_point: Some(AgentCursorPoint {

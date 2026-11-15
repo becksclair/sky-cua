@@ -72,7 +72,8 @@ pass and are the first work to pick up once it is proven.
   - [ ] Live proof of process-targeted clicks on Chromium and Electron
         windows through the daemon, including their native toolbars
   - [ ] Menu shortcuts (Command and Control chords) to an unfocused window
-  - [ ] Agent cursor overlay scoped to the target window and ordered with it
+  - [x] Agent cursor overlay ordered directly above the target window, so
+        windows in front of the target also cover the cursor (2026-11-15)
 - [ ] macOS session presence (idle display and system sleep assertions) —
       sketched in [`docs/features/session-presence.md`](docs/features/session-presence.md)
 - [ ] Application launch on macOS (`desktop_launch_app`)

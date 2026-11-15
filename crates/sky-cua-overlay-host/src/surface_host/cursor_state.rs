@@ -60,6 +60,7 @@ mod tests {
     #[test]
     fn cursor_point_prefers_native_coordinates_for_visible_overlay() {
         let state = AgentCursorState {
+            window_handle: None,
             visible: true,
             sequence: 1,
             model_point: Some(AgentCursorPoint {
@@ -84,6 +85,7 @@ mod tests {
     #[test]
     fn system_pointer_update_moves_visible_state_to_desktop_coordinates() {
         let mut state = AgentCursorState {
+            window_handle: None,
             visible: true,
             sequence: 7,
             model_point: Some(AgentCursorPoint {

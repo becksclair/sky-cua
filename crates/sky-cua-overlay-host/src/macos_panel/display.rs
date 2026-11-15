@@ -100,6 +100,24 @@ pub(super) fn windows_on_screen(window_ids: &[u32]) -> Option<usize> {
     Some(listed)
 }
 
+/// Whether the windows `ours` are the ones directly above `target` in the
+/// window order. `None` when `target` is not on screen or the window list is
+/// unavailable.
+pub(super) fn stacked_directly_above(target: u32, ours: &[u32]) -> Option<bool> {
+    if windows_on_screen(&[target])? == 0 {
+        return None;
+    }
+    let above = CGWindowListCreate(CGWindowListOption::OptionOnScreenAboveWindow, target)?;
+    // The list runs front to back, so the windows nearest the target end it.
+    let count = above.count();
+    let mut nearest = (count.saturating_sub(ours.len() as isize)..count).map(|index| {
+        // SAFETY: as in `windows_on_screen`.
+        let value = unsafe { above.value_at_index(index) } as usize;
+        u32::try_from(value).ok()
+    });
+    Some(count >= ours.len() as isize && nearest.all(|id| id.is_some_and(|id| ours.contains(&id))))
+}
+
 #[cfg(test)]
 mod tests {
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};

@@ -515,7 +515,9 @@ pub(crate) fn validate_gesture_message(
     (true, Some(gesture), diagnostics)
 }
 
+// One backend per host process, so the no-op variant's size costs nothing.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum OverlayHostBackend {
     Noop(NoopOverlayBackend),
     #[cfg(target_os = "linux")]
@@ -1228,6 +1230,7 @@ mod tests {
 
     fn cursor_state() -> AgentCursorState {
         AgentCursorState {
+            window_handle: None,
             visible: true,
             sequence: 1,
             model_point: Some(AgentCursorPoint {

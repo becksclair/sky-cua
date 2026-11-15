@@ -447,6 +447,14 @@ fn application_window_filter_keeps_only_visible_normal_layer_windows() {
         ..suggestion_bubble
     };
     assert!(list::is_application_window(&small_titled));
+
+    // The agent cursor's panel, stacked above a target window.
+    let cursor_panel = list::RawWindow {
+        owner_name: "sky-cua-overlay-host".to_string(),
+        bounds: [0.0, 0.0, 1512.0, 982.0],
+        ..base.clone()
+    };
+    assert!(!list::is_application_window(&cursor_panel));
 }
 
 mod live {

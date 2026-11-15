@@ -1255,6 +1255,7 @@ fn direct_backend_ref_only_bypasses_action_target_resolution() {
 async fn cursor_status_requests_round_trip_through_daemon_handle() {
     let daemon = daemon_with(snapshot(None, Vec::new()), success_outcome());
     let state = AgentCursorState {
+        window_handle: None,
         visible: true,
         sequence: 99,
         model_point: Some(AgentCursorPoint {
@@ -1338,6 +1339,7 @@ async fn get_app_state_attaches_cursor_state_and_synthetic_screenshot() {
         success_outcome(),
     );
     let state = AgentCursorState {
+        window_handle: None,
         visible: true,
         sequence: 0,
         model_point: Some(AgentCursorPoint {

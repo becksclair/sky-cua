@@ -477,6 +477,7 @@ fn wait_for_tcp(addr: &str) {
 
 fn cursor_state() -> AgentCursorState {
     AgentCursorState {
+        window_handle: None,
         visible: true,
         sequence: 1,
         model_point: Some(AgentCursorPoint {

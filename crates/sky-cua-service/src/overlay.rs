@@ -312,6 +312,7 @@ impl OverlayController {
             .map(|state| (state.model_point.clone(), state.native_point.clone()))
             .unwrap_or((None, None));
         self.set_state(AgentCursorState {
+            window_handle: cursor_geometry::cursor_window_handle(request),
             visible: true,
             sequence: 0,
             model_point,
@@ -2002,6 +2003,7 @@ mod tests {
 
     fn synthetic_state(x: u64, y: u64) -> sky_cua_platform::model::AgentCursorState {
         sky_cua_platform::model::AgentCursorState {
+            window_handle: None,
             visible: true,
             sequence: 0,
             model_point: Some(synthetic_point(x as f64, y as f64)),

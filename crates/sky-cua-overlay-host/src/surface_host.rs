@@ -166,6 +166,7 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
             }
             OverlayHostMessageKind::SetCursor => {
                 self.state = message.state;
+                self.sync_stacking_target();
                 self.render_reply()
             }
             OverlayHostMessageKind::Hide => self.hide(message.sequence, message.reason),
@@ -174,10 +175,19 @@ impl<P: SurfacePlatform> OverlaySurfaceHost<P> {
                 if let Some(state) = self.state.as_mut() {
                     state.visible = true;
                 }
+                self.sync_stacking_target();
                 self.platform.clear_capture_barrier();
                 self.render_reply()
             }
         }
+    }
+
+    fn sync_stacking_target(&mut self) {
+        let window_handle = self
+            .state
+            .as_ref()
+            .and_then(|state| state.window_handle.as_deref());
+        self.platform.set_stacking_target(window_handle);
     }
 
     /// Hides the cursor. A sequence-bearing hide is a capture barrier: the
