@@ -526,7 +526,7 @@ impl ServiceDaemon {
         }
     }
 
-    async fn enrich_action_request(
+    pub(super) async fn enrich_action_request(
         &self,
         mut request: ActionRequest,
     ) -> Result<ActionRequest, (&'static str, String)> {
@@ -544,10 +544,26 @@ impl ServiceDaemon {
                     .appshot_id
                     .as_deref()
                     .and_then(|id| snapshots.appshot(id))
-                    .map(|appshot| appshot.action_snapshot.snapshot_id.clone())
-                    .and_then(|id| snapshots.get_if_latest(&id).cloned())
+                    .map(|appshot| {
+                        let id = &appshot.action_snapshot.snapshot_id;
+                        snapshots
+                            .get_if_latest(id)
+                            .cloned()
+                            .ok_or_else(|| id.clone())
+                    })
             };
             if let Some(snapshot) = appshot_snapshot {
+                // The fence accepted the window this snapshot names. If a
+                // newer snapshot replaced it since, the action fails rather
+                // than going to whatever window has focus.
+                let snapshot = snapshot.map_err(|snapshot_id| {
+                    (
+                        "SnapshotStale",
+                        format!(
+                            "snapshot {snapshot_id} of the action's AppShot is no longer the latest app state. Re-run get_app_state and retry."
+                        ),
+                    )
+                })?;
                 request.environment = Some(snapshot.environment);
                 request.resolved_focused_app = snapshot.focused_app;
             } else {

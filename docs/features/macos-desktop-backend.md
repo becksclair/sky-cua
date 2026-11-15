@@ -165,8 +165,10 @@ requires the AppShot's window to still resolve by its exact `CGWindowID`,
 and the snapshot the action is built from to name that window; it does not
 require the window to be focused. The backend declares
 `ActionTargeting::RequestWindow`,
-because every action is delivered to the window of its own snapshot or
-fails. An agent can therefore observe and act on a window while another
+because every action is addressed to the window of its own snapshot or
+fails. That is checked when the action is dispatched; see the known
+limitations for keyboard input whose key window changes while it is being
+typed. An agent can therefore observe and act on a window while another
 application stays in front.
 
 An element's action point is the centre of the part of it that is visible in

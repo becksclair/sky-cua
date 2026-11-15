@@ -250,3 +250,28 @@ async fn a_window_targeting_backend_rejects_a_snapshot_that_names_no_window() {
     }
     assert!(fence.dispatched().is_empty());
 }
+
+#[tokio::test]
+async fn an_action_whose_appshot_snapshot_was_replaced_after_the_fence_is_stale() {
+    let fence = Fence::new(
+        "fence-replaced-snapshot",
+        ActionTargeting::RequestWindow,
+        true,
+    );
+    let mut request =
+        authorized_action_request(&fence.daemon, ActionName::TypeText, json!({"text": "hi"})).await;
+    request.snapshot_id = None;
+    // A recovery capture can store a newer snapshot between the fence and
+    // enrichment; the request must not lose its window and go to the focus.
+    let mut newer = snapshot(None, Vec::new());
+    newer.snapshot_id = "newer".to_string();
+    fence.daemon.snapshots.lock().await.store(newer);
+
+    let error = fence
+        .daemon
+        .enrich_action_request(request)
+        .await
+        .expect_err("a replaced AppShot snapshot must not be enriched");
+
+    assert_eq!(error.0, "SnapshotStale");
+}
