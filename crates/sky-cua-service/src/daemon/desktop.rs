@@ -538,29 +538,25 @@ impl ServiceDaemon {
                         .to_string(),
                 ));
             }
-            let appshot_snapshot = {
-                let snapshots = self.snapshots.lock().await;
-                request
-                    .appshot_id
-                    .as_deref()
-                    .and_then(|id| snapshots.appshot(id))
-                    .map(|appshot| {
-                        let id = &appshot.action_snapshot.snapshot_id;
-                        snapshots
-                            .get_if_latest(id)
-                            .cloned()
-                            .ok_or_else(|| id.clone())
-                    })
-            };
-            if let Some(snapshot) = appshot_snapshot {
-                // The fence accepted the window this snapshot names. If a
-                // newer snapshot replaced it since, the action fails rather
-                // than going to whatever window has focus.
-                let snapshot = snapshot.map_err(|snapshot_id| {
+            if let Some(appshot_id) = request.appshot_id.as_deref() {
+                // The fence accepted the window this AppShot's snapshot
+                // names. If a newer snapshot replaced it since, or the AppShot
+                // was evicted, the action fails rather than going to whatever
+                // window has focus.
+                let snapshot = {
+                    let snapshots = self.snapshots.lock().await;
+                    snapshots
+                        .appshot(appshot_id)
+                        .and_then(|appshot| {
+                            snapshots.get_if_latest(&appshot.action_snapshot.snapshot_id)
+                        })
+                        .cloned()
+                };
+                let snapshot = snapshot.ok_or_else(|| {
                     (
                         "SnapshotStale",
                         format!(
-                            "snapshot {snapshot_id} of the action's AppShot is no longer the latest app state. Re-run get_app_state and retry."
+                            "AppShot {appshot_id} or its snapshot is no longer the latest app state. Re-run get_app_state and retry."
                         ),
                     )
                 })?;

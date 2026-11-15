@@ -275,3 +275,25 @@ async fn an_action_whose_appshot_snapshot_was_replaced_after_the_fence_is_stale(
 
     assert_eq!(error.0, "SnapshotStale");
 }
+
+#[tokio::test]
+async fn an_action_whose_appshot_was_evicted_after_the_fence_is_stale() {
+    let fence = Fence::new(
+        "fence-evicted-appshot",
+        ActionTargeting::RequestWindow,
+        true,
+    );
+    let mut request =
+        authorized_action_request(&fence.daemon, ActionName::TypeText, json!({"text": "hi"})).await;
+    request.snapshot_id = None;
+    // Concurrent recovery captures can evict the AppShot the fence accepted.
+    request.appshot_id = Some("evicted-appshot".to_string());
+
+    let error = fence
+        .daemon
+        .enrich_action_request(request)
+        .await
+        .expect_err("an evicted AppShot must not be enriched");
+
+    assert_eq!(error.0, "SnapshotStale");
+}
