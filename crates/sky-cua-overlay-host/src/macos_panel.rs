@@ -35,9 +35,10 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy,
-    NSApplicationDidChangeScreenParametersNotification, NSBackingStoreType, NSColor, NSPanel,
-    NSScreenSaverWindowLevel, NSView, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
-    NSWindowOcclusionState, NSWindowSharingType, NSWindowStyleMask,
+    NSApplicationDidChangeScreenParametersNotification, NSBackingStoreType, NSColor,
+    NSNormalWindowLevel, NSPanel, NSScreenSaverWindowLevel, NSView, NSWindowAnimationBehavior,
+    NSWindowCollectionBehavior, NSWindowLevel, NSWindowOcclusionState, NSWindowOrderingMode,
+    NSWindowSharingType, NSWindowStyleMask,
 };
 use objc2_core_graphics::CGSessionCopyCurrentDictionary;
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol, NSProcessInfo};
@@ -95,6 +96,12 @@ const SYSTEM_CURSOR_REASON: &str = "macOS lets only the frontmost application hi
 const POINTER_TRACKING_REASON: &str =
     "not used on macOS: the system pointer stays visible, so the agent cursor does not follow it";
 
+/// How often a visible overlay verifies that its panels are still directly
+/// above the stacking target. Raising the target within its application puts
+/// it in front of the panels; this bounds how long the cursor stays hidden
+/// behind it.
+const STACKING_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+
 pub type MacosPanelOverlayBackend = OverlaySurfaceHost<MacosPanelPlatform>;
 
 /// Creates one overlay panel per screen and starts the surface host on them.
@@ -119,6 +126,11 @@ pub struct MacosPanelPlatform {
     screens_changed: Rc<Cell<bool>>,
     screens_observer: Retained<ProtocolObject<dyn NSObjectProtocol>>,
     system_cursor: SystemCursorAdapter,
+    /// The window the panels are stacked directly above, or `None` for the
+    /// overlay level above every application window.
+    stacking_target: Option<u32>,
+    /// When the panels' place above `stacking_target` was last verified.
+    stacking_checked: Option<Instant>,
 }
 
 struct OverlayPanel {
@@ -158,9 +170,11 @@ impl MacosPanelPlatform {
             bail!("no window server session is available to this process");
         }
         let app = NSApplication::sharedApplication(mtm);
-        // An accessory application has no Dock icon and no menu bar, and is
-        // never activated by showing its panels.
-        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        // A prohibited application has no Dock icon or menu bar and can never
+        // become active. An accessory application can: one launched by
+        // another process was observed taking activation from the user's
+        // frontmost application (macOS 27.2).
+        app.setActivationPolicy(NSApplicationActivationPolicy::Prohibited);
         app.finishLaunching();
 
         let capture_excluded = capture_exclusion_enabled(
@@ -186,6 +200,8 @@ impl MacosPanelPlatform {
                 AgentCursorSystemCursorBackendKind::MacosNative,
                 SYSTEM_CURSOR_REASON,
             ),
+            stacking_target: None,
+            stacking_checked: None,
         })
     }
 
@@ -194,6 +210,54 @@ impl MacosPanelPlatform {
     /// responsive.
     pub fn dispatch_app_events(&mut self) {
         run_loop::dispatch_app_events(&self.app);
+    }
+
+    /// Orders every panel in at its place: directly above the stacking
+    /// target, or in front at the overlay level.
+    fn order_in(&mut self) {
+        for entry in &self.panels {
+            match self.stacking_target {
+                Some(target) => entry
+                    .panel
+                    .orderWindow_relativeTo(NSWindowOrderingMode::Above, target as isize),
+                None => entry.panel.orderFrontRegardless(),
+            }
+        }
+        self.stacking_checked = Some(Instant::now());
+    }
+
+    fn panel_level(&self) -> NSWindowLevel {
+        if self.stacking_target.is_some() {
+            NSNormalWindowLevel
+        } else {
+            NSScreenSaverWindowLevel
+        }
+    }
+
+    /// Re-orders the panels when something came between them and the
+    /// stacking target, such as the target being raised in its application.
+    /// Checked at most every [`STACKING_CHECK_INTERVAL`].
+    fn keep_stacked(&mut self) {
+        let Some(target) = self.stacking_target else {
+            return;
+        };
+        // Ordered-out panels stay out; they are ordered in at their place by
+        // the next show.
+        if self.presence != PanelPresence::OnScreen {
+            return;
+        }
+        if self
+            .stacking_checked
+            .is_some_and(|checked| checked.elapsed() < STACKING_CHECK_INTERVAL)
+        {
+            return;
+        }
+        self.stacking_checked = Some(Instant::now());
+        // A target that is not on screen (minimized, closed, on another
+        // Space) has no place to stack above; the panels stay where they are.
+        if display::stacked_directly_above(target, &self.window_ids()) == Some(false) {
+            self.order_in();
+        }
     }
 
     fn order_out(&mut self) {
@@ -217,6 +281,10 @@ impl MacosPanelPlatform {
         let Ok(panels) = create_panels(self.mtm, self.capture_excluded) else {
             return false;
         };
+        let level = self.panel_level();
+        for entry in &panels {
+            entry.panel.setLevel(level);
+        }
         self.order_out();
         self.retired = std::mem::replace(&mut self.panels, panels);
         true
@@ -332,14 +400,34 @@ impl SurfacePlatform for MacosPanelPlatform {
         );
         self.presence = presence;
         match start {
-            FrameStart::Draw => true,
-            FrameStart::Skip => false,
-            FrameStart::OrderIn => {
-                for entry in &self.panels {
-                    entry.panel.orderFrontRegardless();
-                }
+            FrameStart::Draw => {
+                self.keep_stacked();
+                true
+            }
+            FrameStart::Skip => {
+                // Covered panels may only be below a raised target.
+                self.keep_stacked();
                 false
             }
+            FrameStart::OrderIn => {
+                self.order_in();
+                false
+            }
+        }
+    }
+
+    fn set_stacking_target(&mut self, window_handle: Option<&str>) {
+        let target = window_handle.and_then(|handle| handle.parse::<u32>().ok());
+        if target == self.stacking_target {
+            return;
+        }
+        self.stacking_target = target;
+        let level = self.panel_level();
+        for entry in &self.panels {
+            entry.panel.setLevel(level);
+        }
+        if self.presence != PanelPresence::OrderedOut {
+            self.order_in();
         }
     }
 

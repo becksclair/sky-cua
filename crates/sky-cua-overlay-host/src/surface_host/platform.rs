@@ -122,6 +122,12 @@ pub trait SurfacePlatform: std::fmt::Debug {
     /// the GPU work entirely.
     fn begin_frame(&mut self, visible: bool) -> bool;
 
+    /// Stacks the surfaces directly above the window that `window_handle`
+    /// names, so the windows in front of it also cover the cursor, or above
+    /// every application window when it names none. A platform that cannot
+    /// stack its surfaces with application windows ignores it.
+    fn set_stacking_target(&mut self, _window_handle: Option<&str>) {}
+
     /// Per-surface hand-off before the renderer draws into it.
     fn prepare_surface(&mut self, index: usize, width: u32, height: u32, render_scale: f32);
 

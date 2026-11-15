@@ -3495,6 +3495,7 @@ mod tests {
             app_guidance: None,
             doctor_report: Some(report),
             agent_cursor: Some(AgentCursorState {
+                window_handle: None,
                 visible: true,
                 sequence: 7,
                 model_point: Some(AgentCursorPoint {

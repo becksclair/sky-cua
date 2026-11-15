@@ -8,7 +8,7 @@
 
 use sky_cua_platform::model::{
     ActionName, ActionRequest, AgentCursorPoint, AgentCursorState, CaptureBackendKind, CaptureInfo,
-    CoordinateSpace, ElementNode, PixelSize, RectF,
+    CaptureScope, CoordinateSpace, ElementNode, PixelSize, RectF,
 };
 
 pub(super) fn state_from_action_request(request: &ActionRequest) -> Option<AgentCursorState> {
@@ -18,6 +18,7 @@ pub(super) fn state_from_action_request(request: &ActionRequest) -> Option<Agent
         return None;
     }
     Some(AgentCursorState {
+        window_handle: cursor_window_handle(request),
         visible: true,
         sequence: 0,
         model_point,
@@ -26,6 +27,22 @@ pub(super) fn state_from_action_request(request: &ActionRequest) -> Option<Agent
         source_action: Some(request.action.clone()),
         updated_at_ms: 0,
     })
+}
+
+/// The window an action's cursor belongs to: the snapshot's focused window,
+/// when the snapshot was captured from that one window. A display capture can
+/// put the action anywhere on the display, so it names no window. An action
+/// that names only its AppShot was enriched from the AppShot's snapshot,
+/// which is always of one window.
+pub(super) fn cursor_window_handle(request: &ActionRequest) -> Option<String> {
+    let window_capture = match request.resolved_capture.as_ref() {
+        Some(capture) => capture.capture_scope == CaptureScope::Window,
+        None => request.snapshot_id.is_none() && request.appshot_id.is_some(),
+    };
+    if !window_capture {
+        return None;
+    }
+    request.resolved_focused_app.as_ref()?.window_handle.clone()
 }
 
 pub(super) fn cursor_moving_action(action: &ActionName) -> bool {
@@ -47,6 +64,7 @@ pub(super) fn pre_dispatch_state_from_action_request(
         return None;
     }
     Some(AgentCursorState {
+        window_handle: cursor_window_handle(request),
         visible: true,
         sequence: 0,
         model_point,
@@ -304,7 +322,7 @@ fn point_to_pixels_through_rect(
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use sky_cua_platform::model::CaptureScope;
+    use sky_cua_platform::model::{CaptureScope, FocusedApp};
 
     use super::*;
 
@@ -333,6 +351,43 @@ mod tests {
             model_image_bytes: None,
             model_image_encode_ms: None,
         }
+    }
+
+    #[test]
+    fn only_a_window_capture_scopes_the_cursor_to_its_window() {
+        let mut request = base_request(ActionName::Click);
+        request.resolved_focused_app = Some(FocusedApp {
+            app_id: "com.apple.TextEdit".to_string(),
+            name: "TextEdit".to_string(),
+            pid: Some(7),
+            desktop_file_id: None,
+            app_user_model_id: None,
+            window_handle: Some("4242".to_string()),
+            toolkit_guess: None,
+            window_title: None,
+            display: None,
+        });
+        request.resolved_capture = Some(CaptureInfo {
+            capture_scope: CaptureScope::Window,
+            ..base_capture()
+        });
+        assert_eq!(cursor_window_handle(&request).as_deref(), Some("4242"));
+
+        // A display capture can place the action in any window.
+        request.resolved_capture = Some(CaptureInfo {
+            capture_scope: CaptureScope::Display,
+            ..base_capture()
+        });
+        assert_eq!(cursor_window_handle(&request), None);
+
+        // A snapshot without a capture says nothing about its scope.
+        request.resolved_capture = None;
+        assert_eq!(cursor_window_handle(&request), None);
+
+        // An action that names only its AppShot acts in the AppShot's window.
+        request.snapshot_id = None;
+        request.appshot_id = Some("appshot-1".to_string());
+        assert_eq!(cursor_window_handle(&request).as_deref(), Some("4242"));
     }
 
     /// A no-op `ActionRequest` with every field at a neutral default.

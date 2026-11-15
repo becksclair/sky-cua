@@ -35,6 +35,7 @@ fn set_cursor_from_args(args: Vec<String>) -> Result<()> {
         version: OVERLAY_HOST_PROTOCOL_VERSION,
         kind: OverlayHostMessageKind::SetCursor,
         state: Some(AgentCursorState {
+            window_handle: None,
             visible: true,
             sequence: 0,
             model_point: Some(AgentCursorPoint {

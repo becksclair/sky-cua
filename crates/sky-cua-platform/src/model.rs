@@ -310,6 +310,12 @@ pub struct AgentCursorState {
     pub native_point: Option<AgentCursorPoint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot_id: Option<String>,
+    /// The window the cursor acts in, as the platform's window handle (the
+    /// snapshot's `FocusedApp::window_handle`). A host that stacks the cursor
+    /// with application windows keeps it directly above this one, so windows
+    /// in front of it also cover the cursor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_handle: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_action: Option<ActionName>,
     pub updated_at_ms: u64,

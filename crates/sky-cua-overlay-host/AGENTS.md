@@ -71,7 +71,8 @@ driver ported from the Android companion.
   - `layer_shell/capture_barrier.rs` — the frame-callback hide-for-capture
     barrier.
 - `src/macos_panel.rs` — the macOS platform (`MacosPanelPlatform`): the
-  accessory application, one click-through `NSPanel` per screen, the
+  application that can never be activated, one click-through `NSPanel` per
+  screen, stacking the panels above the cursor state's window, the
   window-list capture barrier, and panel replacement on a screen change.
   Main thread only; public AppKit/CoreGraphics/CoreFoundation interfaces
   only. Submodules:

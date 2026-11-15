@@ -33,7 +33,11 @@ process that owns compositor-specific drawing.
 
 Public model in `crates/sky-cua-platform/src/model.rs`:
 
-- `AgentCursorState { visible, sequence, model_point, native_point, snapshot_id, source_action, updated_at_ms }`
+- `AgentCursorState { visible, sequence, model_point, native_point, snapshot_id, window_handle, source_action, updated_at_ms }`.
+  `window_handle` names the window the agent acts in: the snapshot's focused
+  window, set only when the snapshot was captured from that one window. A host
+  that can stack its surfaces with application windows keeps the cursor
+  directly above that window; the others ignore it.
 - `AgentCursorPoint { x, y, coordinate_space, mapping_id }`
 - `AgentCursorCapabilities { backend, renderer_backend, visible_overlay, screenshot_synthetic_cursor, click_through, capture_exclusion, pointer_tracking_backend, pointer_tracking_exact, system_cursor_hide_supported, system_cursor_backend, system_cursor_hidden, needs_user_install, reason }`
 - `AgentCursorBackendKind`: production visible rendering currently uses
@@ -395,12 +399,24 @@ rectangle.
 
 **Windows.** One borderless, non-activating `NSPanel` per screen, covering
 the whole screen including the menu bar: transparent, without a shadow,
-non-shareable, `ignoresMouseEvents` (so every click passes through), at
-screen-saver window
-level, set to join every Space and to sit beside full-screen applications,
-and left out of window cycling. The process is an accessory application: no Dock icon,
-no menu bar, never activated. Only public AppKit, CoreGraphics, and
-CoreFoundation interfaces are used.
+non-shareable, `ignoresMouseEvents` (so every click passes through), set to
+join every Space and to sit beside full-screen applications, and left out of
+window cycling. The process uses the prohibited activation policy: no Dock
+icon, no menu bar, and it can never become the active application. (The
+accessory policy it used before can: a process launched by another one was
+observed taking activation from the user's frontmost application.) Only
+public AppKit, CoreGraphics, and CoreFoundation interfaces are used.
+
+**Stacking.** When the cursor state names no window, the panels sit at
+screen-saver level, above every application window. When it names one
+(`window_handle`, a `CGWindowID`), the panels drop to the normal window level
+and are ordered directly above that window, so the user's windows in front
+of it also cover the cursor while the agent works in a window behind them.
+The target stays where it is in the window order. Raising the target in its
+own application puts it in front of the panels; while the overlay is on
+screen the host checks every 100 ms that its panels are still directly above
+the target and orders them back otherwise. A target that is not on screen
+(minimized, closed, on another Space) leaves the panels where they are.
 
 **Coordinates.** The scene is in `desktop_logical`: global points with a
 top-left origin, as `CGDisplayBounds`, Accessibility, and CGEvent report them.
@@ -744,6 +760,15 @@ macOS verification:
   - Display sleep (`pmset displaysleepnow`, display confirmed asleep): a
     new target replied in 0.4 ms, and the pose advanced and settled while
     the display slept, so the panels were still taking frames.
+- Live proof of window stacking, 2026-11-15, same Mac, release build,
+  isolated daemon driven through the MCP client. Another application stayed
+  frontmost throughout and never lost activation; the overlay host never
+  became frontmost.
+  - After a click in a background TextEdit window, the window list read:
+    the frontmost application's window, the overlay panel at the normal
+    level, then the TextEdit window.
+  - Raising the TextEdit window through Accessibility put it in front of the
+    panel; 450 ms later the panel was directly above it again.
 
 ## Pointer playground
 

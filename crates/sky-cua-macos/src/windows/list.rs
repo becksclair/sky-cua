@@ -122,9 +122,15 @@ unsafe fn string(entry: &CFDictionary<CFString, CFType>, key: &CFString) -> Opti
         .map(ToString::to_string)
 }
 
-/// True for a visible, normal-layer window of user-meaningful size.
+/// The process that draws the agent cursor. Its panels are full-screen
+/// normal-layer windows while the cursor is stacked above a target window.
+const OVERLAY_HOST_PROCESS: &str = "sky-cua-overlay-host";
+
+/// True for a visible, normal-layer window of user-meaningful size that is
+/// not one of the agent cursor's own panels.
 pub(super) fn is_application_window(window: &RawWindow) -> bool {
     window.layer == NORMAL_WINDOW_LAYER
+        && window.owner_name != OVERLAY_HOST_PROCESS
         && window.alpha > 0.0
         && window.bounds[2] >= MIN_WINDOW_EDGE
         && window.bounds[3] >= MIN_WINDOW_EDGE

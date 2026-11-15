@@ -158,6 +158,22 @@ click that makes its window key) and Calculator (buttons, which do):
 Not exercised: drags, secondary clicks, menus, windows that are minimized or
 on another Space, Electron, Mac Catalyst, and secure text fields.
 
+### Cursor ordering
+
+A third throwaway probe opened a borderless, click-through, non-shareable
+panel at normal window level in a background process and ordered it above a
+background TextEdit window with `orderWindow:relativeTo:`, while another
+application stayed frontmost. The window list showed the panel directly
+above the TextEdit window and below the frontmost application's window, and
+it stayed there. Raising the TextEdit window through Accessibility put the
+window in front of the panel; ordering the panel again restored it.
+
+The same probe found that a process with the accessory activation policy
+became the frontmost application, as Launch Services reports it, while it
+ran, and that activation then passed to the TextEdit window when it quit.
+With the prohibited activation policy it never became frontmost, and
+ordering relative to the TextEdit window worked the same.
+
 ### Sharing indicator
 
 When the reference implementation drives a window, macOS marks that window
@@ -222,11 +238,10 @@ undocumented event field values across macOS releases.
   would trigger. Skip activation and priming for Chromium engines, which act
   on the click directly. A window with no such point takes the foreground
   path.
-- **Overlay.** A window-scoped cursor needs a target window ID and
-  window-relative coordinates in the overlay protocol, a panel at normal
-  level ordered above the target's window number, and tracking of the
-  target's bounds and ordering. This part is design only; ordering a panel
-  above another process's window was not probed.
+- **Overlay.** A window-scoped cursor needs the target window ID in the
+  overlay protocol, panels at normal level ordered above the target's window
+  number, and tracking of the target's ordering. A follow-up probe confirmed
+  the ordering (below).
 - **Streaming.** A per-window `SCStream` is not needed for observation or
   input. It has two uses: a live view of the agent's window when something
   consumes one, and the system sharing indicator, which a minimal stream
