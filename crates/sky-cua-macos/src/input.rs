@@ -29,8 +29,10 @@
 //! key window; see [`chord_reaches_inactive_application`] for the chords that
 //! do not survive that path. Pointer events are never posted this way: a
 //! process ignores a mouse event that is not addressed to one of its windows.
+//! `window_events` builds left clicks that are.
 
 mod plan;
+pub mod window_events;
 
 use std::thread::sleep;
 use std::time::Duration;

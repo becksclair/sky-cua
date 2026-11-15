@@ -166,6 +166,19 @@ impl AxElement {
         Ok(array.iter().map(decode_slot).collect())
     }
 
+    /// The deepest element of this application at a desktop point.
+    pub(crate) fn element_at_position(&self, x: f64, y: f64) -> Result<AxElement, AxErr> {
+        let mut element: *const AXUIElement = ptr::null();
+        // SAFETY: valid out-pointer that receives a +1 element.
+        check(unsafe {
+            self.0
+                .copy_element_at_position(x as f32, y as f32, NonNull::from(&mut element))
+        })?;
+        let element = NonNull::new(element.cast_mut()).ok_or(AxErr::NO_VALUE)?;
+        // SAFETY: a non-null +1 AXUIElement.
+        Ok(Self(unsafe { CFRetained::from_raw(element) }))
+    }
+
     pub(crate) fn action_names(&self) -> Result<Vec<String>, AxErr> {
         let mut names: *const CFArray = ptr::null();
         // SAFETY: valid out-pointer that receives a +1 array of CFStrings.

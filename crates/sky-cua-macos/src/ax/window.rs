@@ -1,7 +1,8 @@
-//! AX window lookup by CoreGraphics identity, window raising, and the key
-//! window check. Runs on a lane thread only.
+//! AX window lookup by CoreGraphics identity, window raising, the key window
+//! check, and the priming point. Runs on a lane thread only.
 
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
+use sky_cua_platform::model::RectF;
 
 use super::element::{
     AxElement, AxErr, as_bool, as_element, as_elements, as_point, as_size, as_string, cf_string,
@@ -157,4 +158,92 @@ pub(crate) fn receives_keys(
         }
     };
     Ok(as_element(focused).is_some_and(|focused| focused == element))
+}
+
+/// Actions an element may offer and still do nothing when left-clicked.
+const INERT_ACTIONS: &[&str] = &["AXRaise", "AXShowMenu", "AXScrollToVisible", "AXCancel"];
+
+/// A point of `window` where a left click does nothing but make the window
+/// key: the window's `AXActivationPoint`, when it lies inside the window and
+/// the element under it belongs to that window and offers no action a click
+/// would trigger. `None` when the window offers no such point; applications
+/// that are not built on AppKit report an activation point outside their
+/// window.
+pub(crate) fn priming_point(
+    context: &LaneContext,
+    guard: &JobGuard<'_>,
+    names: &Names,
+    window: &MacWindow,
+    app_windows: &[MacWindow],
+) -> Result<Option<(f64, f64)>, BackendError> {
+    let element = find_window(context, guard, names, window, app_windows)?;
+    guard.ensure_wanted()?;
+    let point = match element.copy_attribute(&cf_string("AXActivationPoint")) {
+        Ok(value) => as_point(&value),
+        Err(error) if error.is_unsupported() => None,
+        Err(error) => return Err(ax_error(error, "failed to read AXActivationPoint")),
+    };
+    let Some((x, y)) = point.filter(|&point| contains(&window.bounds, point)) else {
+        return Ok(None);
+    };
+    guard.ensure_wanted()?;
+    let under = match context.app.element_at_position(x, y) {
+        Ok(under) => under,
+        Err(error) if error.is_unsupported() => return Ok(None),
+        Err(error) => return Err(ax_error(error, "failed to hit-test the activation point")),
+    };
+    // The hit-test covers every window of the application, so a sibling
+    // window in front would be checked instead of this one.
+    let in_window = under == element
+        || under
+            .copy_attribute(&cf_string("AXWindow"))
+            .ok()
+            .and_then(as_element)
+            .is_some_and(|owner| owner == element);
+    if !in_window {
+        return Ok(None);
+    }
+    let actions = under
+        .action_names()
+        .map_err(|error| ax_error(error, "failed to read the actions at the activation point"))?;
+    Ok(only_inert(&actions).then_some((x, y)))
+}
+
+fn contains(bounds: &RectF, (x, y): (f64, f64)) -> bool {
+    x >= bounds.x && x < bounds.right() && y >= bounds.y && y < bounds.bottom()
+}
+
+/// Whether a left click on an element offering `actions` does nothing. An
+/// element with no actions, such as the window or a hosting view, is inert.
+fn only_inert(actions: &[String]) -> bool {
+    actions
+        .iter()
+        .all(|action| INERT_ACTIONS.contains(&action.as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coords::desktop_rect;
+
+    #[test]
+    fn a_priming_point_must_lie_inside_the_window() {
+        let bounds = desktop_rect(100.0, 50.0, 400.0, 300.0);
+
+        assert!(contains(&bounds, (130.0, 66.0)));
+        assert!(contains(&bounds, (100.0, 50.0)));
+        assert!(!contains(&bounds, (500.0, 66.0)));
+        assert!(!contains(&bounds, (130.0, 350.0)));
+        assert!(!contains(&bounds, (99.0, 66.0)));
+    }
+
+    #[test]
+    fn only_an_element_whose_actions_are_all_inert_can_be_primed() {
+        let actions = |names: &[&str]| names.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+        assert!(only_inert(&[]));
+        assert!(only_inert(&actions(&["AXRaise", "AXShowMenu"])));
+        assert!(!only_inert(&actions(&["AXPress"])));
+        assert!(!only_inert(&actions(&["AXRaise", "AXPress"])));
+    }
 }

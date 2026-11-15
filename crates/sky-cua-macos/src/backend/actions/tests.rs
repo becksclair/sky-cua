@@ -717,23 +717,35 @@ fn capture_with_rect(x: f64, y: f64, width: f64, height: f64, scale: f64) -> Cap
 }
 
 #[test]
-fn only_keyboard_input_without_a_menu_shortcut_reaches_an_inactive_application() {
+fn only_keys_without_a_menu_shortcut_and_left_clicks_have_a_background_delivery() {
     let keys =
         |keys: &[&str]| PhysicalInput::PressKeys(keys.iter().map(ToString::to_string).collect());
-    let reaches = |input: PhysicalInput| input.reaches_inactive_application().unwrap();
+    let background = |input: PhysicalInput| input.background().unwrap();
+    let click = |button, count| PhysicalInput::Click {
+        at: (1.0, 2.0),
+        button,
+        count,
+    };
 
-    assert!(reaches(PhysicalInput::TypeText("text".to_string())));
-    assert!(reaches(keys(&["Shift", "Tab"])));
+    assert_eq!(
+        background(PhysicalInput::TypeText("text".to_string())),
+        Background::Keys
+    );
+    assert_eq!(background(keys(&["Shift", "Tab"])), Background::Keys);
+    assert_eq!(
+        background(click(MouseButton::Left, 1)),
+        Background::LeftClick
+    );
+    assert_eq!(
+        background(click(MouseButton::Left, 2)),
+        Background::LeftClick
+    );
 
-    // Each of these needs its window in front: delivery must never give them
-    // the process route, or pointer input would land on whatever is there.
+    // Each of these needs its window in front: delivery must bring it
+    // forward, or the input would land on whatever is in front instead.
     for input in [
         PhysicalInput::Move { at: (1.0, 2.0) },
-        PhysicalInput::Click {
-            at: (1.0, 2.0),
-            button: MouseButton::Left,
-            count: 1,
-        },
+        click(MouseButton::Right, 1),
         PhysicalInput::Scroll {
             at: None,
             delta_x: 0,
@@ -750,9 +762,9 @@ fn only_keyboard_input_without_a_menu_shortcut_reaches_an_inactive_application()
         keys(&["Cmd", "A"]),
         keys(&["Ctrl", "Tab"]),
     ] {
-        assert!(!reaches(input.clone()), "{input:?}");
+        assert_eq!(background(input.clone()), Background::None, "{input:?}");
     }
 
-    let invalid = keys(&["Shift", "Nope"]).reaches_inactive_application();
+    let invalid = keys(&["Shift", "Nope"]).background();
     assert_eq!(invalid.unwrap_err().code, "InvalidRequest");
 }

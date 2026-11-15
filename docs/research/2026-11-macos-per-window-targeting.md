@@ -130,9 +130,33 @@ open and the application in the background:
   without a synthetic activation event first. Whether a key window (after a
   priming click) changes that was not tested.
 
-Not exercised: scrolling, drags, secondary clicks, menus, windows that are
-minimized or on another Space, Electron, Mac Catalyst, and secure text
-fields.
+A third run looked for a way to make a background window key without the
+click costing anything, on TextEdit (a text view, which does not act on the
+click that makes its window key) and Calculator (buttons, which do):
+
+- The key state does not persist. After a deactivation event and a new
+  activation, the first click on the text view was swallowed again.
+- Calculator's buttons acted on clicks with no activation at all, and acted
+  on the first click after one. Priming by clicking the target itself would
+  therefore press a button twice.
+- A window's `AXActivationPoint` is a point in its title bar: 30 points in
+  and 16 down for TextEdit, 10 and 16 for Calculator. A hit-test there
+  returned the window itself or a hosting view with no actions. A click
+  there after activation made the window key and did nothing else: no
+  minimize, no move, no change in window order, no change in Calculator's
+  display. The centre of the title bar is not safe in general; in Calculator
+  it is the display, which has a press action.
+- Windows of Chromium, Electron, and the Finder desktop reported an
+  activation point outside their own frame.
+- With activation, a priming click at the activation point, and then the
+  real click: a single click placed the TextEdit caret on the exact
+  character, a double click selected the word, and one click on a Calculator
+  key entered one digit.
+- Scroll-wheel events carrying the same window fields and window-local
+  location had no effect on TextEdit, with or without activation.
+
+Not exercised: drags, secondary clicks, menus, windows that are minimized or
+on another Space, Electron, Mac Catalyst, and secure text fields.
 
 ### Sharing indicator
 
@@ -193,8 +217,11 @@ undocumented event field values across macOS releases.
 - **Guards.** Compare the frontmost process before and after each delivery
   and report a real activation as a diagnostic rather than hiding it. Detect
   user input in the target application between observation and action.
-- **Priming click.** Needs a rule for where to click and when to skip it
-  before the lane can be the default for pointer actions.
+- **Priming click.** Click the window's `AXActivationPoint`, and only when
+  it lies inside the window and a hit-test there finds no action a click
+  would trigger. Skip activation and priming for Chromium engines, which act
+  on the click directly. A window with no such point takes the foreground
+  path.
 - **Overlay.** A window-scoped cursor needs a target window ID and
   window-relative coordinates in the overlay protocol, a panel at normal
   level ordered above the target's window number, and tracking of the

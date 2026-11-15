@@ -64,8 +64,13 @@ pass and are the first work to pick up once it is proven.
         without a Command or Control chord is posted to an unfocused
         window's process when Accessibility confirms it is the application's
         key window (2026-11-14)
-  - [ ] Pointer input to an unfocused window: window-addressed mouse events,
-        synthetic activation, and a rule for the priming click
+  - [x] Left clicks on an unfocused window: window-addressed mouse events,
+        with synthetic activation and a priming click at the window's
+        activation point for applications that need them (2026-11-14)
+  - [ ] Secondary clicks, drags, scrolling, and pointer moves on an unfocused
+        window; scroll events addressed to a window had no effect when probed
+  - [ ] Live proof of process-targeted clicks on Chromium and Electron
+        windows through the daemon, including their native toolbars
   - [ ] Menu shortcuts (Command and Control chords) to an unfocused window
   - [ ] Agent cursor overlay scoped to the target window and ordered with it
 - [ ] macOS session presence (idle display and system sleep assertions) —

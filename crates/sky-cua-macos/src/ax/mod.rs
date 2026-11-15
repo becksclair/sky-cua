@@ -74,7 +74,7 @@ pub struct AxTree {
 const ACTION_WAIT: Duration = Duration::from_secs(6);
 /// Window lookup plus three writes.
 const RAISE_WAIT: Duration = Duration::from_secs(6);
-/// Window lookup plus one read.
+/// Window lookup plus a read or two.
 const KEY_WINDOW_WAIT: Duration = Duration::from_secs(6);
 /// Pause after activating a dormant Chromium tree before re-reading it;
 /// Chromium builds the views tree within ~150 ms (the Linux backend measured
@@ -269,6 +269,23 @@ impl AxRuntime {
             .await
     }
 
+    /// A point of `window` where a left click only makes the window key; see
+    /// `window::priming_point`.
+    pub async fn window_priming_point(
+        &self,
+        window: &MacWindow,
+        app_windows: &[MacWindow],
+    ) -> Result<Option<(f64, f64)>, BackendError> {
+        let window = window.clone();
+        let app_windows = app_windows.to_vec();
+        self.inner
+            .lanes
+            .run(window.pid, KEY_WINDOW_WAIT, move |context, guard| {
+                window::priming_point(context, guard, &Names::new(), &window, &app_windows)
+            })
+            .await
+    }
+
     /// Drops retained element handles and worker lanes after a request was
     /// abandoned for exceeding its deadline.
     pub async fn reset(&self) {
@@ -290,6 +307,16 @@ fn must_surface(error: &BackendError) -> bool {
     ]
     .iter()
     .any(|code| error.code == code.as_str())
+}
+
+/// Whether `window` belongs to an application that ships a Chromium engine
+/// (Chromium browsers and Electron applications).
+#[must_use]
+pub fn hosts_chromium_engine(window: &MacWindow) -> bool {
+    window
+        .executable
+        .as_deref()
+        .is_some_and(|executable| chromium::engine(executable).is_some())
 }
 
 /// True when `backend_ref` was issued by this runtime.

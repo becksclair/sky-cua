@@ -13,8 +13,9 @@ use sky_cua_platform::model::{
     ActionName, ActionOutcome, ActionRequest, CoordinateSpace, ElementNode, RectF,
 };
 
+use super::delivery::DeliveryRoute;
 use crate::coords::{action_point_to_desktop, desktop_rect};
-use crate::input::{self, Route};
+use crate::input::{self, Route, window_events};
 use crate::types::MouseButton;
 
 /// Wheel units per notch in the shared action contract (`delta_y`, and one
@@ -73,21 +74,41 @@ impl PhysicalInput {
         }
     }
 
-    /// Whether the input takes effect when posted to its target process
-    /// while another application stays active. Pointer input does not, and
-    /// neither does the `set_value` fallback, which sends a menu shortcut.
-    /// An unparseable chord is an error here, before anything is focused.
-    pub(super) fn reaches_inactive_application(&self) -> Result<bool, BackendError> {
-        match self {
-            Self::TypeText(_) => Ok(true),
-            Self::PressKeys(keys) => input::chord_reaches_inactive_application(keys),
-            Self::Move { .. }
+    /// How the input can reach its window while another application stays
+    /// active. Only keyboard input without a menu shortcut and left clicks
+    /// can; the `set_value` fallback sends a menu shortcut, and the other
+    /// pointer inputs have no proven background delivery. An unparseable
+    /// chord is an error here, before anything is focused.
+    pub(super) fn background(&self) -> Result<Background, BackendError> {
+        Ok(match self {
+            Self::TypeText(_) => Background::Keys,
+            Self::PressKeys(keys) if input::chord_reaches_inactive_application(keys)? => {
+                Background::Keys
+            }
+            Self::Click {
+                button: MouseButton::Left,
+                ..
+            } => Background::LeftClick,
+            Self::PressKeys(_)
+            | Self::Move { .. }
             | Self::Click { .. }
             | Self::Scroll { .. }
             | Self::Drag { .. }
-            | Self::SetValue { .. } => Ok(false),
-        }
+            | Self::SetValue { .. } => Background::None,
+        })
     }
+}
+
+/// The kind of delivery that leaves the user's frontmost application alone,
+/// if the input has one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Background {
+    /// Key events posted to the window's process.
+    Keys,
+    /// A click addressed to the window.
+    LeftClick,
+    /// The window has to be brought to the front.
+    None,
 }
 
 /// What physical input can do for one request.
@@ -177,14 +198,33 @@ fn accepts_typed_value(element: &ElementNode) -> bool {
         || (element.text.is_some() && !element.state_flags.iter().any(|flag| flag == "readonly"))
 }
 
-/// Posts `input` through CGEvent. Keyboard input goes on `route`; pointer
-/// input and the `set_value` fallback always go through the HID tap. Blocks;
-/// run on a blocking thread.
-pub(super) fn perform(input: PhysicalInput, route: Route) -> Result<ActionOutcome, BackendError> {
+/// Posts `input` through CGEvent on the route `delivery` chose for it. A
+/// route that does not apply to the input is the HID tap. Blocks; run on a
+/// blocking thread.
+pub(super) fn perform(
+    input: PhysicalInput,
+    route: DeliveryRoute,
+) -> Result<ActionOutcome, BackendError> {
+    let keys = match route {
+        DeliveryRoute::ProcessKeys(pid) => Route::Process(pid),
+        DeliveryRoute::Hid | DeliveryRoute::WindowClick { .. } => Route::HidTap,
+    };
     match input {
         PhysicalInput::Move { at: (x, y) } => {
             input::move_pointer(x, y)?;
             Ok(success("CGEvent pointer move completed"))
+        }
+        PhysicalInput::Click {
+            at,
+            button: MouseButton::Left,
+            count,
+        } if let DeliveryRoute::WindowClick {
+            address,
+            activation,
+        } = route =>
+        {
+            window_events::click(&address, activation, at, count)?;
+            Ok(success("CGEvent click completed"))
         }
         PhysicalInput::Click {
             at: (x, y),
@@ -210,11 +250,11 @@ pub(super) fn perform(input: PhysicalInput, route: Route) -> Result<ActionOutcom
             Ok(success("CGEvent drag completed"))
         }
         PhysicalInput::TypeText(text) => {
-            input::type_text(route, &text)?;
+            input::type_text(keys, &text)?;
             Ok(success("CGEvent text completed"))
         }
-        PhysicalInput::PressKeys(keys) => {
-            input::press_keys(route, &keys)?;
+        PhysicalInput::PressKeys(chord) => {
+            input::press_keys(keys, &chord)?;
             Ok(success("CGEvent key sequence completed"))
         }
         PhysicalInput::SetValue { at, value } => {
