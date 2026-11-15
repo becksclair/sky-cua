@@ -3,7 +3,8 @@
 //! Parsing is pure: `plan_action` turns an `ActionRequest` into a
 //! `PhysicalInput` with every point already in desktop points, using the same
 //! argument names and defaults as the other desktop backends. `perform` posts
-//! the events and is synchronous, so callers run it on a blocking thread.
+//! the events on the route `delivery` chose and is synchronous, so callers
+//! run it on a blocking thread.
 
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use sky_cua_platform::model::{
 };
 
 use crate::coords::{action_point_to_desktop, desktop_rect};
-use crate::input;
+use crate::input::{self, Route};
 use crate::types::MouseButton;
 
 /// Wheel units per notch in the shared action contract (`delta_y`, and one
@@ -69,6 +70,22 @@ impl PhysicalInput {
             Self::Move { .. } | Self::Click { .. } | Self::Drag { .. } => true,
             Self::Scroll { at, .. } | Self::SetValue { at, .. } => at.is_some(),
             Self::TypeText(_) | Self::PressKeys(_) => false,
+        }
+    }
+
+    /// Whether the input takes effect when posted to its target process
+    /// while another application stays active. Pointer input does not, and
+    /// neither does the `set_value` fallback, which sends a menu shortcut.
+    /// An unparseable chord is an error here, before anything is focused.
+    pub(super) fn reaches_inactive_application(&self) -> Result<bool, BackendError> {
+        match self {
+            Self::TypeText(_) => Ok(true),
+            Self::PressKeys(keys) => input::chord_reaches_inactive_application(keys),
+            Self::Move { .. }
+            | Self::Click { .. }
+            | Self::Scroll { .. }
+            | Self::Drag { .. }
+            | Self::SetValue { .. } => Ok(false),
         }
     }
 }
@@ -160,8 +177,10 @@ fn accepts_typed_value(element: &ElementNode) -> bool {
         || (element.text.is_some() && !element.state_flags.iter().any(|flag| flag == "readonly"))
 }
 
-/// Posts `input` through CGEvent. Blocks; run on a blocking thread.
-pub(super) fn perform(input: PhysicalInput) -> Result<ActionOutcome, BackendError> {
+/// Posts `input` through CGEvent. Keyboard input goes on `route`; pointer
+/// input and the `set_value` fallback always go through the HID tap. Blocks;
+/// run on a blocking thread.
+pub(super) fn perform(input: PhysicalInput, route: Route) -> Result<ActionOutcome, BackendError> {
     match input {
         PhysicalInput::Move { at: (x, y) } => {
             input::move_pointer(x, y)?;
@@ -191,11 +210,11 @@ pub(super) fn perform(input: PhysicalInput) -> Result<ActionOutcome, BackendErro
             Ok(success("CGEvent drag completed"))
         }
         PhysicalInput::TypeText(text) => {
-            input::type_text(&text)?;
+            input::type_text(route, &text)?;
             Ok(success("CGEvent text completed"))
         }
         PhysicalInput::PressKeys(keys) => {
-            input::press_keys(&keys)?;
+            input::press_keys(route, &keys)?;
             Ok(success("CGEvent key sequence completed"))
         }
         PhysicalInput::SetValue { at, value } => {
@@ -203,12 +222,12 @@ pub(super) fn perform(input: PhysicalInput) -> Result<ActionOutcome, BackendErro
                 input::click(x, y, MouseButton::Left, 1)?;
                 std::thread::sleep(FOCUS_CLICK_SETTLE);
             }
-            input::press_keys(&["Cmd".to_string(), "A".to_string()])?;
+            input::press_keys(Route::HidTap, &["Cmd".to_string(), "A".to_string()])?;
             if value.is_empty() {
                 // Typing nothing would leave the old content selected.
-                input::press_keys(&["Backspace".to_string()])?;
+                input::press_keys(Route::HidTap, &["Backspace".to_string()])?;
             } else {
-                input::type_text(&value)?;
+                input::type_text(Route::HidTap, &value)?;
             }
             let mut outcome =
                 success("macOS used CGEvent focus/select-all/type fallback for set_value");

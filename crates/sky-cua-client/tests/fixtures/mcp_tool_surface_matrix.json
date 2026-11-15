@@ -4,9 +4,9 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": false,
-      "description_bytes": 6009,
+      "description_bytes": 6068,
       "largest_schema_bytes": 3846,
-      "serialized_bytes": 74532,
+      "serialized_bytes": 74591,
       "surface": "grouped",
       "tool_count": 43,
       "tools_list": {
@@ -788,7 +788,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. With no selector it captures the main display. To drive or verify a specific application, target it instead of relying on the default: pass one window selector (window_id/pid/app_id/wm_class/title) to activate and crop to that window, or one display selector (display_id/display_name/display_index) for a specific monitor. An application on a secondary monitor will not appear in the default main-display capture.",
+            "description": "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. With no selector it captures the main display. To drive or verify a specific application, target it instead of relying on the default: pass one window selector (window_id/pid/app_id/wm_class/title) to capture only that window, which is brought to the front first where the platform needs that, or one display selector (display_id/display_name/display_index) for a specific monitor. An application on a secondary monitor will not appear in the default main-display capture.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -5858,9 +5858,9 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": false,
-      "description_bytes": 6112,
+      "description_bytes": 6171,
       "largest_schema_bytes": 3846,
-      "serialized_bytes": 75403,
+      "serialized_bytes": 75462,
       "surface": "grouped",
       "tool_count": 44,
       "tools_list": {
@@ -6642,7 +6642,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. With no selector it captures the main display. To drive or verify a specific application, target it instead of relying on the default: pass one window selector (window_id/pid/app_id/wm_class/title) to activate and crop to that window, or one display selector (display_id/display_name/display_index) for a specific monitor. An application on a secondary monitor will not appear in the default main-display capture.",
+            "description": "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. With no selector it captures the main display. To drive or verify a specific application, target it instead of relying on the default: pass one window selector (window_id/pid/app_id/wm_class/title) to capture only that window, which is brought to the front first where the platform needs that, or one display selector (display_id/display_name/display_index) for a specific monitor. An application on a secondary monitor will not appear in the default main-display capture.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -11766,9 +11766,9 @@
     {
       "browser_eval_enabled": false,
       "can_receive_images": true,
-      "description_bytes": 6009,
+      "description_bytes": 6068,
       "largest_schema_bytes": 3846,
-      "serialized_bytes": 74743,
+      "serialized_bytes": 74802,
       "surface": "grouped",
       "tool_count": 43,
       "tools_list": {
@@ -12550,7 +12550,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. With no selector it captures the main display. To drive or verify a specific application, target it instead of relying on the default: pass one window selector (window_id/pid/app_id/wm_class/title) to activate and crop to that window, or one display selector (display_id/display_name/display_index) for a specific monitor. An application on a secondary monitor will not appear in the default main-display capture.",
+            "description": "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. With no selector it captures the main display. To drive or verify a specific application, target it instead of relying on the default: pass one window selector (window_id/pid/app_id/wm_class/title) to capture only that window, which is brought to the front first where the platform needs that, or one display selector (display_id/display_name/display_index) for a specific monitor. An application on a secondary monitor will not appear in the default main-display capture.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
@@ -17635,9 +17635,9 @@
     {
       "browser_eval_enabled": true,
       "can_receive_images": true,
-      "description_bytes": 6112,
+      "description_bytes": 6171,
       "largest_schema_bytes": 3846,
-      "serialized_bytes": 75614,
+      "serialized_bytes": 75673,
       "surface": "grouped",
       "tool_count": 44,
       "tools_list": {
@@ -18419,7 +18419,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. With no selector it captures the main display. To drive or verify a specific application, target it instead of relying on the default: pass one window selector (window_id/pid/app_id/wm_class/title) to activate and crop to that window, or one display selector (display_id/display_name/display_index) for a specific monitor. An application on a secondary monitor will not appear in the default main-display capture.",
+            "description": "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. With no selector it captures the main display. To drive or verify a specific application, target it instead of relying on the default: pass one window selector (window_id/pid/app_id/wm_class/title) to capture only that window, which is brought to the front first where the platform needs that, or one display selector (display_id/display_name/display_index) for a specific monitor. An application on a secondary monitor will not appear in the default main-display capture.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {

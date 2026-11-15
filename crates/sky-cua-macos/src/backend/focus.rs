@@ -1,4 +1,5 @@
-//! Bringing a window forward before physical input or a targeted capture.
+//! Bringing a window forward: for `activate_window`, and before physical
+//! input that `delivery` could not post to the window's process.
 //!
 //! Activation is application-level (`windows::activate_application`), and
 //! raising the specific window is an AX call (`AxRuntime::raise_window`).
@@ -99,46 +100,16 @@ pub(super) async fn focus_window(
     })
 }
 
-/// Brings the window named by the request's snapshot forward before physical
-/// input. A request that names no window posts to the current focus; an
-/// already-focused window is left alone. A vanished window, or one that
-/// could not be brought to the front, fails the action so the input never
-/// lands on whatever window is in front instead. When the input
-/// `uses_snapshot_point`, a window that moved or was resized since the
-/// snapshot fails it as well, so the input never lands on whatever is at the
-/// snapshot's coordinates now. Returns diagnostics for the focus outcome.
-pub(super) async fn focus_request_window(
-    ax: &AxRuntime,
-    request: &ActionRequest,
-    uses_snapshot_point: bool,
-) -> Result<Vec<DiagnosticEntry>, BackendError> {
-    let Some(window_id) = request_window_id(request) else {
-        return Ok(Vec::new());
-    };
-    let windows_front_to_back = windows::enumerate_windows();
-    match physical_input_focus_need(
-        window_id,
-        &windows_front_to_back,
-        captured_window_frame(request).filter(|_| uses_snapshot_point),
-    )? {
-        FocusNeed::AlreadyFocused => Ok(Vec::new()),
-        FocusNeed::Activate(window) => {
-            let attempt = focus_window(ax, window, &windows_front_to_back).await;
-            physical_input_focus_result(window_id, attempt)
-        }
-    }
-}
-
-/// What the request's window needs before physical input may be posted.
+/// What the request's window needs before input may go through the HID tap.
 #[derive(Debug)]
-enum FocusNeed<'a> {
+pub(super) enum FocusNeed<'a> {
     AlreadyFocused,
     Activate(&'a MacWindow),
 }
 
 /// The frame the request's snapshot captured its window at, when the capture
 /// was of that window. A display capture says nothing about one window.
-fn captured_window_frame(request: &ActionRequest) -> Option<&RectF> {
+pub(super) fn captured_window_frame(request: &ActionRequest) -> Option<&RectF> {
     let capture = request.resolved_capture.as_ref()?;
     window_capture_frame(&capture.capture_scope, capture.logical_rect.as_ref())
 }
@@ -167,7 +138,7 @@ fn same_frame(a: &RectF, b: &RectF) -> bool {
 /// must be brought forward. A window missing from the list, or at another
 /// frame than `captured_frame`, is a stale snapshot: every coordinate in the
 /// request was taken from the old frame.
-fn physical_input_focus_need<'a>(
+pub(super) fn physical_input_focus_need<'a>(
     window_id: u32,
     windows_front_to_back: &'a [MacWindow],
     captured_frame: Option<&RectF>,
@@ -210,7 +181,7 @@ fn physical_input_focus_need<'a>(
 
 /// Gates physical input on the focus attempt: input is posted only when the
 /// window server reports the requested window focused.
-fn physical_input_focus_result(
+pub(super) fn physical_input_focus_result(
     window_id: u32,
     attempt: Result<FocusReport, BackendError>,
 ) -> Result<Vec<DiagnosticEntry>, BackendError> {
@@ -245,7 +216,7 @@ pub(super) fn app_windows(windows_front_to_back: &[MacWindow], pid: i32) -> Vec<
 
 /// The `CGWindowID` the request's snapshot targeted, from its focused app's
 /// `window_handle`.
-fn request_window_id(request: &ActionRequest) -> Option<u32> {
+pub(super) fn request_window_id(request: &ActionRequest) -> Option<u32> {
     request
         .resolved_focused_app
         .as_ref()

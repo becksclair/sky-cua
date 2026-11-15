@@ -592,7 +592,7 @@ fn build_grouped_tool_definitions(
         ),
         grouped_tool_with_constraints(
             "capture_desktop",
-            "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. With no selector it captures the main display. To drive or verify a specific application, target it instead of relying on the default: pass one window selector (window_id/pid/app_id/wm_class/title) to activate and crop to that window, or one display selector (display_id/display_name/display_index) for a specific monitor. An application on a secondary monitor will not appear in the default main-display capture.",
+            "Capture a fresh desktop frame and return a snapshot_id for pixel actions. Captures exactly one screen, never the whole multi-monitor desktop. With no selector it captures the main display. To drive or verify a specific application, target it instead of relying on the default: pass one window selector (window_id/pid/app_id/wm_class/title) to capture only that window, which is brought to the front first where the platform needs that, or one display selector (display_id/display_name/display_index) for a specific monitor. An application on a secondary monitor will not appear in the default main-display capture.",
             LOCAL_NAVIGATION_ACTION,
             screenshot_properties(can_receive_images),
             json!([]),

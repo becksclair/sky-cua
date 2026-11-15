@@ -1,4 +1,5 @@
 use sky_cua_overlay_host::OverlayArrivalOutcome;
+use sky_cua_platform::backend::ActionTargeting;
 use sky_cua_platform::model::{
     AppShotCapture, AppShotRejectionReason, AppShotRequired, AppShotTrigger,
 };
@@ -525,7 +526,7 @@ impl ServiceDaemon {
         }
     }
 
-    async fn enrich_action_request(
+    pub(super) async fn enrich_action_request(
         &self,
         mut request: ActionRequest,
     ) -> Result<ActionRequest, (&'static str, String)> {
@@ -537,16 +538,28 @@ impl ServiceDaemon {
                         .to_string(),
                 ));
             }
-            let appshot_snapshot = {
-                let snapshots = self.snapshots.lock().await;
-                request
-                    .appshot_id
-                    .as_deref()
-                    .and_then(|id| snapshots.appshot(id))
-                    .map(|appshot| appshot.action_snapshot.snapshot_id.clone())
-                    .and_then(|id| snapshots.get_if_latest(&id).cloned())
-            };
-            if let Some(snapshot) = appshot_snapshot {
+            if let Some(appshot_id) = request.appshot_id.as_deref() {
+                // The fence accepted the window this AppShot's snapshot
+                // names. If a newer snapshot replaced it since, or the AppShot
+                // was evicted, the action fails rather than going to whatever
+                // window has focus.
+                let snapshot = {
+                    let snapshots = self.snapshots.lock().await;
+                    snapshots
+                        .appshot(appshot_id)
+                        .and_then(|appshot| {
+                            snapshots.get_if_latest(&appshot.action_snapshot.snapshot_id)
+                        })
+                        .cloned()
+                };
+                let snapshot = snapshot.ok_or_else(|| {
+                    (
+                        "SnapshotStale",
+                        format!(
+                            "AppShot {appshot_id} or its snapshot is no longer the latest app state. Re-run get_app_state and retry."
+                        ),
+                    )
+                })?;
                 request.environment = Some(snapshot.environment);
                 request.resolved_focused_app = snapshot.focused_app;
             } else {
@@ -595,13 +608,23 @@ impl ServiceDaemon {
 
     async fn validate_action_appshot(&self, request: &ActionRequest) -> Option<ServiceResponse> {
         let appshot_id = request.appshot_id.as_deref();
-        let (reason, target, focus_window_ids) = {
+        let (reason, target, focus_window_ids, snapshot_names_window) = {
             let snapshots = self.snapshots.lock().await;
             match appshot_id.and_then(|id| snapshots.appshot(id)) {
-                None if appshot_id.is_none() => (AppShotRejectionReason::Missing, None, Vec::new()),
-                None => (AppShotRejectionReason::Stale, None, Vec::new()),
+                None if appshot_id.is_none() => {
+                    (AppShotRejectionReason::Missing, None, Vec::new(), false)
+                }
+                None => (AppShotRejectionReason::Stale, None, Vec::new(), false),
                 Some(appshot) => {
                     let focus_window_ids = desktop_capture_focus_window_ids(&appshot.capture);
+                    // The action is enriched from this snapshot, so the
+                    // window it names is the one a backend that targets the
+                    // request's own window will act on.
+                    let snapshot_names_window = snapshots
+                        .get(&appshot.action_snapshot.snapshot_id)
+                        .and_then(|snapshot| snapshot.focused_app.as_ref())
+                        .and_then(|app| app.window_handle.as_ref())
+                        .is_some_and(|handle| focus_window_ids.contains(handle));
                     let target = match &appshot.capture {
                         AppShotCapture::Desktop { window_id, .. } => Some(WindowTarget {
                             window_id: Some(window_id.clone()),
@@ -619,26 +642,27 @@ impl ServiceDaemon {
                             !action_requires_snapshot_context(request) && appshot_snapshot_is_latest
                         }
                     };
-                    if !snapshot_ok {
-                        (AppShotRejectionReason::Stale, target, focus_window_ids)
+                    let reason = if snapshot_ok {
+                        AppShotRejectionReason::WrongTarget
                     } else {
-                        (
-                            AppShotRejectionReason::WrongTarget,
-                            target,
-                            focus_window_ids,
-                        )
-                    }
+                        AppShotRejectionReason::Stale
+                    };
+                    (reason, target, focus_window_ids, snapshot_names_window)
                 }
             }
         };
 
         // A valid appshot is accepted only when its snapshot is still latest;
-        // target verification is performed against the focused window below.
+        // its window is then verified the way the backend's targeting needs.
         if reason == AppShotRejectionReason::WrongTarget
-            && let Ok(Some(focused)) = self.backend.focused_window().await
-            && focus_window_ids
-                .iter()
-                .any(|window_id| window_id == &focused.window_id)
+            && match self.backend.action_targeting() {
+                ActionTargeting::FocusedWindow => {
+                    self.appshot_window_is_focused(&focus_window_ids).await
+                }
+                ActionTargeting::RequestWindow => {
+                    snapshot_names_window && self.appshot_window_exists(target.as_ref()).await
+                }
+            }
         {
             return None;
         }
