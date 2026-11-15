@@ -158,10 +158,10 @@ What else the click needs depends on the application:
   the window is key. The backend sends it an "activated" event, clicks the
   window's `AXActivationPoint` to make the window key, delivers the click,
   and sends "deactivated". The activation point is used only when it lies
-  inside the window and the element under it belongs to that window and
-  offers no action a click would trigger; a window without such a point
-  takes the foreground path, with a `ProcessTargetedInputUnavailable`
-  diagnostic. So does a back window of the active application, which the
+  inside the window, the element under it belongs to that window, and that
+  element's accessibility action list names no action a click would
+  trigger. A window without such a point takes the foreground path, with a
+  `ProcessTargetedInputUnavailable` diagnostic. So does a back window of the active application, which the
   final "deactivated" event would leave believing it is inactive.
 
 Neither sequence changes the active application or the window order as the
@@ -339,6 +339,10 @@ service binary into place with a rename, not an in-place overwrite.
 - Process-targeted clicks rest on one private symbol and on undocumented
   event field values, verified on macOS 27.2 only. The Chromium path was
   verified on web content, not on a browser's own toolbar or tab strip.
+- The priming check reads only the accessibility action names of the
+  element under the activation point. A view that handles clicks without
+  exposing an accessibility action passes it and would receive the priming
+  click.
 - While a primed click is delivered, the target application briefly
   believes it is active. A click that opens a menu or a sheet leaves that
   window open in an application that has been told it is inactive again.
