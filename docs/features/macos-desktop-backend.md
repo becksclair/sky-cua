@@ -54,8 +54,8 @@ Diagnostics specific to this backend:
   was captured where it is.
 - `ProcessTargetedInput`: keyboard input was posted to the target window's
   process and the window was not brought to the front.
-- `ProcessTargetedInputUnavailable`: keyboard input that could have been
-  posted to the process was not, with the reason in `details`; the window
+- `ProcessTargetedInputUnavailable`: input for a window that is not focused
+  was not posted to its process, with the reason in `details`; the window
   was brought to the front instead.
 
 MCP tool schemas are unchanged. `setup_desktop` with operation
@@ -148,7 +148,8 @@ those two modifiers.
 Everything else is posted at the HID event tap after the target window is
 brought forward: pointer input, the `set_value` fallback, the chords above,
 and keyboard input that names no window, which goes to the current focus.
-If the target window is gone the action fails with `SnapshotStale`, and if
+Bringing an unfocused window forward is always reported with
+`ProcessTargetedInputUnavailable`. If the target window is gone the action fails with `SnapshotStale`, and if
 it cannot be brought to the front it fails with
 `ActionRequiresPhysicalInput`; input is never posted to whatever happens to
 be in front instead. For input posted at a point, a window that moved or

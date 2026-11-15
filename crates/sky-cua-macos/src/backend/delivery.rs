@@ -19,8 +19,8 @@ use crate::windows;
 /// Diagnostic code: the input was posted to the target process and its
 /// window was not brought to the front.
 pub(super) const PROCESS_TARGETED_INPUT: &str = "ProcessTargetedInput";
-/// Diagnostic code: the input could have been posted to the target process
-/// but was not, so the window was brought to the front instead.
+/// Diagnostic code: the input was not posted to the target process, so the
+/// window was brought to the front instead; `details` says why.
 pub(super) const PROCESS_TARGETED_INPUT_UNAVAILABLE: &str = "ProcessTargetedInputUnavailable";
 
 /// The route one input is posted on, with the diagnostics of choosing it.
@@ -37,9 +37,10 @@ pub(super) struct Delivery {
 /// window fails the action so the input never lands on whatever window is in
 /// front instead, and so does a window that moved or was resized since the
 /// snapshot when the input is posted at a snapshot point. An unfocused window
-/// receives the input in its process when [`process_route`] allows it;
-/// otherwise it is brought to the front, and the action fails if that does
-/// not happen.
+/// receives the input in its process when [`keys_route`] allows it;
+/// otherwise it is brought to the front, which is reported with a
+/// [`PROCESS_TARGETED_INPUT_UNAVAILABLE`] diagnostic, and the action fails if
+/// that does not happen.
 pub(super) async fn prepare(
     ax: &AxRuntime,
     request: &ActionRequest,
@@ -62,32 +63,35 @@ pub(super) async fn prepare(
         FocusNeed::Activate(window) => window,
     };
 
-    let mut unavailable = None;
-    if input.reaches_inactive_application()? {
+    let unavailable = if input.reaches_inactive_application()? {
         let app_windows = focus::app_windows(&windows_front_to_back, window.pid);
         let receives_keys = ax.window_receives_keys(window, &app_windows).await;
-        match process_route(window, receives_keys) {
+        match keys_route(window, receives_keys) {
             Ok(delivery) => return Ok(delivery),
-            Err(diagnostic) => unavailable = Some(diagnostic),
+            Err(diagnostic) => diagnostic,
         }
-    }
+    } else {
+        unavailable(window, "Input", NO_PROCESS_ROUTE.to_string())
+    };
     let attempt = focus::focus_window(ax, window, &windows_front_to_back).await;
     match focus::physical_input_focus_result(window_id, attempt) {
-        Ok(focus_diagnostics) => Ok(hid(unavailable
-            .into_iter()
+        Ok(focus_diagnostics) => Ok(hid(std::iter::once(unavailable)
             .chain(focus_diagnostics)
             .collect())),
-        Err(error) => Err(with_process_route_reason(error, unavailable.as_ref())),
+        Err(error) => Err(with_process_route_reason(error, &unavailable)),
     }
 }
+
+/// Why input other than keys is not posted to the process.
+const NO_PROCESS_ROUTE: &str = "only keyboard input without a Command or Control shortcut takes effect in an application that is not active";
 
 /// Adds why the process route was not taken to the error of a failed
 /// fallback, so the reason is not lost with the diagnostics.
 fn with_process_route_reason(
     mut error: BackendError,
-    unavailable: Option<&DiagnosticEntry>,
+    unavailable: &DiagnosticEntry,
 ) -> BackendError {
-    if let Some(reason) = unavailable.and_then(|diagnostic| diagnostic.details.as_deref()) {
+    if let Some(reason) = unavailable.details.as_deref() {
         error.message.push_str(&format!(
             "; posting the input to the window's process was not possible either: {reason}"
         ));
@@ -102,18 +106,10 @@ fn with_process_route_reason(
 /// the request named. `receives_keys` is whether Accessibility confirmed
 /// `window` is that window; anything else, including a failed check, would
 /// type into a different window of the same application.
-fn process_route(
+fn keys_route(
     window: &MacWindow,
     receives_keys: Result<bool, BackendError>,
 ) -> Result<Delivery, DiagnosticEntry> {
-    let unavailable = |details: String| DiagnosticEntry {
-        code: PROCESS_TARGETED_INPUT_UNAVAILABLE.to_string(),
-        message: format!(
-            "Keyboard input for macOS window {} could not be posted to its process (pid {}), so the window is brought to the front",
-            window.window_id, window.pid
-        ),
-        details: Some(details),
-    };
     match receives_keys {
         Ok(true) => Ok(Delivery {
             route: Route::Process(window.pid),
@@ -127,9 +123,26 @@ fn process_route(
             }],
         }),
         Ok(false) => Err(unavailable(
+            window,
+            "Keyboard",
             "the window is not the one its application sends key events to".to_string(),
         )),
-        Err(error) => Err(unavailable(format!("{}: {}", error.code, error.message))),
+        Err(error) => Err(unavailable(
+            window,
+            "Keyboard",
+            format!("{}: {}", error.code, error.message),
+        )),
+    }
+}
+
+fn unavailable(window: &MacWindow, kind: &str, details: String) -> DiagnosticEntry {
+    DiagnosticEntry {
+        code: PROCESS_TARGETED_INPUT_UNAVAILABLE.to_string(),
+        message: format!(
+            "{kind} input for macOS window {} could not be posted to its process (pid {}), so the window is brought to the front",
+            window.window_id, window.pid
+        ),
+        details: Some(details),
     }
 }
 
@@ -158,7 +171,7 @@ mod tests {
 
     #[test]
     fn the_key_window_of_an_unfocused_application_takes_the_process_route() {
-        let delivery = process_route(&window(), Ok(true)).unwrap();
+        let delivery = keys_route(&window(), Ok(true)).unwrap();
 
         assert_eq!(delivery.route, Route::Process(7));
         assert_eq!(delivery.diagnostics.len(), 1);
@@ -168,7 +181,7 @@ mod tests {
 
     #[test]
     fn another_window_of_the_application_is_brought_to_the_front_instead() {
-        let diagnostic = process_route(&window(), Ok(false)).unwrap_err();
+        let diagnostic = keys_route(&window(), Ok(false)).unwrap_err();
 
         assert_eq!(diagnostic.code, PROCESS_TARGETED_INPUT_UNAVAILABLE);
         assert!(diagnostic.message.contains("pid 7"));
@@ -183,24 +196,29 @@ mod tests {
                 "macOS window 30 could not be brought to the front",
             )
         };
-        let unavailable = process_route(&window(), Ok(false)).unwrap_err();
+        let unavailable = keys_route(&window(), Ok(false)).unwrap_err();
 
-        let error = with_process_route_reason(focus_error(), Some(&unavailable));
+        let error = with_process_route_reason(focus_error(), &unavailable);
         assert_eq!(
             error.code,
             BackendErrorCode::ActionRequiresPhysicalInput.as_str()
         );
         assert!(error.message.contains("could not be brought to the front"));
         assert!(error.message.contains("not the one its application"));
+    }
 
-        // Pointer input never tries the process route, so nothing is added.
-        let untouched = with_process_route_reason(focus_error(), None);
-        assert_eq!(untouched.message, focus_error().message);
+    #[test]
+    fn input_without_a_process_route_reports_the_foreground_fallback() {
+        let diagnostic = unavailable(&window(), "Input", NO_PROCESS_ROUTE.to_string());
+
+        assert_eq!(diagnostic.code, PROCESS_TARGETED_INPUT_UNAVAILABLE);
+        assert!(diagnostic.message.contains("brought to the front"));
+        assert!(diagnostic.details.unwrap().contains("Command or Control"));
     }
 
     #[test]
     fn an_unconfirmed_key_window_is_brought_to_the_front_instead() {
-        let diagnostic = process_route(
+        let diagnostic = keys_route(
             &window(),
             Err(BackendError::new(
                 BackendErrorCode::AccessibilityCoverageLimited,

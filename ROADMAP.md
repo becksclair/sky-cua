@@ -61,7 +61,9 @@ pass and are the first work to pick up once it is proven.
       agent actions do not move the user's real cursor or steal focus —
       findings in [`docs/research/2026-11-macos-per-window-targeting.md`](docs/research/2026-11-macos-per-window-targeting.md)
   - [x] Targeted captures leave the window where it is, and keyboard input
-        for an unfocused window is posted to its process (2026-11-14)
+        without a Command or Control chord is posted to an unfocused
+        window's process when Accessibility confirms it is the application's
+        key window (2026-11-14)
   - [ ] Pointer input to an unfocused window: window-addressed mouse events,
         synthetic activation, and a rule for the priming click
   - [ ] Menu shortcuts (Command and Control chords) to an unfocused window
