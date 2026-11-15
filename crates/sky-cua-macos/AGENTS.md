@@ -20,7 +20,8 @@ window-list, and CGEvent details inside this crate and expose only
 - `capture.rs` — ScreenCaptureKit window and display capture, prepared through
   `sky-cua-capture`.
 - `input.rs`, `keymap.rs` — CGEvent pointer and keyboard injection, on the
-  HID tap or to one process.
+  HID tap or to one process. `input/window_events.rs` builds the left
+  clicks addressed to one window of an inactive application.
 - `permissions.rs` — TCC status, System Settings guidance, doctor reporting.
 - `coords.rs` — the single place that converts between global points and
   model-image pixels.
@@ -40,12 +41,16 @@ window-list, and CGEvent details inside this crate and expose only
   tree with a diagnostic instead of a stalled daemon.
 - Window identity uses public APIs only. Ambiguous correlation fails closed;
   it never substitutes a different window.
+- One private symbol is used, `CGEventSetWindowLocation`, in
+  `input/window_events.rs`. It is resolved at run time, and its absence
+  makes that route unavailable, never an error at start-up. Do not add
+  another without the same shape and a reason in the module docs.
 - Prefer AX semantic actions; CGEvent input is the physical fallback.
 - Leave the user's frontmost application and pointer alone whenever the
   input still reaches its target. A capture never activates a window.
   Keyboard input goes to the target process when its window is the
-  application's key window; only input that would not take effect there
-  brings the window forward. A fallback to the foreground path is always
+  application's key window, and a left click is addressed to the window;
+  only input that would not take effect there brings the window forward. A fallback to the foreground path is always
   reported as a diagnostic.
 - Missing TCC permissions are reported as structured diagnostics that name
   the System Settings pane; nothing is inferred from prose.

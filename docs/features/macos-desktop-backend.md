@@ -52,8 +52,8 @@ Diagnostics specific to this backend:
 - `WindowFocusVerified`: a targeted capture's window was already focused.
 - `WindowCapturedInPlace`: a targeted capture's window was not focused and
   was captured where it is.
-- `ProcessTargetedInput`: keyboard input was posted to the target window's
-  process and the window was not brought to the front.
+- `ProcessTargetedInput`: keyboard input or a left click was posted to the
+  target window's process and the window was not brought to the front.
 - `ProcessTargetedInputUnavailable`: input for a window that is not focused
   was not posted to its process, with the reason in `details`; the window
   was brought to the front instead.
@@ -145,11 +145,34 @@ so a menu shortcut posted to its process does nothing; which chords are menu
 shortcuts depends on the application, and nearly all of them hold one of
 those two modifiers.
 
+A left click on a window that is not focused, single or multiple, is posted
+to the window's process as mouse events addressed to that window: its window
+number, and the click's location in the window's own coordinates. Setting
+that location needs `CGEventSetWindowLocation`, which is not public API; it
+is resolved at run time, and without it the click takes the foreground path.
+What else the click needs depends on the application:
+
+- An application that ships a Chromium engine (a Chromium browser or an
+  Electron application) acts on the click as it is.
+- Any other application acts on it only while it believes it is active and
+  the window is key. The backend sends it an "activated" event, clicks the
+  window's `AXActivationPoint` to make the window key, delivers the click,
+  and sends "deactivated". The activation point is used only when it lies
+  inside the window and the element under it belongs to that window and
+  offers no action a click would trigger; a window without such a point
+  takes the foreground path, with a `ProcessTargetedInputUnavailable`
+  diagnostic. So does a back window of the active application, which the
+  final "deactivated" event would leave believing it is inactive.
+
+Neither sequence changes the active application or the window order as the
+window server reports them, and the real pointer does not move.
+
 Everything else is posted at the HID event tap after the target window is
-brought forward: pointer input, the `set_value` fallback, the chords above,
-and keyboard input that names no window, which goes to the current focus.
-Bringing an unfocused window forward is always reported with
-`ProcessTargetedInputUnavailable`. If the target window is gone the action fails with `SnapshotStale`, and if
+brought forward: secondary clicks, drags, scrolling, pointer moves, the
+`set_value` fallback, the chords above, and keyboard input that names no
+window, which goes to the current focus. Bringing an unfocused window
+forward is always reported with `ProcessTargetedInputUnavailable`.
+If the target window is gone the action fails with `SnapshotStale`, and if
 it cannot be brought to the front it fails with
 `ActionRequiresPhysicalInput`; input is never posted to whatever happens to
 be in front instead. For input posted at a point, a window that moved or
@@ -273,6 +296,12 @@ it would mark every replacement daemon stale as well. The daemon exits after
   brought the window to the front, and succeeded. Before the action fence
   followed `ActionTargeting`, the same sequence was rejected with
   `AppShotRequired` (`wrong_target`).
+- Live check, 2026-11-14, same setup, with TextEdit and Calculator in the
+  background and another application frontmost throughout: a
+  `desktop_pointer` click at screenshot pixel coordinates placed the TextEdit
+  caret on the targeted character, and one on Calculator's 7 key entered a
+  single 7. Both reported `ProcessTargetedInput`; the frontmost application
+  and the window order did not change.
 
 An isolated daemon for testing uses a private `HOME` and XDG directories and
 a relative `SKY_CUA_SERVICE_SOCKET_PATH`, because an absolute path under a
@@ -298,14 +327,23 @@ service binary into place with a rename, not an in-place overwrite.
 - `activate_window` reports success with a `WindowFocusUnverified`
   diagnostic when macOS accepts the request but the window does not become
   focused.
-- Pointer input, the `set_value` fallback, and chords that hold Command or
-  Control move the user's real pointer or bring the target window to the
-  front. Process-targeted delivery covers keyboard input only; see
-  [`2026-11-macos-per-window-targeting.md`](../research/2026-11-macos-per-window-targeting.md)
-  for what pointer delivery needs.
-- Process-targeted keyboard input is confirmed by transport only. An
-  application that ignores posted key events while inactive reports success
-  and shows no change; observe again to verify.
+- Secondary clicks, drags, scrolling, pointer moves, the `set_value`
+  fallback, and chords that hold Command or Control move the user's real
+  pointer or bring the target window to the front. Process-targeted delivery
+  covers keyboard input and left clicks only; scroll events addressed to a
+  window had no effect when probed. See
+  [`2026-11-macos-per-window-targeting.md`](../research/2026-11-macos-per-window-targeting.md).
+- Process-targeted input is confirmed by transport only. An application
+  that ignores posted events while inactive reports success and shows no
+  change; observe again to verify.
+- Process-targeted clicks rest on one private symbol and on undocumented
+  event field values, verified on macOS 27.2 only. The Chromium path was
+  verified on web content, not on a browser's own toolbar or tab strip.
+- While a primed click is delivered, the target application briefly
+  believes it is active. A click that opens a menu or a sheet leaves that
+  window open in an application that has been told it is inactive again.
+- The MCP `desktop_pointer` tool exposes no click count, so a multiple
+  click is reachable only through the service's action request.
 - The key window is confirmed once, before the first key is posted. If the
   application's key window changes while a long text is being typed, the
   rest of the text goes to the new key window of the same application. The

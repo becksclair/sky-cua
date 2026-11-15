@@ -1,5 +1,5 @@
-//! AX window lookup by CoreGraphics identity, window raising, and the key
-//! window check. Runs on a lane thread only.
+//! AX window lookup by CoreGraphics identity, window raising, the key window
+//! check, and the priming point. Runs on a lane thread only.
 
 use sky_cua_platform::diagnostics::{BackendError, BackendErrorCode};
 
@@ -157,4 +157,60 @@ pub(crate) fn receives_keys(
         }
     };
     Ok(as_element(focused).is_some_and(|focused| focused == element))
+}
+
+/// Actions an element may offer and still do nothing when left-clicked.
+const INERT_ACTIONS: &[&str] = &["AXRaise", "AXShowMenu", "AXScrollToVisible", "AXCancel"];
+
+/// A point of `window` where a left click does nothing but make the window
+/// key: the window's `AXActivationPoint`, when it lies inside the window and
+/// the element under it belongs to that window and offers no action a click
+/// would trigger. `None` when the window offers no such point; applications
+/// that are not built on AppKit report an activation point outside their
+/// window.
+pub(crate) fn priming_point(
+    context: &LaneContext,
+    guard: &JobGuard<'_>,
+    names: &Names,
+    window: &MacWindow,
+    app_windows: &[MacWindow],
+) -> Result<Option<(f64, f64)>, BackendError> {
+    let element = find_window(context, guard, names, window, app_windows)?;
+    guard.ensure_wanted()?;
+    let point = match element.copy_attribute(&cf_string("AXActivationPoint")) {
+        Ok(value) => as_point(&value),
+        Err(error) if error.is_unsupported() => None,
+        Err(error) => return Err(ax_error(error, "failed to read AXActivationPoint")),
+    };
+    let bounds = &window.bounds;
+    let inside = |(x, y): &(f64, f64)| {
+        *x >= bounds.x && *x < bounds.right() && *y >= bounds.y && *y < bounds.bottom()
+    };
+    let Some((x, y)) = point.filter(inside) else {
+        return Ok(None);
+    };
+    guard.ensure_wanted()?;
+    let under = match context.app.element_at_position(x, y) {
+        Ok(under) => under,
+        Err(error) if error.is_unsupported() => return Ok(None),
+        Err(error) => return Err(ax_error(error, "failed to hit-test the activation point")),
+    };
+    // The hit-test covers every window of the application, so a sibling
+    // window in front would be checked instead of this one.
+    let in_window = under == element
+        || under
+            .copy_attribute(&cf_string("AXWindow"))
+            .ok()
+            .and_then(as_element)
+            .is_some_and(|owner| owner == element);
+    if !in_window {
+        return Ok(None);
+    }
+    let actions = under
+        .action_names()
+        .map_err(|error| ax_error(error, "failed to read the actions at the activation point"))?;
+    let inert = actions
+        .iter()
+        .all(|action| INERT_ACTIONS.contains(&action.as_str()));
+    Ok(inert.then_some((x, y)))
 }
