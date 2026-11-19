@@ -86,7 +86,7 @@ xkbcommon = "0.9.0"
 zbus = { version = "5.14.0", features = ["tokio"] }
 url = "2.5.7"
 ureq = { version = "3.5.1", default-features = false, features = ["rustls", "json"] }
-if-addrs = "0.9"
+if-addrs = "0.15"
 wayland-client = { version = "0.31.11", features = ["system"] }
 wayland-protocols = { version = "0.32.9", features = ["client", "staging"] }
 wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl", "vulkan", "gles", "metal"] }
